@@ -47,8 +47,8 @@
           "path": "hardware/downloads/top-mount-v2.zip",
           "kind": "package",
           "files": 14,
-          "size": 2778220,
-          "sha256": "3879a9ecaacfb2d7728a32c5ea03c4ff44ec8609ed652c781698f80601ef82d3"
+          "size": 2777875,
+          "sha256": "b9a35022cd7a87c394867f2b5f9ba2e0a3f01c8d79e166fee82e14542fe1a3be"
         },
         {
           "path": "hardware/downloads/top-mount-v2-pla.3mf",
@@ -64,7 +64,8 @@
           "size": 1142900,
           "sha256": "71373f74dfe09e22cfea81edc6bd9bd142a074be1017c52bf0f1034c1e49a36b"
         }
-      ]
+      ],
+      "packageReadmeSha256": "87be23eb7aef30d9e2971cb3d1e0a9f60ca9bc73c7ec1f4fbc1b5351cad68d96"
     },
     {
       "id": "sidecar-v2",
@@ -80,8 +81,8 @@
           "path": "hardware/downloads/sidecar-v2.zip",
           "kind": "package",
           "files": 14,
-          "size": 2730090,
-          "sha256": "6397e72fa65940dfc1a7aa7ca75d5ec44e57c959a2e0c5657e2f2eb672d8e2f6"
+          "size": 2729996,
+          "sha256": "e15df043b68831cd01d9ce9698acc2d1d636b73b6e66f9ba862ad108311597db"
         },
         {
           "path": "hardware/downloads/sidecar-v2-pla.3mf",
@@ -97,7 +98,8 @@
           "size": 1155773,
           "sha256": "023b844dc908358c188f654c113eaf785011eb75cf00b0a9fd7a6222f0c833e7"
         }
-      ]
+      ],
+      "packageReadmeSha256": "bf8dc7e32a66d8e6e9b8dd6e05e010fc7411fbd7aa0c9773f8905974ca034260"
     },
     {
       "id": "standard-sensor-v102",
@@ -1050,7 +1052,9 @@
       "shots.json": "7301b9def63589fa90475861245d36ee583a136497703bd1415497ca059deebe",
       "export-models.py": "8151ac5d5d58dcf15a80de1cc56d6406dd1b55a1f07c9e2fb7c8356f64627a42",
       "verify-model-sources.py": "dcf9ed907a527bec7ee9c3e5b17fbb0b0c410d019f6592061fdc6cd945cbe2ed",
-      "import-hardware-v2.py": "2ea048e1e8e409ff7a414246df46675eed5381412be6fcc14893b27d829af1f6"
+      "import-hardware-v2.py": "54ef3d0c980f52ccad84a19b529a4c6aee990c2e3bbeee23c0673dc68ee0bf74",
+      "package-readmes/sidecar-v2.md": "bf8dc7e32a66d8e6e9b8dd6e05e010fc7411fbd7aa0c9773f8905974ca034260",
+      "package-readmes/top-mount-v2.md": "87be23eb7aef30d9e2971cb3d1e0a9f60ca9bc73c7ec1f4fbc1b5351cad68d96"
     },
     "sourceProof": "provenance/hardware-assembly-validation.json",
     "sourceProofSha256": "761fce2ff31bc399c01b8de1563050b2cc412dcf8e2567427fc75d5d46a596b8",

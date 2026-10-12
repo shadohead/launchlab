@@ -2681,8 +2681,8 @@
       "files": [
         {
           "path": "site/public/hardware/downloads/top-mount-v2.zip",
-          "size": 2778220,
-          "sha256": "3879a9ecaacfb2d7728a32c5ea03c4ff44ec8609ed652c781698f80601ef82d3"
+          "size": 2777875,
+          "sha256": "b9a35022cd7a87c394867f2b5f9ba2e0a3f01c8d79e166fee82e14542fe1a3be"
         },
         {
           "path": "site/public/hardware/downloads/top-mount-v2-pla.3mf",
@@ -2706,8 +2706,8 @@
       "files": [
         {
           "path": "site/public/hardware/downloads/sidecar-v2.zip",
-          "size": 2730090,
-          "sha256": "6397e72fa65940dfc1a7aa7ca75d5ec44e57c959a2e0c5657e2f2eb672d8e2f6"
+          "size": 2729996,
+          "sha256": "e15df043b68831cd01d9ce9698acc2d1d636b73b6e66f9ba862ad108311597db"
         },
         {
           "path": "site/public/hardware/downloads/sidecar-v2-pla.3mf",
