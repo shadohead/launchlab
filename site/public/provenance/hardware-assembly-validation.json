@@ -1,0 +1,831 @@
+{
+  "schema_version": 1,
+  "status": "PASS",
+  "scope": "local_source_bytes_and_frozen_geometry",
+  "shots_sha256": "7301b9def63589fa90475861245d36ee583a136497703bd1415497ca059deebe",
+  "validator_sha256": "dcf9ed907a527bec7ee9c3e5b17fbb0b0c410d019f6592061fdc6cd945cbe2ed",
+  "frozen_releases": [
+    {
+      "path": "releases/sidecar/v2",
+      "status": "PASS",
+      "checksum_file": "releases/sidecar/v2/SHA256SUMS.txt",
+      "checksum_file_sha256": "542d61ee8215d28096626ba23b20ec76f489a123f6161336c5d325f43429278f",
+      "verified_files": 42,
+      "manifest": "releases/sidecar/v2/manifest.json",
+      "manifest_sha256": "663f48f706bd65acd136ef5fda7c0449f4d48ddf1061d690c93457942a68463b",
+      "manifest_files": 38
+    },
+    {
+      "path": "releases/top_mount/v2",
+      "status": "PASS",
+      "checksum_file": "releases/top_mount/v2/SHA256SUMS.txt",
+      "checksum_file_sha256": "f238fa4d914684eb9cb068a6e3ae3279c84e9abc697b9b552734eaadae1ae69e",
+      "verified_files": 31,
+      "manifest": "releases/top_mount/v2/manifest.json",
+      "manifest_sha256": "4a80896dffd248ef6ca8b5343a866f6eb2425b2faddb6f2f84b020d60012baab",
+      "manifest_files": 27
+    },
+    {
+      "path": "releases/LaunchLab_v102_QRE_uniform_hinges_base",
+      "status": "PASS",
+      "checksum_file": "releases/LaunchLab_v102_QRE_uniform_hinges_base/SHA256SUMS.txt",
+      "checksum_file_sha256": "fa29cbb7942eabf7c58d44befdfab8585cf6bff23bad8b7d520531672901b1ee",
+      "verified_files": 26,
+      "cad_report": "releases/LaunchLab_v102_QRE_uniform_hinges_base/reports/cad_validation.json",
+      "cad_report_sha256": "a7a5e9268ff2effec7fe0fca2a1ce3c0b83812adf91b1dbf5a10ca2c21217dd8"
+    },
+    {
+      "path": "releases/LaunchLab_v102_TCRT_uniform_hinges",
+      "status": "PASS",
+      "checksum_file": "releases/LaunchLab_v102_TCRT_uniform_hinges/SHA256SUMS.txt",
+      "checksum_file_sha256": "94dff69843a69d46f554a23ad3d333a292c1b447bd64dcde1efff08effebaf98",
+      "verified_files": 24,
+      "cad_report": "releases/LaunchLab_v102_TCRT_uniform_hinges/reports/cad_validation.json",
+      "cad_report_sha256": "3575600b4d2e07d9ad8ddba93a9a63934119b8d6e3aa99e2ee4ea32f24e27f22"
+    }
+  ],
+  "used_inputs": [
+    {
+      "path": "inspection/QRE_uniform_hinges_v102/preview/01_QRE_open_holder_body.stl",
+      "sha256": "feedbe704acc859646e124b3987cd142219001d353d19208050df6bc74a643be",
+      "release": "LaunchLab_v102_QRE_uniform_hinges_base",
+      "status": "PASS",
+      "method": "reconstructed_frozen_print_triangles",
+      "pin_path": "releases/LaunchLab_v102_QRE_uniform_hinges_base/reports/cad_validation.json",
+      "shots": [
+        "compact-sensor",
+        "holder-detail",
+        "sensor-size",
+        "side-qre",
+        "side-qre-exploded",
+        "top-qre",
+        "top-qre-exploded"
+      ]
+    },
+    {
+      "path": "inspection/QRE_uniform_hinges_v102/preview/03_QRE_pressure_bar.stl",
+      "sha256": "e82e2bc22c8123e8659a039ff0c032d1ac1c49e727733c4c790e188de2cd1f41",
+      "release": "LaunchLab_v102_QRE_uniform_hinges_base",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_QRE_uniform_hinges_base/reports/cad_validation.json",
+      "original_pinned_path": "inspection/QRE_logo_flush_base_v101/preview/03_QRE_pressure_bar.stl",
+      "shots": [
+        "compact-sensor",
+        "holder-detail",
+        "sensor-size",
+        "side-qre",
+        "side-qre-exploded",
+        "top-qre",
+        "top-qre-exploded"
+      ]
+    },
+    {
+      "path": "inspection/QRE_uniform_hinges_v102/preview/08_QRE_latch_LEFT.stl",
+      "sha256": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+      "release": "LaunchLab_v102_QRE_uniform_hinges_base",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_QRE_uniform_hinges_base/reports/cad_validation.json",
+      "original_pinned_path": "inspection/QRE_logo_flush_base_v101/preview/08_QRE_latch_LEFT.stl",
+      "shots": [
+        "compact-sensor",
+        "holder-detail",
+        "sensor-size",
+        "side-qre",
+        "side-qre-exploded",
+        "top-qre",
+        "top-qre-exploded"
+      ]
+    },
+    {
+      "path": "inspection/QRE_uniform_hinges_v102/preview/09_QRE_latch_RIGHT.stl",
+      "sha256": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+      "release": "LaunchLab_v102_QRE_uniform_hinges_base",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_QRE_uniform_hinges_base/reports/cad_validation.json",
+      "original_pinned_path": "inspection/QRE_logo_flush_base_v101/preview/09_QRE_latch_RIGHT.stl",
+      "shots": [
+        "compact-sensor",
+        "holder-detail",
+        "sensor-size",
+        "side-qre",
+        "side-qre-exploded",
+        "top-qre",
+        "top-qre-exploded"
+      ]
+    },
+    {
+      "path": "inspection/QRE_uniform_hinges_v102/preview/REF_Display_visual.stl",
+      "sha256": "3e8c225d7be7f4ebb2ad8980581b2fb2ea66d1aa053db503e508bdda012ace2b",
+      "release": "LaunchLab_v102_QRE_uniform_hinges_base",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_QRE_uniform_hinges_base/reports/cad_validation.json",
+      "original_pinned_path": "inspection/QRE_logo_flush_base_v101/preview/REF_Display_visual.stl",
+      "shots": [
+        "top-qre",
+        "top-qre-exploded"
+      ]
+    },
+    {
+      "path": "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_DEVICE_1.stl",
+      "sha256": "62c711e66afefb9ad14ccbcd7feac7f469124dd4b1ade2029fa202fd23b6ad5d",
+      "release": "LaunchLab_v102_QRE_uniform_hinges_base",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_QRE_uniform_hinges_base/reports/cad_validation.json",
+      "original_pinned_path": "inspection/QRE_logo_flush_base_v101/preview/REF_M2x4_DEVICE_1.stl",
+      "shots": [
+        "top-qre",
+        "top-qre-exploded"
+      ]
+    },
+    {
+      "path": "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_DEVICE_2.stl",
+      "sha256": "1aaf24ee9cb5db963031cf8fe9cb2a645519475249d9be61363f95455fa69e43",
+      "release": "LaunchLab_v102_QRE_uniform_hinges_base",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_QRE_uniform_hinges_base/reports/cad_validation.json",
+      "original_pinned_path": "inspection/QRE_logo_flush_base_v101/preview/REF_M2x4_DEVICE_2.stl",
+      "shots": [
+        "top-qre",
+        "top-qre-exploded"
+      ]
+    },
+    {
+      "path": "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_1.stl",
+      "sha256": "59ed0a0db3a2c315268d80463f6a92a3a09d4128d92bff5dcbcf740d16ab35b7",
+      "release": "LaunchLab_v102_QRE_uniform_hinges_base",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_QRE_uniform_hinges_base/reports/cad_validation.json",
+      "original_pinned_path": "inspection/QRE_logo_flush_base_v101/preview/REF_M2x4_SENSOR_1.stl",
+      "shots": [
+        "compact-sensor",
+        "holder-detail",
+        "sensor-size",
+        "side-qre",
+        "side-qre-exploded",
+        "top-qre",
+        "top-qre-exploded"
+      ]
+    },
+    {
+      "path": "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_2.stl",
+      "sha256": "3241d1a13f8ff6204cfa98d1f5193d02df88a887c5bccbc3584dee5b3e3b9b05",
+      "release": "LaunchLab_v102_QRE_uniform_hinges_base",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_QRE_uniform_hinges_base/reports/cad_validation.json",
+      "original_pinned_path": "inspection/QRE_logo_flush_base_v101/preview/REF_M2x4_SENSOR_2.stl",
+      "shots": [
+        "compact-sensor",
+        "holder-detail",
+        "sensor-size",
+        "side-qre",
+        "side-qre-exploded",
+        "top-qre",
+        "top-qre-exploded"
+      ]
+    },
+    {
+      "path": "inspection/QRE_uniform_hinges_v102/preview/REF_M2x6_DOCK_1.stl",
+      "sha256": "231f5a7e2815e18c43ecb3955d2c048c6704f4c7ae5e069075f19e46ba982205",
+      "release": "LaunchLab_v102_QRE_uniform_hinges_base",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_QRE_uniform_hinges_base/reports/cad_validation.json",
+      "original_pinned_path": "inspection/QRE_logo_flush_base_v101/preview/REF_M2x6_DOCK_1.stl",
+      "shots": [
+        "top-qre",
+        "top-qre-exploded"
+      ]
+    },
+    {
+      "path": "inspection/QRE_uniform_hinges_v102/preview/REF_M2x6_DOCK_2.stl",
+      "sha256": "0ac4856239450d894c27a489b3cdd43dc092fbaed4629229290878ce926ab112",
+      "release": "LaunchLab_v102_QRE_uniform_hinges_base",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_QRE_uniform_hinges_base/reports/cad_validation.json",
+      "original_pinned_path": "inspection/QRE_logo_flush_base_v101/preview/REF_M2x6_DOCK_2.stl",
+      "shots": [
+        "top-qre",
+        "top-qre-exploded"
+      ]
+    },
+    {
+      "path": "inspection/QRE_uniform_hinges_v102/preview/REF_M2x6_DOCK_3.stl",
+      "sha256": "87add7b36b5ea8b2309dea0627361b2250ed521985344f02d14b3eb5cb27548e",
+      "release": "LaunchLab_v102_QRE_uniform_hinges_base",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_QRE_uniform_hinges_base/reports/cad_validation.json",
+      "original_pinned_path": "inspection/QRE_logo_flush_base_v101/preview/REF_M2x6_DOCK_3.stl",
+      "shots": [
+        "top-qre",
+        "top-qre-exploded"
+      ]
+    },
+    {
+      "path": "inspection/QRE_uniform_hinges_v102/preview/REF_M2x6_DOCK_4.stl",
+      "sha256": "f1fbb689c219a4f8682f4b5753fc0c10ee1f950e5b765aed2cefd8e86e7d3f8f",
+      "release": "LaunchLab_v102_QRE_uniform_hinges_base",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_QRE_uniform_hinges_base/reports/cad_validation.json",
+      "original_pinned_path": "inspection/QRE_logo_flush_base_v101/preview/REF_M2x6_DOCK_4.stl",
+      "shots": [
+        "top-qre",
+        "top-qre-exploded"
+      ]
+    },
+    {
+      "path": "inspection/QRE_uniform_hinges_v102/preview/REF_M5Stick_factory_geometry.stl",
+      "sha256": "ff944a5955e2c5d4ea740c1080af41b8e0dfdfdc9ee08061ddfd0fd8432d3d4a",
+      "release": "LaunchLab_v102_QRE_uniform_hinges_base",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_QRE_uniform_hinges_base/reports/cad_validation.json",
+      "original_pinned_path": "inspection/QRE_logo_flush_base_v101/preview/REF_M5Stick_factory_geometry.stl",
+      "shots": [
+        "top-qre",
+        "top-qre-exploded"
+      ]
+    },
+    {
+      "path": "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_downward_optics.stl",
+      "sha256": "0328c81029755ea8d4aa03b43afc7c503427049788f31a96e30be04cd507b288",
+      "release": "LaunchLab_v102_QRE_uniform_hinges_base",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_QRE_uniform_hinges_base/reports/cad_validation.json",
+      "original_pinned_path": "inspection/QRE_logo_flush_base_v101/preview/REF_QRE_downward_optics.stl",
+      "shots": [
+        "compact-sensor",
+        "holder-detail",
+        "sensor-size",
+        "side-qre",
+        "side-qre-exploded",
+        "top-qre",
+        "top-qre-exploded"
+      ]
+    },
+    {
+      "path": "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_red_PCB.stl",
+      "sha256": "4129eb717f995e357edf5ec17bdb2a2b0ea4617cb37bcf5243429c4b40552bb9",
+      "release": "LaunchLab_v102_QRE_uniform_hinges_base",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_QRE_uniform_hinges_base/reports/cad_validation.json",
+      "original_pinned_path": "inspection/QRE_logo_flush_base_v101/preview/REF_QRE_red_PCB.stl",
+      "shots": [
+        "compact-sensor",
+        "holder-detail",
+        "sensor-size",
+        "side-qre",
+        "side-qre-exploded",
+        "top-qre",
+        "top-qre-exploded"
+      ]
+    },
+    {
+      "path": "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_right_angle_plugs.stl",
+      "sha256": "9850ba8db3d5b21cdccbd97d4a34dcc9df8ee30764720aaa3263dc8da6e659a5",
+      "release": "LaunchLab_v102_QRE_uniform_hinges_base",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_QRE_uniform_hinges_base/reports/cad_validation.json",
+      "original_pinned_path": "inspection/QRE_logo_flush_base_v101/preview/REF_QRE_right_angle_plugs.stl",
+      "shots": [
+        "compact-sensor",
+        "dock-underside",
+        "holder-detail",
+        "sensor-size",
+        "side-qre",
+        "side-qre-exploded",
+        "top-qre",
+        "top-qre-exploded"
+      ]
+    },
+    {
+      "path": "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_-1.524.stl",
+      "sha256": "315da10ada7820c6ec60127bba640805c671de6ba6f9d2fc518f8106c208e0ec",
+      "release": "LaunchLab_v102_QRE_uniform_hinges_base",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_QRE_uniform_hinges_base/reports/cad_validation.json",
+      "original_pinned_path": "inspection/QRE_logo_flush_base_v101/preview/REF_Underside_resistor_-1.524.stl",
+      "shots": [
+        "compact-sensor",
+        "holder-detail",
+        "sensor-size",
+        "side-qre",
+        "side-qre-exploded",
+        "top-qre",
+        "top-qre-exploded"
+      ]
+    },
+    {
+      "path": "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_1.524.stl",
+      "sha256": "1f1dfb9900551a2344d272fb7a29cf88eb6298208d11d3b4f7b79e065d991341",
+      "release": "LaunchLab_v102_QRE_uniform_hinges_base",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_QRE_uniform_hinges_base/reports/cad_validation.json",
+      "original_pinned_path": "inspection/QRE_logo_flush_base_v101/preview/REF_Underside_resistor_1.524.stl",
+      "shots": [
+        "compact-sensor",
+        "holder-detail",
+        "sensor-size",
+        "side-qre",
+        "side-qre-exploded",
+        "top-qre",
+        "top-qre-exploded"
+      ]
+    },
+    {
+      "path": "inspection/TCRT_uniform_hinges_v102/preview/01_TCRT_open_holder_body.stl",
+      "sha256": "4203a97c77f9a438101f16c8477e72e7d02c7d5bab209653347ea4eaa4afdb94",
+      "release": "LaunchLab_v102_TCRT_uniform_hinges",
+      "status": "PASS",
+      "method": "reconstructed_frozen_print_triangles",
+      "pin_path": "releases/LaunchLab_v102_TCRT_uniform_hinges/reports/cad_validation.json",
+      "shots": [
+        "sensor-size",
+        "side-tcrt",
+        "side-tcrt-exploded",
+        "standard-sensor"
+      ]
+    },
+    {
+      "path": "inspection/TCRT_uniform_hinges_v102/preview/08_TCRT_latch_LEFT.stl",
+      "sha256": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+      "release": "LaunchLab_v102_TCRT_uniform_hinges",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_TCRT_uniform_hinges/reports/cad_validation.json",
+      "original_pinned_path": "inspection/TCRT_solid_hinges_v100/preview/08_TCRT_latch_LEFT.stl",
+      "shots": [
+        "sensor-size",
+        "side-tcrt",
+        "side-tcrt-exploded",
+        "standard-sensor"
+      ]
+    },
+    {
+      "path": "inspection/TCRT_uniform_hinges_v102/preview/09_TCRT_latch_RIGHT.stl",
+      "sha256": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+      "release": "LaunchLab_v102_TCRT_uniform_hinges",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_TCRT_uniform_hinges/reports/cad_validation.json",
+      "original_pinned_path": "inspection/TCRT_solid_hinges_v100/preview/09_TCRT_latch_RIGHT.stl",
+      "shots": [
+        "sensor-size",
+        "side-tcrt",
+        "side-tcrt-exploded",
+        "standard-sensor"
+      ]
+    },
+    {
+      "path": "inspection/TCRT_uniform_hinges_v102/preview/REF_M3x6_SENSOR.stl",
+      "sha256": "7fda29d4bfb320e66ccbf04e5edde204ce789e3a6f72c762ede166f57b0a0068",
+      "release": "LaunchLab_v102_TCRT_uniform_hinges",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_TCRT_uniform_hinges/reports/cad_validation.json",
+      "original_pinned_path": "inspection/TCRT_solid_hinges_v100/preview/REF_M3x6_SENSOR.stl",
+      "shots": [
+        "sensor-size",
+        "side-tcrt",
+        "side-tcrt-exploded",
+        "standard-sensor"
+      ]
+    },
+    {
+      "path": "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_HEADER.stl",
+      "sha256": "700c3ec50185cef67b0c2b3fd7d32a6e3626bf32f4023c0421cf7c2776e3636b",
+      "release": "LaunchLab_v102_TCRT_uniform_hinges",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_TCRT_uniform_hinges/reports/cad_validation.json",
+      "original_pinned_path": "inspection/TCRT_solid_hinges_v100/preview/REF_TCRT_HEADER.stl",
+      "shots": [
+        "sensor-size",
+        "side-tcrt",
+        "side-tcrt-exploded",
+        "standard-sensor"
+      ]
+    },
+    {
+      "path": "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_HEAD_AND_LEGS.stl",
+      "sha256": "88874157321991a6ac16677640bd87ecba6a34745ebb419cfc6649d1fd56c7f5",
+      "release": "LaunchLab_v102_TCRT_uniform_hinges",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_TCRT_uniform_hinges/reports/cad_validation.json",
+      "original_pinned_path": "inspection/TCRT_solid_hinges_v100/preview/REF_TCRT_HEAD_AND_LEGS.stl",
+      "shots": [
+        "sensor-size",
+        "side-tcrt",
+        "side-tcrt-exploded",
+        "standard-sensor"
+      ]
+    },
+    {
+      "path": "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_LENS_PAIR.stl",
+      "sha256": "5da3286787f780d8ae0905d1413bc9fb943e0d75b81dc80ca46e97e1d2756ec2",
+      "release": "LaunchLab_v102_TCRT_uniform_hinges",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_TCRT_uniform_hinges/reports/cad_validation.json",
+      "original_pinned_path": "inspection/TCRT_solid_hinges_v100/preview/REF_TCRT_LENS_PAIR.stl",
+      "shots": [
+        "sensor-size",
+        "side-tcrt",
+        "side-tcrt-exploded",
+        "standard-sensor"
+      ]
+    },
+    {
+      "path": "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_PCB_MEASURED.stl",
+      "sha256": "e12c532e2b9237e627facc2461f500d35cfdf0a78b1694f148457d9ded8cf3ff",
+      "release": "LaunchLab_v102_TCRT_uniform_hinges",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_TCRT_uniform_hinges/reports/cad_validation.json",
+      "original_pinned_path": "inspection/TCRT_solid_hinges_v100/preview/REF_TCRT_PCB_MEASURED.stl",
+      "shots": [
+        "sensor-size",
+        "side-tcrt",
+        "side-tcrt-exploded",
+        "standard-sensor"
+      ]
+    },
+    {
+      "path": "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_POT.stl",
+      "sha256": "6c666db6c4908b69065d996683e9580a8777f69f89a264cbfac8df1f6b0089e9",
+      "release": "LaunchLab_v102_TCRT_uniform_hinges",
+      "status": "PASS",
+      "method": "frozen_cad_report_source_sha256",
+      "pin_path": "releases/LaunchLab_v102_TCRT_uniform_hinges/reports/cad_validation.json",
+      "original_pinned_path": "inspection/TCRT_solid_hinges_v100/preview/REF_TCRT_POT.stl",
+      "shots": [
+        "sensor-size",
+        "side-tcrt",
+        "side-tcrt-exploded",
+        "standard-sensor"
+      ]
+    },
+    {
+      "path": "releases/LaunchLab_v102_QRE_uniform_hinges_base/stl/01_QRE_OPEN_PRINT_IN_PLACE.stl",
+      "sha256": "43868599bf563f93bda80e3054dcca5f4b5673491f32faa7aa48c7f6781ac8d1",
+      "release": "LaunchLab_v102_QRE_uniform_hinges_base",
+      "status": "PASS",
+      "method": "frozen_checksum",
+      "pin_path": "releases/LaunchLab_v102_QRE_uniform_hinges_base/SHA256SUMS.txt",
+      "shots": [
+        "print-compact-base"
+      ]
+    },
+    {
+      "path": "releases/LaunchLab_v102_QRE_uniform_hinges_base/stl/03_QRE_pressure_bar.stl",
+      "sha256": "3c30eef675bb74ef50cc1886f2665e0f2e9a9602c3f486365887e6b5d56ea68f",
+      "release": "LaunchLab_v102_QRE_uniform_hinges_base",
+      "status": "PASS",
+      "method": "frozen_checksum",
+      "pin_path": "releases/LaunchLab_v102_QRE_uniform_hinges_base/SHA256SUMS.txt",
+      "shots": [
+        "print-compact-base"
+      ]
+    },
+    {
+      "path": "releases/LaunchLab_v102_TCRT_uniform_hinges/stl/01_TCRT_OPEN_PRINT_IN_PLACE.stl",
+      "sha256": "259a08ac6915288e59bc187d7161ea1234bd37eabe6dbcb99c068f89cbeb4fc5",
+      "release": "LaunchLab_v102_TCRT_uniform_hinges",
+      "status": "PASS",
+      "method": "frozen_checksum",
+      "pin_path": "releases/LaunchLab_v102_TCRT_uniform_hinges/SHA256SUMS.txt",
+      "shots": [
+        "print-standard-sensor"
+      ]
+    },
+    {
+      "path": "releases/sidecar/v2/preview/05_M5_sidecar_cover.stl",
+      "sha256": "eefacf871951bd07b8713bf15a25914b4c4f3f93cc5db7ceeb75322a42452d1d",
+      "release": "sidecar/v2",
+      "status": "PASS",
+      "method": "frozen_manifest_and_checksum",
+      "pin_path": "releases/sidecar/v2/manifest.json",
+      "shots": [
+        "carrier-compact",
+        "side-qre",
+        "side-qre-exploded",
+        "side-tcrt",
+        "side-tcrt-exploded"
+      ]
+    },
+    {
+      "path": "releases/sidecar/v2/preview/06_M5_sidecar_base.stl",
+      "sha256": "0d3dd011cbfea804aa10a1c90990e89e1a83893b737f0bbc70dd66d0dd21a5b8",
+      "release": "sidecar/v2",
+      "status": "PASS",
+      "method": "frozen_manifest_and_checksum",
+      "pin_path": "releases/sidecar/v2/manifest.json",
+      "shots": [
+        "carrier-bare",
+        "carrier-compact",
+        "side-qre",
+        "side-qre-exploded",
+        "side-tcrt",
+        "side-tcrt-exploded"
+      ]
+    },
+    {
+      "path": "releases/sidecar/v2/preview/REF_Display_visual.stl",
+      "sha256": "3e8c225d7be7f4ebb2ad8980581b2fb2ea66d1aa053db503e508bdda012ace2b",
+      "release": "sidecar/v2",
+      "status": "PASS",
+      "method": "frozen_manifest_and_checksum",
+      "pin_path": "releases/sidecar/v2/manifest.json",
+      "shots": [
+        "carrier-compact",
+        "side-qre",
+        "side-qre-exploded",
+        "side-tcrt",
+        "side-tcrt-exploded"
+      ]
+    },
+    {
+      "path": "releases/sidecar/v2/preview/REF_M2x4_DEVICE_1.stl",
+      "sha256": "986d801eb44c9e7e46c14edcdcd70a9beff811d3776f3af993c8a5ea700eeca4",
+      "release": "sidecar/v2",
+      "status": "PASS",
+      "method": "frozen_manifest_and_checksum",
+      "pin_path": "releases/sidecar/v2/manifest.json",
+      "shots": [
+        "carrier-compact",
+        "side-qre",
+        "side-qre-exploded",
+        "side-tcrt",
+        "side-tcrt-exploded"
+      ]
+    },
+    {
+      "path": "releases/sidecar/v2/preview/REF_M2x4_DEVICE_2.stl",
+      "sha256": "7bd730c8cb7a33ab5d8562d11774554d6673c7813316c197c801d1b90173f8ba",
+      "release": "sidecar/v2",
+      "status": "PASS",
+      "method": "frozen_manifest_and_checksum",
+      "pin_path": "releases/sidecar/v2/manifest.json",
+      "shots": [
+        "carrier-compact",
+        "side-qre",
+        "side-qre-exploded",
+        "side-tcrt",
+        "side-tcrt-exploded"
+      ]
+    },
+    {
+      "path": "releases/sidecar/v2/preview/REF_M5Stick_factory_geometry.stl",
+      "sha256": "54b2ceeea5feeed673e5b6d85542851d8929942eb842e4afde0d3f7dabcf8a77",
+      "release": "sidecar/v2",
+      "status": "PASS",
+      "method": "frozen_manifest_and_checksum",
+      "pin_path": "releases/sidecar/v2/manifest.json",
+      "shots": [
+        "carrier-compact",
+        "side-qre",
+        "side-qre-exploded",
+        "side-tcrt",
+        "side-tcrt-exploded"
+      ]
+    },
+    {
+      "path": "releases/sidecar/v2/stl/LaunchLab_Sidecar_v2_base_SEAT_DOWN.stl",
+      "sha256": "6ff963ee156242bee6c79c339d317c2e49ff56559e900d57f45e38fb0da48a9f",
+      "release": "sidecar/v2",
+      "status": "PASS",
+      "method": "frozen_manifest_and_checksum",
+      "pin_path": "releases/sidecar/v2/manifest.json",
+      "shots": [
+        "print-carrier"
+      ]
+    },
+    {
+      "path": "releases/sidecar/v2/stl/LaunchLab_Sidecar_v2_shell_UPRIGHT.stl",
+      "sha256": "8cb54f4a5678ce2899721fc2857491557fcbff351bd749e50296049769bdefb3",
+      "release": "sidecar/v2",
+      "status": "PASS",
+      "method": "frozen_manifest_and_checksum",
+      "pin_path": "releases/sidecar/v2/manifest.json",
+      "shots": [
+        "print-carrier"
+      ]
+    },
+    {
+      "path": "releases/top_mount/v2/preview/04_M5_dock_top_mount_v2.stl",
+      "sha256": "7d06d90dc2d225784b9da1c74f7bea312263aec4bc0e8c85eb85f742b85d3480",
+      "release": "top_mount/v2",
+      "status": "PASS",
+      "method": "frozen_manifest_and_checksum",
+      "pin_path": "releases/top_mount/v2/manifest.json",
+      "shots": [
+        "dock-part",
+        "dock-underside",
+        "top-qre",
+        "top-qre-exploded"
+      ]
+    },
+    {
+      "path": "releases/top_mount/v2/preview/05_M5_cover.stl",
+      "sha256": "f2200856eabc1fb382881f6c520f0702df5767cf66feff500d9e65a520a18bed",
+      "release": "top_mount/v2",
+      "status": "PASS",
+      "method": "frozen_manifest_and_checksum",
+      "pin_path": "releases/top_mount/v2/manifest.json",
+      "shots": [
+        "dock-part",
+        "top-qre",
+        "top-qre-exploded"
+      ]
+    },
+    {
+      "path": "releases/top_mount/v2/stl/LaunchLab_Top_Mount_v2_dock_FLAT.stl",
+      "sha256": "2dbbe029f4f524d8304dad030dacfb302f37eba15d5fe888e5cfc32c4d4619b2",
+      "release": "top_mount/v2",
+      "status": "PASS",
+      "method": "frozen_manifest_and_checksum",
+      "pin_path": "releases/top_mount/v2/manifest.json",
+      "shots": [
+        "print-dock"
+      ]
+    },
+    {
+      "path": "releases/top_mount/v2/stl/LaunchLab_Top_Mount_v2_shell_UPRIGHT.stl",
+      "sha256": "0ab7147f4e7cf97e511f701ff6ba38f01147b551e0a1c9f7450acbd2522e6500",
+      "release": "top_mount/v2",
+      "status": "PASS",
+      "method": "frozen_manifest_and_checksum",
+      "pin_path": "releases/top_mount/v2/manifest.json",
+      "shots": [
+        "print-dock"
+      ]
+    }
+  ],
+  "sensor_geometry": [
+    {
+      "release": "LaunchLab_v102_QRE_uniform_hinges_base",
+      "status": "PASS",
+      "method": "ordered_triangle_coordinate_comparison",
+      "triangle_count": 29374,
+      "maximum_coordinate_drift_mm": 1.9073483628062604e-06,
+      "maximum_allowed_drift_mm": 0.0001,
+      "print_stl": "releases/LaunchLab_v102_QRE_uniform_hinges_base/stl/01_QRE_OPEN_PRINT_IN_PLACE.stl",
+      "print_stl_sha256": "43868599bf563f93bda80e3054dcca5f4b5673491f32faa7aa48c7f6781ac8d1",
+      "frozen_print_transform": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          -0.013999999999999346
+        ],
+        [
+          0.0,
+          6.123233995736766e-17,
+          -1.0,
+          10.687348175044999
+        ],
+        [
+          0.0,
+          1.0,
+          6.123233995736766e-17,
+          16.47500038147
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "supporting_inputs": [
+        {
+          "path": "inspection/QRE_uniform_hinges_v102/preview/01_QRE_open_holder_body.stl",
+          "sha256": "feedbe704acc859646e124b3987cd142219001d353d19208050df6bc74a643be"
+        },
+        {
+          "path": "inspection/QRE_uniform_hinges_v102/preview/PRINT_08_QRE_latch_LEFT.stl",
+          "sha256": "c67c1e457a4704444eefb8c6df063211c13b43c8fd1c31cd446e346c0acb7139"
+        },
+        {
+          "path": "inspection/QRE_uniform_hinges_v102/preview/PRINT_09_QRE_latch_RIGHT.stl",
+          "sha256": "1efe8e09462097952523092f179c50976130154a5c29932fa93f84d47c17af9f"
+        }
+      ],
+      "cad_report": "releases/LaunchLab_v102_QRE_uniform_hinges_base/reports/cad_validation.json",
+      "cad_report_sha256": "a7a5e9268ff2effec7fe0fca2a1ce3c0b83812adf91b1dbf5a10ca2c21217dd8"
+    },
+    {
+      "release": "LaunchLab_v102_TCRT_uniform_hinges",
+      "status": "PASS",
+      "method": "ordered_triangle_coordinate_comparison",
+      "triangle_count": 21044,
+      "maximum_coordinate_drift_mm": 1.9073489028187396e-06,
+      "maximum_allowed_drift_mm": 0.0001,
+      "print_stl": "releases/LaunchLab_v102_TCRT_uniform_hinges/stl/01_TCRT_OPEN_PRINT_IN_PLACE.stl",
+      "print_stl_sha256": "259a08ac6915288e59bc187d7161ea1234bd37eabe6dbcb99c068f89cbeb4fc5",
+      "frozen_print_transform": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          -0.013999999999999346
+        ],
+        [
+          0.0,
+          6.123233995736766e-17,
+          -1.0,
+          10.687348175044999
+        ],
+        [
+          0.0,
+          1.0,
+          6.123233995736766e-17,
+          16.47500038147
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "supporting_inputs": [
+        {
+          "path": "inspection/TCRT_uniform_hinges_v102/preview/01_TCRT_open_holder_body.stl",
+          "sha256": "4203a97c77f9a438101f16c8477e72e7d02c7d5bab209653347ea4eaa4afdb94"
+        },
+        {
+          "path": "inspection/TCRT_uniform_hinges_v102/preview/PRINT_LEFT_latch.stl",
+          "sha256": "b0b10adbd86fc5e583c57cabfd989cee408fa6e8b35499b96e5b889744f2209e"
+        },
+        {
+          "path": "inspection/TCRT_uniform_hinges_v102/preview/PRINT_RIGHT_latch.stl",
+          "sha256": "16a66beea2287008108b65b77ff172843d68441f88ea4cc3d293f218437512ba"
+        }
+      ],
+      "cad_report": "releases/LaunchLab_v102_TCRT_uniform_hinges/reports/cad_validation.json",
+      "cad_report_sha256": "3575600b4d2e07d9ad8ddba93a9a63934119b8d6e3aa99e2ee4ea32f24e27f22"
+    }
+  ],
+  "attribution": {
+    "existing_notices": [
+      {
+        "path": "releases/LaunchLab_v102_QRE_uniform_hinges_base/LICENSE.txt",
+        "sha256": "b6735a3953fdf92b238b5886d7cb98aac028b40066f17cf106e0046e2c5f3ebb",
+        "verbatim_notice": "Reference-derived connector: BP Gear Port Connector by Migbello, Thingiverse 6856080.\nOriginal supplied notice: Creative Commons - Attribution - Share Alike.\nThe source did not specify a version number. Its unmodified LICENSE.txt is preserved under reference/.\nNew LaunchLab adapter/cradle contributions: Creative Commons - Attribution - Share Alike.\nChanges: rigid source placement, union of overlapping latch interiors, new retaining bridge and sensor cradle, integration with the earlier electronics enclosure.\nNo endorsement or physical validation by the source creator is implied.\n"
+      },
+      {
+        "path": "releases/LaunchLab_v102_TCRT_uniform_hinges/LICENSE.txt",
+        "sha256": "b6735a3953fdf92b238b5886d7cb98aac028b40066f17cf106e0046e2c5f3ebb",
+        "verbatim_notice": "Reference-derived connector: BP Gear Port Connector by Migbello, Thingiverse 6856080.\nOriginal supplied notice: Creative Commons - Attribution - Share Alike.\nThe source did not specify a version number. Its unmodified LICENSE.txt is preserved under reference/.\nNew LaunchLab adapter/cradle contributions: Creative Commons - Attribution - Share Alike.\nChanges: rigid source placement, union of overlapping latch interiors, new retaining bridge and sensor cradle, integration with the earlier electronics enclosure.\nNo endorsement or physical validation by the source creator is implied.\n"
+      }
+    ],
+    "connector_donor": {
+      "name": "BP Gear Port Connector",
+      "creator": "Migbello",
+      "source_url": "https://www.thingiverse.com/thing:6856080",
+      "notice_path": "source/bp_gear_port/LICENSE.txt",
+      "notice_sha256": "29cfeb493bd5884b16ec683a057966d62ba679f5691e23ea49cc020b5e5fd84b",
+      "verbatim_notice": "This thing was created by Thingiverse user Migbello, and is licensed under Creative Commons - Attribution - Share Alike",
+      "license_version": "Not specified by the supplied notice"
+    },
+    "mount_family_zip_notices": {
+      "sidecar/v2": "No LICENSE file is listed in the frozen family inventory; preserve supplied donor notices separately",
+      "top_mount/v2": "No LICENSE file is listed in the frozen family inventory; preserve supplied donor notices separately"
+    },
+    "native_grip_input": {
+      "input_path": "reference files/Beyblade+X+Launcher+Grip/Top Shell v2.stl",
+      "sha256": "e4ec3fc5a2a8188718d97c99c91c36d421ebf2228967dd37cd4826f86a6b45e1",
+      "archive_path": "reference files/Beyblade+X+Launcher+Grip.zip",
+      "archive_sha256": "1845811646745e2d47745bb48215bdff6bdd2ea8b9fbd412dcbe52b6e59ed199",
+      "provenance_pointers": [
+        "scripts/build_M5_sidecar_v109.py: GRIP_TOP and load_head",
+        "scripts/build_sidecar_v2.py: write loads the donor head; build_base unions it with the new seat",
+        "releases/sidecar/v2/reports/cad_validation.json: native_receiver_missing_material_mm3 is zero"
+      ]
+    }
+  },
+  "limits": [
+    "This proof does not claim that the source meshes or releases are committed at repository HEAD",
+    "Inspection parameter files are not asserted byte-identical to the compact frozen parameter summaries",
+    "Assembly placement, role labels, colours, rendering and exported GLB bytes require separate validation",
+    "Sidecar sensor placement is illustrative unless independently registered; reference hardware is not a print part",
+    "Digital geometry and print audits do not establish printed fit, retention, fatigue or sensor performance"
+  ]
+}

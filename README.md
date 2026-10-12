@@ -34,7 +34,7 @@ Start with **one M5StickS3 K150 + one analog sensor + three short wires + printe
 | 1, instead of QRE | **TCRT5000 / LM393 module with AO** | Old-sensor build. Choose the four-pin **VCC/GND/D0/A0** module and use A0. The mount uses the measured 31×13×1 mm PCB; check your board/header dimensions. | [Amazon — HiLetgo 10-pack, ordered](https://www.amazon.com/dp/B00LZV1V10?tag=beywatchgg-20) |
 | 3 leads | **Short 2.54 mm jumper wires** | VCC, GND and AO/OUT; the ordered SinLoon pack is 8 cm male-to-female. Trim/reroute as needed, checking connector clearance. | [Amazon — SinLoon 8 cm](https://www.amazon.com/dp/B08M3QLL3Q?tag=beywatchgg-20) · [Amazon — ELEGOO mixed jumper kit](https://www.amazon.com/dp/B01EV70C78?tag=beywatchgg-20) |
 | 1 | **USB-C data cable** | Flashing and charging; use an existing cable that carries data. | Use an existing data cable, or [Amazon search — USB-C data cable](https://www.amazon.com/s?k=USB-C+data+cable&tag=beywatchgg-20) |
-| 1 set | **Printed M5 + sensor mounts** | QRE: six-piece v0.40 plate. TCRT: six v0.43 sensor pieces + a separate M5 carrier. v0.68 M5 with wire channel and shortened hook is the preferred separate carrier. | [Print files](docs/HARDWARE_VERSIONS.md#current-downloads) |
+| 1 set | **Printed M5 + sensor mounts** | QRE1113 or TCRT5000 sensor v102, paired with Top Mount v2 (QRE only) or Sidecar v2. Download the sensor and matching mount pair separately. | [Print files](docs/HARDWARE_VERSIONS.md#current-downloads) |
 | See below | **M2 machine screws** | Head style and length depend on the mount revision. | [Amazon — ordered MEIYYJ countersunk assortment](https://www.amazon.com/dp/B07HC3LQYS?tag=beywatchgg-20); pan-head sizes below |
 | Small amount | **1.75 mm PLA filament** | Print yourself or use a printing service; saved profiles target P1S / 0.4 mm nozzle. | Use existing PLA, a printing service, or [Amazon search — PLA filament](https://www.amazon.com/s?k=1.75mm+PLA+filament&tag=beywatchgg-20) |
 
@@ -42,14 +42,16 @@ Links marked **ordered**, plus the SparkFun, SinLoon, ELEGOO and uxcell links, m
 
 ### Screws, connectors and tools
 
-The ordered MEIYYJ assortment includes M2×4/5/6/8 **flat/countersunk heads**. Its M2×5 pieces can supply the clip/crossbar screws, subject to head-seat fit. Obtain the **pan-head** pieces separately: [Amazon search — M2×4 pan-head](https://www.amazon.com/s?k=M2x4+pan+head+machine+screws&tag=beywatchgg-20) · [Amazon search — M2×6 pan-head](https://www.amazon.com/s?k=M2x6+pan+head+machine+screws&tag=beywatchgg-20).
+The ordered MEIYYJ assortment includes M2×4/5/6/8 **flat/countersunk heads**.
+Current v102 sensor clips need no clip screws.
+Use the specified **pan-head** pieces for current mounts: [Amazon search — M2×4 pan-head](https://www.amazon.com/s?k=M2x4+pan+head+machine+screws&tag=beywatchgg-20) · [Amazon search — M2×6 pan-head](https://www.amazon.com/s?k=M2x6+pan+head+machine+screws&tag=beywatchgg-20).
 
 | Assembly | Screws required |
 | --- | --- |
-| Original v0.40 M5 carrier | 2 × **M2×6 pan-head**, from below into the StickS3 mounts. |
-| QRE v0.40 plate sensor assembly | 2 × **M2×5 countersunk** for the latch crossbar + 2 × **M2×4 pan-head** for the sensor pressure plate. |
-| TCRT v0.43 sensor assembly | 2 × **M2×5 countersunk** for the separate clip caps + 2 × **M2×4 pan-head** for the sensor keeper; M5 fasteners are additional. |
-| Preferred v0.68 M5 carrier | 2 × M2 screws; M2×6 is the nominal reference. **Actual length, insert engagement and seating remain unverified.** |
+| QRE1113 v102 sensor | 2 × **M2×4 pan-head** for the pressure bar; captive clips need no screws. |
+| Top Mount v2 | 2 × **M2×4 pan-head** from below into M5, plus 4 × **M2×6 pan-head** into the QRE base; cover snaps on. |
+| Sidecar v2 | 2 × **M2×4 pan-head** into M5 secondary back holes; cover snaps on. |
+| TCRT5000 v102 sensor | 1 × **M3 board screw** (M3×6 CAD reference); captive clips need no screws. |
 
 If your sensor has bare pads, add a **3-pin 2.54 mm header** or solder the three wires directly. The ordered [uxcell right-angle male header strip](https://www.amazon.com/dp/B01461DQ6S?tag=beywatchgg-20) can be cut to three pins; check header direction and cable clearance against the printed seat. You will also need a small screwdriver, cutters, and a soldering iron/solder if attaching bare wires or headers.
 
@@ -57,7 +59,7 @@ Use a **Beyblade X string launcher with the supplied removable clip/port interfa
 
 Wire **AO/OUT → G1 / GPIO1**, **VCC → 3V3 / 3V3_L2**, **GND → GND**. DO is unused. The Grove red lead supplies 5 V; use the Hat 3.3 V pin for these builds. [QRE build/wiring](docs/BUILD.md) · [TCRT build/wiring](docs/TCRT5000.md) · [Sensor and hardware versions](docs/HARDWARE_VERSIONS.md).
 
-![LaunchLab Mini M5StickS3 mount, rendered from the published CAD](site/public/images/m5-mount.png)
+![Compact QRE1113 v102 with Top Mount v2, rendered from the exact source meshes](site/public/hardware/images/top-qre.webp)
 
 
 The updater defaults to **0.12.2** for both saved sensor profiles; the withdrawn 0.12.1 is not offered in its version list.
@@ -71,11 +73,13 @@ Physical browser transfer, four-image installation of this revision, stock recov
 Current source: **0.12.2 production** (QRE1113 or TCRT5000 via Sensor profile).
 Updater default: **0.12.2**.
 Old TCRT firmware: **0.2.0**.
-Preferred separate M5 carrier: **v0.68**; latest TCRT mount: **v0.43**.
-The original QRE **v0.40** complete plate is still available.
+Current printed hardware: **QRE1113 v102**, **TCRT5000 v102**, **Top Mount v2** and **Sidecar v2**.
+The historical v0.40 plate and earlier carriers remain available.
+Sidecar motion-axis normalization is planned for firmware **0.13.1**, not included in the current 0.12.2.
 Firmware, M5 carrier and sensor-mount versions are independent.
 
-**[Choose your sensor and see every revision](docs/HARDWARE_VERSIONS.md)** — includes the preferred v0.68 M5 carrier, earlier v0.41–v0.50 models, historical v0.19 TCRT, and current QRE files.
+**[Choose your current kit and see every revision](docs/HARDWARE_VERSIONS.md)**.
+Hardware families and shared sensor revisions have separate version histories.
 
 ## What it does
 
@@ -126,119 +130,63 @@ These are saved device-framebuffer screenshots, not concept UI. Screens marked *
 
 From the live screen, **A shows the last recap** and **B opens the menu** (History, New session, Battery, Settings, Tournament). In menus, A opens or applies, B moves to the next choice and hold B goes back one level or cancels an edit. Settings holds Sleep after, RPM method, Brightness, Flip display and Sensor profile; brightness and flip preview before you apply them. Hold A on main for one second to enter tournament mode (B cycles Recording Only/RPM; hold A exits). See the [firmware guide](firmware/LaunchLabMini/README.md).
 
-## Exploded assemblies
+## Current hardware assemblies
 
-The **Sidecar form factor** has **two independent assemblies**: the M5 display mount and your chosen optical sensor attachment (QRE1113 or TCRT5000). The views below use the exact published CAD meshes, separated for illustration. They do not assert a measured combined mounting position on a complete launcher. Electronics and screws are reference envelopes, not printed parts.
+The current kits combine shared sensor v102 with a matching mount-family v2 pair.
+Sidecar has separate sensor and M5 attachments; Top Mount holds the M5 above the QRE sensor.
+Images use the exact reviewed assembly meshes.
+Electronics and screws are reference envelopes, not printed parts.
+Explosion offsets illustrate assembly order, not a measured position on a complete launcher.
 
-### Preferred M5StickS3 carrier — v0.68
-
-![Preferred v0.68 M5 carrier with underside cable hook](hardware/M5_cable_hook_v068/renders/02_hook_underside.png)
-
-One replacement carrier retains the two older support humps and adds the side-open
-wire channel plus a **6 mm long, 4.8 mm tall underside hook**, opening downward in
-the bottom-face preview. The hook is 2 mm shorter than v0.66. The sensor mount
-remains separate. [P1S PLA 3MF](hardware/M5_cable_hook_v068/bambu/LaunchLab_v068_P1S_PLA_M5_ATTACHMENT_PROTOTYPE.3mf)
-· [Complete package](hardware/M5_cable_hook_v068_package.zip)
-· [STL, editable CAD and rebuild source](hardware/M5_cable_hook_v068/README.md).
-Saved slice: **43m33s / 8.38 g PLA**. Physical seating, screw engagement, hook
-strength and cable retention remain unverified. Stagger the three leads inside
-the smaller hook and keep plug housings outside its opening.
-
-### Earlier M5StickS3 carrier — v0.50
-
-![Exploded earlier M5 v0.50 carrier, intact device reference and underside screws](docs/assets/hardware/variants/m5-exploded.png)
-
-**1 — Earlier equal-height M5 carrier:** one replacement printed piece with the v0.49 soft center ramp, recessed screw heads and supports raised to 2.3 mm. [Download v0.50 3MF](hardware/M5_equal_supports_v050/bambu/LaunchLab_v050_P1S_PLA_M5_EQUAL_SUPPORTS_TREE_SLIM.3mf) · [Full package](hardware/M5_equal_supports_v050_package.zip). Saved slice: 43m18s / 9.24 g PLA.
-
-**Prototype: physical seating and leveling are unverified.** The original nominal M5 reference overlaps the taller pads in its saved assembly pose; it is lifted here for illustration. Screw length and insert engagement must be checked after the counterbore revision. STEP files contain only the added supports; the full carrier is mesh geometry.
-
-<img src="docs/assets/hardware/variants/m5-part-01.png" width="360" alt="Actual v0.50 printed M5 equal-height support carrier">
-
-### Earlier M5StickS3 display mount — v0.40
-
-![Exploded M5StickS3 assembly showing printed part 1, the intact M5StickS3 and underside screws](docs/assets/hardware/m5-exploded.png)
-
-**1 — M5 platform:** supports the intact M5StickS3. Two M2×6 screws install from underneath into the device's existing mounts. The factory device, screen and soft-liner references are lifted for visibility in this view.
-
-### Small QRE1113 sensor attachment
-
-![Exploded QRE1113 assembly showing the sensor base, latch crossbar, pressure plate, both launcher latches, sensor and fasteners](docs/assets/hardware/qre-exploded.png)
-
-| No. | Printed piece | Purpose | Fasteners |
+| Kit | Shared sensor | M5 mount | Current assembly |
 | --- | --- | --- | --- |
-| 2 | QRE sensor base | Locates the small analog board and retains the launcher-facing interface. | Receives the crossbar and pressure-plate screws. |
-| 3 | Latch crossbar | Retains the launcher latch assembly. | 2 × M2×5 countersunk. |
-| 4 | Sensor pressure plate | Holds the QRE board against its seat. | 2 × M2×4 pan-head. |
-| 5 | Left launcher latch | One side of the removable launcher attachment. | Retained by the base/crossbar assembly. |
-| 6 | Right launcher latch | Opposite side of the removable launcher attachment. | Retained by the base/crossbar assembly. |
+| Compact | QRE1113 v102 | Top Mount v2 cover and dock | ![Compact Top Mount assembly](site/public/hardware/images/top-qre-exploded-960.webp) |
+| Compact Sidecar | QRE1113 v102 | Sidecar v2 cover and base | ![Compact Sidecar assembly](site/public/hardware/images/side-qre-exploded-960.webp) |
+| Standard Sidecar | TCRT5000 v102 | Sidecar v2 cover and base | ![Standard Sidecar assembly](site/public/hardware/images/side-tcrt-exploded-960.webp) |
 
-### Old TCRT5000 sensor attachment — v0.43
+### Exact print downloads
 
-![Exploded TCRT5000 v0.43 mount with six printed pieces, analog sensor and nominal screws](docs/assets/hardware/variants/tcrt-exploded.png)
+| Part set | STL/source package | P1S PLA plate | P1S PETG plate |
+| --- | --- | --- | --- |
+| QRE1113 v102 base, captive clips and pressure bar | [Package](site/public/hardware/downloads/compact-base-v102.zip) | [PLA](site/public/hardware/downloads/compact-base-v102.3mf) | No sensor PETG plate supplied |
+| TCRT5000 v102 mount and captive clips | [Package](site/public/hardware/downloads/standard-sensor-v102.zip) | [PLA](site/public/hardware/downloads/standard-sensor-v102.3mf) | No sensor PETG plate supplied |
+| Top Mount v2 cover and dock | [Package](site/public/hardware/downloads/top-mount-v2.zip) | [PLA pair](site/public/hardware/downloads/top-mount-v2-pla.3mf) | [PETG pair](site/public/hardware/downloads/top-mount-v2-petg.3mf) |
+| Sidecar v2 cover and base | [Package](site/public/hardware/downloads/sidecar-v2.zip) | [PLA pair](site/public/hardware/downloads/sidecar-v2-pla.3mf) | [PETG pair](site/public/hardware/downloads/sidecar-v2-petg.3mf) |
 
-This version uses the **older 31×13×1 mm TCRT5000 / LM393 PCB**. Two independent screw-on clip caps replace the earlier crossbar; M5 stays on a separate carrier. [Six-piece CAD/STL/STEP package](hardware/minimal_TCRT_split_keepers_v043_package.zip) · [Old-sensor wiring & firmware](docs/TCRT5000.md). This is an **unsliced CAD prototype**; fit, solder clearance, preload and optical alignment still need checking.
+Choose one sensor plate and the matching mount-pair plate.
+These source plates are separate, not a newly sliced combined full kit.
+The pair plate contains both mating mount pieces.
+Both v2 shells are unchanged from their family's v1; existing v1 shell owners need only the matching v2 base or dock.
+Saved CAD, STL readback and print-project audits passed.
+Physical fit, snap retention, fatigue, optical alignment and absolute RPM calibration remain unverified for these current hardware combinations.
+Sidecar motion-axis normalization is pending firmware 0.13.1; do not infer it from the hardware preview.
+See [attribution](THIRD_PARTY_NOTICES.md).
 
-| No. | Printed piece | Purpose |
-| --- | --- | --- |
-| 1 | TCRT sensor cradle | Locates the larger board and preserves the launcher interface. |
-| 2 | Left clip cap | Retains one launcher latch with an M2×5 countersunk screw. |
-| 3 | Right clip cap | Retains the opposite latch with an M2×5 countersunk screw. |
-| 4 | Sensor pressure keeper | Holds the board with two M2×4 pan-head screws. |
-| 5 | Left launcher latch | Removable launcher attachment. |
-| 6 | Right launcher latch | Opposite side of the launcher attachment. |
-
-<table>
-<tr><th>1 · TCRT cradle</th><th>2 · Left cap</th><th>3 · Right cap</th></tr>
-<tr><td><img src="docs/assets/hardware/variants/tcrt-part-01.png" width="240" alt="TCRT sensor cradle"></td><td><img src="docs/assets/hardware/variants/tcrt-part-02.png" width="240" alt="Left TCRT clip cap"></td><td><img src="docs/assets/hardware/variants/tcrt-part-03.png" width="240" alt="Right TCRT clip cap"></td></tr>
-<tr><th>4 · Pressure keeper</th><th>5 · Left latch</th><th>6 · Right latch</th></tr>
-<tr><td><img src="docs/assets/hardware/variants/tcrt-part-04.png" width="240" alt="TCRT pressure keeper"></td><td><img src="docs/assets/hardware/variants/tcrt-part-05.png" width="240" alt="Left TCRT launcher latch"></td><td><img src="docs/assets/hardware/variants/tcrt-part-06.png" width="240" alt="Right TCRT launcher latch"></td></tr>
-</table>
-
-### Each original QRE printed piece — v0.40 plate
-
-All six pieces are included in the complete v0.40 plate. The views below show their actual mesh geometry; each build uses one of each.
-
-<table>
-<tr><th>1 · M5 platform</th><th>2 · QRE sensor base</th><th>3 · Latch crossbar</th></tr>
-<tr>
-<td><img src="docs/assets/hardware/part-01.png" width="240" alt="Individual M5StickS3 stepped mounting platform"></td>
-<td><img src="docs/assets/hardware/part-02.png" width="240" alt="Individual QRE1113 sensor base"></td>
-<td><img src="docs/assets/hardware/part-03.png" width="240" alt="Individual printed latch crossbar"></td>
-</tr>
-<tr><th>4 · Pressure plate</th><th>5 · Left launcher latch</th><th>6 · Right launcher latch</th></tr>
-<tr>
-<td><img src="docs/assets/hardware/part-04.png" width="240" alt="Individual QRE1113 sensor pressure plate"></td>
-<td><img src="docs/assets/hardware/part-05.png" width="240" alt="Individual left launcher latch"></td>
-<td><img src="docs/assets/hardware/part-06.png" width="240" alt="Individual right launcher latch"></td>
-</tr>
-</table>
-
-If your five-piece sensor attachment is already built, only the **v0.40 M5 platform** needs replacement. [Download the combined 3MF](hardware/LaunchLab_v040_ALL_ITEMS_PRINT/bambu/LaunchLab_v040_P1S_PLA_ALL_ITEMS_ONE_PLATE.3mf) or the [full print package](hardware/LaunchLab_v040_ALL_ITEMS_PRINT_package.zip). Physical fit, button/thumb access and launch-load retention still need checking after printing. [Render provenance](docs/assets/hardware/provenance.json) identifies the source meshes; `scripts/render-readme-hardware.py` reproduces these illustrations in Blender.
-
-[Latest-render provenance](docs/assets/hardware/variants/provenance.json) records the frozen source mesh hashes; `scripts/render-variant-hardware.py` reproduces the new illustrations. [Version history](docs/HARDWARE_VERSIONS.md) explains v0.68 and every earlier v0.41–v0.50 change.
+[Hardware versions and assembly notes](docs/HARDWARE_VERSIONS.md) identify current and historical parts.
+[Render/download provenance](site/public/provenance/hardware.json) and [assembly validation](site/public/provenance/hardware-assembly-validation.json) pin the displayed geometry and source plates.
+All historical hardware folders and downloads remain unchanged.
 
 ## Get started
 
-Choose **QRE1113 or old TCRT5000** in the [version guide](docs/HARDWARE_VERSIONS.md) first. For TCRT use [its build/restore guide](docs/TCRT5000.md); the following complete-plate/updater steps are for QRE.
+1. Choose Compact, Compact Sidecar or Standard Sidecar from the current table above.
+2. Download the sensor plate and its matching mount-pair plate, then review them for your printer and filament.
+3. Assemble an intact M5StickS3 K150 and matching analog sensor using [BUILD.md](docs/BUILD.md) or [TCRT5000.md](docs/TCRT5000.md).
+4. Use the [updater](https://shadohead.github.io/launchlab-mini/) in desktop Chrome or Edge for firmware 0.12.2, then select the matching Sensor profile in Settings.
 
-1. Download the [complete v0.40 print package](hardware/LaunchLab_v040_ALL_ITEMS_PRINT_package.zip) or open [the combined 3MF](hardware/LaunchLab_v040_ALL_ITEMS_PRINT/bambu/LaunchLab_v040_P1S_PLA_ALL_ITEMS_ONE_PLATE.3mf) in Bambu Studio.
-2. Assemble with an intact M5StickS3 K150 and analog QRE1113. Read [BUILD.md](docs/BUILD.md) for wiring, fasteners and print settings.
-3. Open the [updater](https://shadohead.github.io/launchlab-mini/) in desktop Chrome or Edge, choose Update or First install, connect USB with the M5 powered on, and select the device. The updater attempts download mode automatically; follow its manual reset steps if connection fails.
-
-Update writes only the application at `0x10000` after checking the installed partition table. First install replaces the factory firmware and partition table and requires an explicit checkbox. Neither flow erases all flash. Every downloaded image is SHA-256 checked and writes use esptool's device MD5 verification. Chip identity alone cannot distinguish every ESP32-S3 board, so confirm your device is specifically an M5StickS3 K150.
+Update writes only the application at `0x10000` after checking the installed partition table.
+First install replaces the factory firmware and partition table and requires an explicit checkbox.
+Neither flow erases all flash.
+Every downloaded image is SHA-256 checked and writes use device MD5 verification.
+Confirm your device is specifically an M5StickS3 K150.
 
 ## Hardware files
 
-- [All hardware revisions and sensor compatibility](docs/HARDWARE_VERSIONS.md), with a [checksum inventory](hardware/versions.json).
-- [Preferred v0.68 M5 carrier](hardware/M5_cable_hook_v068/): side-open wire channel, two support humps and shortened underside cable hook; CAD, source and saved P1S PLA slice.
-- [Earlier v0.50 M5 carrier](hardware/M5_equal_supports_v050/): preserved sliced prototype, plus v0.44–v0.49 history.
-- [v0.43 TCRT mount](hardware/minimal_TCRT_split_keepers_v043/): latest unsliced six-piece prototype, plus v0.19/v0.41/v0.42 history.
+- [Current hardware kits and historical revisions](docs/HARDWARE_VERSIONS.md), with the [checksum inventory](hardware/versions.json).
+- [Latest sensor and mount downloads](site/public/hardware/downloads/), with exact source plates and STL/source packages.
+- Historical [v0.68 carrier](hardware/M5_cable_hook_v068/), [v0.50 carrier](hardware/M5_equal_supports_v050/), [v0.43 TCRT](hardware/minimal_TCRT_split_keepers_v043/), [v0.40 plate](hardware/LaunchLab_v040_ALL_ITEMS_PRINT/) and [v0.33 QRE](hardware/LaunchLab_v033_flush_QRE/) remain preserved.
 
-- [v0.40 complete plate](hardware/LaunchLab_v040_ALL_ITEMS_PRINT/): all six prints, source STLs, QRE STEP files, profiles and digital verification.
-- [v0.40 M5 mount](hardware/LaunchLab_v040_right_block_print/): editable Blender mesh and GLB, independent 3MF, dimensions and CAD reports.
-- [v0.33 QRE base](hardware/LaunchLab_v033_flush_QRE/): editable Blender and STEP assembly for the current sensor seat. Other sensor parts are frozen in the complete package.
-
-The CAD includes original launcher attachment geometry derived from Migbello's BP Gear Port Connector. Preserve its attribution and share-alike notice when distributing changes.
+The launcher attachment derives from Migbello's BP Gear Port Connector.
+Preserve its attribution and share-alike notice when distributing changes.
 
 ## Develop
 

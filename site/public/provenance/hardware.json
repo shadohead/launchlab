@@ -1,0 +1,1059 @@
+{
+  "repository": "shadohead/custom-beypass (private hardware working project)",
+  "commit": null,
+  "repositoryCheckout": "7ed781936eac7a67230ec063af3b65a4d2049edf",
+  "repositoryCheckoutScope": "Checkout context only; the frozen hardware inputs are pinned by SHA-256, not this commit.",
+  "sourceSnapshotSha256": "750ceadddd1ffa0571802c26dbd385062f1c05e95fdae3e31efeea7cda79cda8",
+  "sourceState": "verified-frozen-releases-and-reviewed-assembly-meshes",
+  "importedAt": "2026-10-11",
+  "releases": [
+    {
+      "id": "compact-base-v102",
+      "revision": "v102",
+      "source": "custom-beypass/releases/LaunchLab_v102_QRE_uniform_hinges_base",
+      "releaseCommit": null,
+      "readme": "3c76a44c110828d8278a77f2c2dba343f8d2bd75d783f709933b5d1f291752b4",
+      "license": "b6735a3953fdf92b238b5886d7cb98aac028b40066f17cf106e0046e2c5f3ebb",
+      "checksumFileSha256": "fa29cbb7942eabf7c58d44befdfab8585cf6bff23bad8b7d520531672901b1ee",
+      "checksums": 26,
+      "outputs": [
+        {
+          "path": "hardware/downloads/compact-base-v102.zip",
+          "kind": "package",
+          "files": 14,
+          "size": 2270734,
+          "sha256": "8bf39dc17611b303aa4458614d3d7bee2dcb78b6d7e028d9ee83fd0838a4ad06"
+        },
+        {
+          "path": "hardware/downloads/compact-base-v102.3mf",
+          "kind": "bambu-3mf",
+          "source": "bambu/LaunchLab_v102_P1S_PLA_QRE_UNIFORM_HINGES_BASE_TREE_SLIM_PLA.3mf",
+          "size": 1446603,
+          "sha256": "b51a7e42b386bdd829867086917aadaaa6059455a9c123a15ad1b4bda861f433"
+        }
+      ]
+    },
+    {
+      "id": "top-mount-v2",
+      "revision": "Top Mount v2",
+      "source": "custom-beypass/releases/top_mount/v2",
+      "releaseCommit": null,
+      "readme": "63519b013f27ebeff772507e35d2205706c6d265b9e019687967f9787d6224bd",
+      "license": null,
+      "checksumFileSha256": "f238fa4d914684eb9cb068a6e3ae3279c84e9abc697b9b552734eaadae1ae69e",
+      "checksums": 31,
+      "outputs": [
+        {
+          "path": "hardware/downloads/top-mount-v2.zip",
+          "kind": "package",
+          "files": 14,
+          "size": 2778220,
+          "sha256": "3879a9ecaacfb2d7728a32c5ea03c4ff44ec8609ed652c781698f80601ef82d3"
+        },
+        {
+          "path": "hardware/downloads/top-mount-v2-pla.3mf",
+          "kind": "bambu-3mf",
+          "source": "bambu/LaunchLab_Top_Mount_v2_P1S_PLA_shell_and_dock.3mf",
+          "size": 1129806,
+          "sha256": "d73e2cda98bdd1641615abc566c039b8aebd2309fda4ee9fc6472aba9de9c352"
+        },
+        {
+          "path": "hardware/downloads/top-mount-v2-petg.3mf",
+          "kind": "bambu-3mf",
+          "source": "bambu/LaunchLab_Top_Mount_v2_P1S_PETG_shell_and_dock.3mf",
+          "size": 1142900,
+          "sha256": "71373f74dfe09e22cfea81edc6bd9bd142a074be1017c52bf0f1034c1e49a36b"
+        }
+      ]
+    },
+    {
+      "id": "sidecar-v2",
+      "revision": "Sidecar v2",
+      "source": "custom-beypass/releases/sidecar/v2",
+      "releaseCommit": null,
+      "readme": "9bf961956d367854b1e72aebfb532636a27788dd3703a9960165ddc90050c704",
+      "license": null,
+      "checksumFileSha256": "542d61ee8215d28096626ba23b20ec76f489a123f6161336c5d325f43429278f",
+      "checksums": 42,
+      "outputs": [
+        {
+          "path": "hardware/downloads/sidecar-v2.zip",
+          "kind": "package",
+          "files": 14,
+          "size": 2730090,
+          "sha256": "6397e72fa65940dfc1a7aa7ca75d5ec44e57c959a2e0c5657e2f2eb672d8e2f6"
+        },
+        {
+          "path": "hardware/downloads/sidecar-v2-pla.3mf",
+          "kind": "bambu-3mf",
+          "source": "bambu/LaunchLab_Sidecar_v2_P1S_PLA_shell_and_base.3mf",
+          "size": 1138785,
+          "sha256": "c51305a21ac0a00bccba2541f29f355f1f6cab61b928ae58eea6411c2cd8eb28"
+        },
+        {
+          "path": "hardware/downloads/sidecar-v2-petg.3mf",
+          "kind": "bambu-3mf",
+          "source": "bambu/LaunchLab_Sidecar_v2_P1S_PETG_shell_and_base.3mf",
+          "size": 1155773,
+          "sha256": "023b844dc908358c188f654c113eaf785011eb75cf00b0a9fd7a6222f0c833e7"
+        }
+      ]
+    },
+    {
+      "id": "standard-sensor-v102",
+      "revision": "v102",
+      "source": "custom-beypass/releases/LaunchLab_v102_TCRT_uniform_hinges",
+      "releaseCommit": null,
+      "readme": "0a4d7a18776cbc6bb152b4e3caa75171afd2071d8324a224b2c3f9d34a3a8e76",
+      "license": "b6735a3953fdf92b238b5886d7cb98aac028b40066f17cf106e0046e2c5f3ebb",
+      "checksumFileSha256": "94dff69843a69d46f554a23ad3d333a292c1b447bd64dcde1efff08effebaf98",
+      "checksums": 24,
+      "outputs": [
+        {
+          "path": "hardware/downloads/standard-sensor-v102.zip",
+          "kind": "package",
+          "files": 12,
+          "size": 1876989,
+          "sha256": "2a5506462cfddfac64c3a282aeb5a671fc1359fa8245356b575629658d16247d"
+        },
+        {
+          "path": "hardware/downloads/standard-sensor-v102.3mf",
+          "kind": "bambu-3mf",
+          "source": "bambu/LaunchLab_v102_P1S_PLA_TCRT_UNIFORM_HINGES_TREE_SLIM.3mf",
+          "size": 1091614,
+          "sha256": "4f760ffe1a404af8d52be93d1909411be08fecd85167764bcae78e45bb72f1e3"
+        }
+      ]
+    }
+  ],
+  "previousReleases": [
+    {
+      "id": "compact-base-v098",
+      "revision": "v0.98",
+      "source": "custom-beypass/releases/LaunchLab_v098_QRE_four_screw_base",
+      "releaseCommit": "e55c6d660c13442978bf7758d5f3b89be82adfb8",
+      "readme": "c6d8adf46d9aaf77a24f7b28f7e960c41685bed5a6743ebcfe70df0281b5daf2",
+      "license": "b6735a3953fdf92b238b5886d7cb98aac028b40066f17cf106e0046e2c5f3ebb",
+      "checksums": 19,
+      "outputs": [
+        {
+          "path": "hardware/downloads/compact-base-v098.zip",
+          "kind": "package",
+          "files": 11,
+          "size": 3702599,
+          "sha256": "3a9393ddfdc63d8153cafb82c262b0b90c6d615181520b3dfa72b756b3d0af1d"
+        },
+        {
+          "path": "hardware/downloads/compact-base-v098.3mf",
+          "kind": "bambu-3mf",
+          "source": "bambu/LaunchLab_v098_P1S_PLA_QRE_FOUR_SCREW_BASE_TREE_SLIM_PLA.3mf",
+          "sha256": "3c0c8cd8b0dc1dc8cfd4b68b5a7f6e54131cb00eefd4de280e68a41951efb3d2",
+          "size": 1754313
+        }
+      ]
+    },
+    {
+      "id": "top-dock-v098",
+      "revision": "v0.98",
+      "source": "custom-beypass/releases/LaunchLab_v098_QRE_M5_four_screw_dock",
+      "releaseCommit": "e55c6d660c13442978bf7758d5f3b89be82adfb8",
+      "readme": "f5b94f550717cfe2b5d3ae371cf27b4433abbdc9fb018bbbf2c85abbbcec9ca2",
+      "license": "b6735a3953fdf92b238b5886d7cb98aac028b40066f17cf106e0046e2c5f3ebb",
+      "checksums": 50,
+      "outputs": [
+        {
+          "path": "hardware/downloads/top-dock-v098.zip",
+          "kind": "package",
+          "files": 33,
+          "size": 2702044,
+          "sha256": "323b0de99583e21f333ed8af63b38d2f80d225d7a990c2f07e792b3419ec9c89"
+        },
+        {
+          "path": "hardware/downloads/top-dock-v098.3mf",
+          "kind": "bambu-3mf",
+          "source": "bambu/LaunchLab_v098_P1S_TREE_PLATE_PLA.3mf",
+          "sha256": "7cdcdf5b0c4b1c3093894b376a1f762e87dbba93ed614677f6ed134d2bec4c41",
+          "size": 384028
+        }
+      ]
+    },
+    {
+      "id": "m5-carrier-v097",
+      "revision": "v0.97",
+      "source": "custom-beypass/releases/LaunchLab_v097_M5_carrier_chamfered_shroud",
+      "releaseCommit": "6234d1d580b31c771d5e7f1cce0c924c5d2c6b83",
+      "readme": "eedb83b8938834f5c88092dd24b30eee2a004c51000c682ad97e980a207b6890",
+      "license": "b6735a3953fdf92b238b5886d7cb98aac028b40066f17cf106e0046e2c5f3ebb",
+      "checksums": 45,
+      "outputs": [
+        {
+          "path": "hardware/downloads/m5-carrier-v097.zip",
+          "kind": "package",
+          "files": 17,
+          "size": 4506365,
+          "sha256": "5246695273fa9bced2a92f310d459bbcc972ad8ea55e745e358bc2692558c4fd"
+        },
+        {
+          "path": "hardware/downloads/m5-carrier-v097.3mf",
+          "kind": "bambu-3mf",
+          "source": "bambu/LaunchLab_v097_P1S_PLA_TREE_PLATE_PLA.3mf",
+          "sha256": "d37b7ff3aef402a293a913ed5d6c806030f9d2dfda4b17870835cb904fe304be",
+          "size": 1926384
+        },
+        {
+          "path": "hardware/downloads/m5-carrier-v097-prusa.3mf",
+          "kind": "prusa-project",
+          "source": "custom-beypass/releases/LaunchLab_Prusa_kits_2026-10-07/LaunchLab_v097_M5_carrier_chamfered_shroud_PRUSA.3mf",
+          "committed": false,
+          "preset": "Original Prusa MK4S 0.4 nozzle \u00b7 Prusament PLA @MK4S \u00b7 0.20mm SPEED @MK4S 0.4 with LaunchLab overrides",
+          "size": 531930,
+          "sha256": "674ce8cf5ec721f690b86f7df086f19f9f02fc7c0d64718b340f064eedfe2e55"
+        }
+      ]
+    },
+    {
+      "id": "standard-sensor-v069",
+      "revision": "v0.69",
+      "source": "custom-beypass/releases/LaunchLab_v069_TCRT_open_holders",
+      "releaseCommit": "5ea7c92c7bb8cc2c16ac66fe0fe92bfd87665551",
+      "readme": "2d783c2a763ce247bc0be5c51462a4181aff1c41b56d5ccd273d498715a535d9",
+      "license": "b6735a3953fdf92b238b5886d7cb98aac028b40066f17cf106e0046e2c5f3ebb",
+      "checksums": 114,
+      "outputs": [
+        {
+          "path": "hardware/downloads/standard-sensor-v069.zip",
+          "kind": "package",
+          "files": 34,
+          "size": 7052692,
+          "sha256": "40ccb65a5c58c192c7a1eb8296e42e029995ebc1744a96540a514c70289f5617"
+        },
+        {
+          "path": "hardware/downloads/standard-sensor-v069.3mf",
+          "kind": "bambu-3mf",
+          "source": "bambu/LaunchLab_v069_P1S_PLA_CLAMPS_ONLY_TREE_SLIM.3mf",
+          "sha256": "7a6ff9683660a93bc235c5678482004d95fe12d78a3869727d6165d96436e0ed",
+          "size": 1432982
+        },
+        {
+          "path": "hardware/downloads/standard-hinge-test-v069.3mf",
+          "kind": "bambu-3mf",
+          "source": "bambu/LaunchLab_v069_P1S_PLA_COUPON_TREE_SLIM.3mf",
+          "sha256": "682ba8f0324b98dde2392a6bfaa42ab31a746c9ac515aa31931715e30595f866",
+          "size": 562573
+        },
+        {
+          "path": "hardware/downloads/standard-sensor-v069-prusa.3mf",
+          "kind": "prusa-3mf",
+          "source": "prusa/LaunchLab_v069_TCRT_CLAMPS_ONLY_PRUSA.3mf",
+          "sha256": "bfc65431cec905a1c6062fbbb05e1ae66206d6e037f86d2bcaade06b8ff27743",
+          "size": 554654
+        }
+      ]
+    }
+  ],
+  "images": [
+    {
+      "path": "hardware/images/top-qre.webp",
+      "width": 2000,
+      "height": 1500,
+      "shot": "top-qre",
+      "colorway": "attack",
+      "sha256": "e4ff0ca37a008c7d068641cdf74df0ba74eb9c71de19a1f75bdde600987c21e4",
+      "inputs": {
+        "inspection/QRE_uniform_hinges_v102/preview/01_QRE_open_holder_body.stl": "feedbe704acc859646e124b3987cd142219001d353d19208050df6bc74a643be",
+        "inspection/QRE_uniform_hinges_v102/preview/08_QRE_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/QRE_uniform_hinges_v102/preview/09_QRE_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_red_PCB.stl": "4129eb717f995e357edf5ec17bdb2a2b0ea4617cb37bcf5243429c4b40552bb9",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_downward_optics.stl": "0328c81029755ea8d4aa03b43afc7c503427049788f31a96e30be04cd507b288",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_-1.524.stl": "315da10ada7820c6ec60127bba640805c671de6ba6f9d2fc518f8106c208e0ec",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_1.524.stl": "1f1dfb9900551a2344d272fb7a29cf88eb6298208d11d3b4f7b79e065d991341",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_right_angle_plugs.stl": "9850ba8db3d5b21cdccbd97d4a34dcc9df8ee30764720aaa3263dc8da6e659a5",
+        "inspection/QRE_uniform_hinges_v102/preview/03_QRE_pressure_bar.stl": "e82e2bc22c8123e8659a039ff0c032d1ac1c49e727733c4c790e188de2cd1f41",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_1.stl": "59ed0a0db3a2c315268d80463f6a92a3a09d4128d92bff5dcbcf740d16ab35b7",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_2.stl": "3241d1a13f8ff6204cfa98d1f5193d02df88a887c5bccbc3584dee5b3e3b9b05",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x6_DOCK_1.stl": "231f5a7e2815e18c43ecb3955d2c048c6704f4c7ae5e069075f19e46ba982205",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x6_DOCK_2.stl": "0ac4856239450d894c27a489b3cdd43dc092fbaed4629229290878ce926ab112",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x6_DOCK_3.stl": "87add7b36b5ea8b2309dea0627361b2250ed521985344f02d14b3eb5cb27548e",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x6_DOCK_4.stl": "f1fbb689c219a4f8682f4b5753fc0c10ee1f950e5b765aed2cefd8e86e7d3f8f",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_DEVICE_1.stl": "62c711e66afefb9ad14ccbcd7feac7f469124dd4b1ade2029fa202fd23b6ad5d",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_DEVICE_2.stl": "1aaf24ee9cb5db963031cf8fe9cb2a645519475249d9be61363f95455fa69e43",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M5Stick_factory_geometry.stl": "ff944a5955e2c5d4ea740c1080af41b8e0dfdfdc9ee08061ddfd0fd8432d3d4a",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Display_visual.stl": "3e8c225d7be7f4ebb2ad8980581b2fb2ea66d1aa053db503e508bdda012ace2b",
+        "releases/top_mount/v2/preview/04_M5_dock_top_mount_v2.stl": "7d06d90dc2d225784b9da1c74f7bea312263aec4bc0e8c85eb85f742b85d3480",
+        "releases/top_mount/v2/preview/05_M5_cover.stl": "f2200856eabc1fb382881f6c520f0702df5767cf66feff500d9e65a520a18bed"
+      }
+    },
+    {
+      "path": "hardware/images/top-qre-960.webp",
+      "width": 960,
+      "height": 720,
+      "shot": "top-qre",
+      "colorway": "attack",
+      "sha256": "a23021f7995ac9c19e354d41a5587b01588cf996fed16f680eb34cee6ac85c23",
+      "inputs": {
+        "inspection/QRE_uniform_hinges_v102/preview/01_QRE_open_holder_body.stl": "feedbe704acc859646e124b3987cd142219001d353d19208050df6bc74a643be",
+        "inspection/QRE_uniform_hinges_v102/preview/08_QRE_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/QRE_uniform_hinges_v102/preview/09_QRE_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_red_PCB.stl": "4129eb717f995e357edf5ec17bdb2a2b0ea4617cb37bcf5243429c4b40552bb9",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_downward_optics.stl": "0328c81029755ea8d4aa03b43afc7c503427049788f31a96e30be04cd507b288",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_-1.524.stl": "315da10ada7820c6ec60127bba640805c671de6ba6f9d2fc518f8106c208e0ec",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_1.524.stl": "1f1dfb9900551a2344d272fb7a29cf88eb6298208d11d3b4f7b79e065d991341",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_right_angle_plugs.stl": "9850ba8db3d5b21cdccbd97d4a34dcc9df8ee30764720aaa3263dc8da6e659a5",
+        "inspection/QRE_uniform_hinges_v102/preview/03_QRE_pressure_bar.stl": "e82e2bc22c8123e8659a039ff0c032d1ac1c49e727733c4c790e188de2cd1f41",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_1.stl": "59ed0a0db3a2c315268d80463f6a92a3a09d4128d92bff5dcbcf740d16ab35b7",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_2.stl": "3241d1a13f8ff6204cfa98d1f5193d02df88a887c5bccbc3584dee5b3e3b9b05",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x6_DOCK_1.stl": "231f5a7e2815e18c43ecb3955d2c048c6704f4c7ae5e069075f19e46ba982205",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x6_DOCK_2.stl": "0ac4856239450d894c27a489b3cdd43dc092fbaed4629229290878ce926ab112",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x6_DOCK_3.stl": "87add7b36b5ea8b2309dea0627361b2250ed521985344f02d14b3eb5cb27548e",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x6_DOCK_4.stl": "f1fbb689c219a4f8682f4b5753fc0c10ee1f950e5b765aed2cefd8e86e7d3f8f",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_DEVICE_1.stl": "62c711e66afefb9ad14ccbcd7feac7f469124dd4b1ade2029fa202fd23b6ad5d",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_DEVICE_2.stl": "1aaf24ee9cb5db963031cf8fe9cb2a645519475249d9be61363f95455fa69e43",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M5Stick_factory_geometry.stl": "ff944a5955e2c5d4ea740c1080af41b8e0dfdfdc9ee08061ddfd0fd8432d3d4a",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Display_visual.stl": "3e8c225d7be7f4ebb2ad8980581b2fb2ea66d1aa053db503e508bdda012ace2b",
+        "releases/top_mount/v2/preview/04_M5_dock_top_mount_v2.stl": "7d06d90dc2d225784b9da1c74f7bea312263aec4bc0e8c85eb85f742b85d3480",
+        "releases/top_mount/v2/preview/05_M5_cover.stl": "f2200856eabc1fb382881f6c520f0702df5767cf66feff500d9e65a520a18bed"
+      }
+    },
+    {
+      "path": "hardware/images/top-qre-exploded.webp",
+      "width": 1600,
+      "height": 1600,
+      "shot": "top-qre-exploded",
+      "colorway": "attack",
+      "sha256": "aa6a3ee7d7d37eaf91af279ff8c0a7f493de7443c706595cb1a7f4390e60bff7",
+      "inputs": {
+        "inspection/QRE_uniform_hinges_v102/preview/01_QRE_open_holder_body.stl": "feedbe704acc859646e124b3987cd142219001d353d19208050df6bc74a643be",
+        "inspection/QRE_uniform_hinges_v102/preview/08_QRE_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/QRE_uniform_hinges_v102/preview/09_QRE_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_red_PCB.stl": "4129eb717f995e357edf5ec17bdb2a2b0ea4617cb37bcf5243429c4b40552bb9",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_downward_optics.stl": "0328c81029755ea8d4aa03b43afc7c503427049788f31a96e30be04cd507b288",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_-1.524.stl": "315da10ada7820c6ec60127bba640805c671de6ba6f9d2fc518f8106c208e0ec",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_1.524.stl": "1f1dfb9900551a2344d272fb7a29cf88eb6298208d11d3b4f7b79e065d991341",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_right_angle_plugs.stl": "9850ba8db3d5b21cdccbd97d4a34dcc9df8ee30764720aaa3263dc8da6e659a5",
+        "inspection/QRE_uniform_hinges_v102/preview/03_QRE_pressure_bar.stl": "e82e2bc22c8123e8659a039ff0c032d1ac1c49e727733c4c790e188de2cd1f41",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_1.stl": "59ed0a0db3a2c315268d80463f6a92a3a09d4128d92bff5dcbcf740d16ab35b7",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_2.stl": "3241d1a13f8ff6204cfa98d1f5193d02df88a887c5bccbc3584dee5b3e3b9b05",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x6_DOCK_1.stl": "231f5a7e2815e18c43ecb3955d2c048c6704f4c7ae5e069075f19e46ba982205",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x6_DOCK_2.stl": "0ac4856239450d894c27a489b3cdd43dc092fbaed4629229290878ce926ab112",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x6_DOCK_3.stl": "87add7b36b5ea8b2309dea0627361b2250ed521985344f02d14b3eb5cb27548e",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x6_DOCK_4.stl": "f1fbb689c219a4f8682f4b5753fc0c10ee1f950e5b765aed2cefd8e86e7d3f8f",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_DEVICE_1.stl": "62c711e66afefb9ad14ccbcd7feac7f469124dd4b1ade2029fa202fd23b6ad5d",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_DEVICE_2.stl": "1aaf24ee9cb5db963031cf8fe9cb2a645519475249d9be61363f95455fa69e43",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M5Stick_factory_geometry.stl": "ff944a5955e2c5d4ea740c1080af41b8e0dfdfdc9ee08061ddfd0fd8432d3d4a",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Display_visual.stl": "3e8c225d7be7f4ebb2ad8980581b2fb2ea66d1aa053db503e508bdda012ace2b",
+        "releases/top_mount/v2/preview/04_M5_dock_top_mount_v2.stl": "7d06d90dc2d225784b9da1c74f7bea312263aec4bc0e8c85eb85f742b85d3480",
+        "releases/top_mount/v2/preview/05_M5_cover.stl": "f2200856eabc1fb382881f6c520f0702df5767cf66feff500d9e65a520a18bed"
+      }
+    },
+    {
+      "path": "hardware/images/top-qre-exploded-960.webp",
+      "width": 960,
+      "height": 960,
+      "shot": "top-qre-exploded",
+      "colorway": "attack",
+      "sha256": "14b444eb883ea81db4ee0d038584efca5b238313e52733b3f54e01edc22a922d",
+      "inputs": {
+        "inspection/QRE_uniform_hinges_v102/preview/01_QRE_open_holder_body.stl": "feedbe704acc859646e124b3987cd142219001d353d19208050df6bc74a643be",
+        "inspection/QRE_uniform_hinges_v102/preview/08_QRE_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/QRE_uniform_hinges_v102/preview/09_QRE_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_red_PCB.stl": "4129eb717f995e357edf5ec17bdb2a2b0ea4617cb37bcf5243429c4b40552bb9",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_downward_optics.stl": "0328c81029755ea8d4aa03b43afc7c503427049788f31a96e30be04cd507b288",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_-1.524.stl": "315da10ada7820c6ec60127bba640805c671de6ba6f9d2fc518f8106c208e0ec",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_1.524.stl": "1f1dfb9900551a2344d272fb7a29cf88eb6298208d11d3b4f7b79e065d991341",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_right_angle_plugs.stl": "9850ba8db3d5b21cdccbd97d4a34dcc9df8ee30764720aaa3263dc8da6e659a5",
+        "inspection/QRE_uniform_hinges_v102/preview/03_QRE_pressure_bar.stl": "e82e2bc22c8123e8659a039ff0c032d1ac1c49e727733c4c790e188de2cd1f41",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_1.stl": "59ed0a0db3a2c315268d80463f6a92a3a09d4128d92bff5dcbcf740d16ab35b7",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_2.stl": "3241d1a13f8ff6204cfa98d1f5193d02df88a887c5bccbc3584dee5b3e3b9b05",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x6_DOCK_1.stl": "231f5a7e2815e18c43ecb3955d2c048c6704f4c7ae5e069075f19e46ba982205",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x6_DOCK_2.stl": "0ac4856239450d894c27a489b3cdd43dc092fbaed4629229290878ce926ab112",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x6_DOCK_3.stl": "87add7b36b5ea8b2309dea0627361b2250ed521985344f02d14b3eb5cb27548e",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x6_DOCK_4.stl": "f1fbb689c219a4f8682f4b5753fc0c10ee1f950e5b765aed2cefd8e86e7d3f8f",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_DEVICE_1.stl": "62c711e66afefb9ad14ccbcd7feac7f469124dd4b1ade2029fa202fd23b6ad5d",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_DEVICE_2.stl": "1aaf24ee9cb5db963031cf8fe9cb2a645519475249d9be61363f95455fa69e43",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M5Stick_factory_geometry.stl": "ff944a5955e2c5d4ea740c1080af41b8e0dfdfdc9ee08061ddfd0fd8432d3d4a",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Display_visual.stl": "3e8c225d7be7f4ebb2ad8980581b2fb2ea66d1aa053db503e508bdda012ace2b",
+        "releases/top_mount/v2/preview/04_M5_dock_top_mount_v2.stl": "7d06d90dc2d225784b9da1c74f7bea312263aec4bc0e8c85eb85f742b85d3480",
+        "releases/top_mount/v2/preview/05_M5_cover.stl": "f2200856eabc1fb382881f6c520f0702df5767cf66feff500d9e65a520a18bed"
+      }
+    },
+    {
+      "path": "hardware/images/side-qre.webp",
+      "width": 2000,
+      "height": 1500,
+      "shot": "side-qre",
+      "colorway": "attack",
+      "sha256": "bf8fe6700632b5a19817ce4053c5cf93a5b691d30d6cc861cab505337823bd02",
+      "inputs": {
+        "inspection/QRE_uniform_hinges_v102/preview/01_QRE_open_holder_body.stl": "feedbe704acc859646e124b3987cd142219001d353d19208050df6bc74a643be",
+        "inspection/QRE_uniform_hinges_v102/preview/08_QRE_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/QRE_uniform_hinges_v102/preview/09_QRE_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_red_PCB.stl": "4129eb717f995e357edf5ec17bdb2a2b0ea4617cb37bcf5243429c4b40552bb9",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_downward_optics.stl": "0328c81029755ea8d4aa03b43afc7c503427049788f31a96e30be04cd507b288",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_-1.524.stl": "315da10ada7820c6ec60127bba640805c671de6ba6f9d2fc518f8106c208e0ec",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_1.524.stl": "1f1dfb9900551a2344d272fb7a29cf88eb6298208d11d3b4f7b79e065d991341",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_right_angle_plugs.stl": "9850ba8db3d5b21cdccbd97d4a34dcc9df8ee30764720aaa3263dc8da6e659a5",
+        "inspection/QRE_uniform_hinges_v102/preview/03_QRE_pressure_bar.stl": "e82e2bc22c8123e8659a039ff0c032d1ac1c49e727733c4c790e188de2cd1f41",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_1.stl": "59ed0a0db3a2c315268d80463f6a92a3a09d4128d92bff5dcbcf740d16ab35b7",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_2.stl": "3241d1a13f8ff6204cfa98d1f5193d02df88a887c5bccbc3584dee5b3e3b9b05",
+        "releases/sidecar/v2/preview/06_M5_sidecar_base.stl": "0d3dd011cbfea804aa10a1c90990e89e1a83893b737f0bbc70dd66d0dd21a5b8",
+        "releases/sidecar/v2/preview/05_M5_sidecar_cover.stl": "eefacf871951bd07b8713bf15a25914b4c4f3f93cc5db7ceeb75322a42452d1d",
+        "releases/sidecar/v2/preview/REF_M5Stick_factory_geometry.stl": "54b2ceeea5feeed673e5b6d85542851d8929942eb842e4afde0d3f7dabcf8a77",
+        "releases/sidecar/v2/preview/REF_Display_visual.stl": "3e8c225d7be7f4ebb2ad8980581b2fb2ea66d1aa053db503e508bdda012ace2b",
+        "releases/sidecar/v2/preview/REF_M2x4_DEVICE_1.stl": "986d801eb44c9e7e46c14edcdcd70a9beff811d3776f3af993c8a5ea700eeca4",
+        "releases/sidecar/v2/preview/REF_M2x4_DEVICE_2.stl": "7bd730c8cb7a33ab5d8562d11774554d6673c7813316c197c801d1b90173f8ba"
+      }
+    },
+    {
+      "path": "hardware/images/side-qre-960.webp",
+      "width": 960,
+      "height": 720,
+      "shot": "side-qre",
+      "colorway": "attack",
+      "sha256": "64d8147b5bd17247168fa5b42337aa3d92f18a2a9f2122619156315be7cb4be3",
+      "inputs": {
+        "inspection/QRE_uniform_hinges_v102/preview/01_QRE_open_holder_body.stl": "feedbe704acc859646e124b3987cd142219001d353d19208050df6bc74a643be",
+        "inspection/QRE_uniform_hinges_v102/preview/08_QRE_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/QRE_uniform_hinges_v102/preview/09_QRE_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_red_PCB.stl": "4129eb717f995e357edf5ec17bdb2a2b0ea4617cb37bcf5243429c4b40552bb9",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_downward_optics.stl": "0328c81029755ea8d4aa03b43afc7c503427049788f31a96e30be04cd507b288",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_-1.524.stl": "315da10ada7820c6ec60127bba640805c671de6ba6f9d2fc518f8106c208e0ec",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_1.524.stl": "1f1dfb9900551a2344d272fb7a29cf88eb6298208d11d3b4f7b79e065d991341",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_right_angle_plugs.stl": "9850ba8db3d5b21cdccbd97d4a34dcc9df8ee30764720aaa3263dc8da6e659a5",
+        "inspection/QRE_uniform_hinges_v102/preview/03_QRE_pressure_bar.stl": "e82e2bc22c8123e8659a039ff0c032d1ac1c49e727733c4c790e188de2cd1f41",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_1.stl": "59ed0a0db3a2c315268d80463f6a92a3a09d4128d92bff5dcbcf740d16ab35b7",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_2.stl": "3241d1a13f8ff6204cfa98d1f5193d02df88a887c5bccbc3584dee5b3e3b9b05",
+        "releases/sidecar/v2/preview/06_M5_sidecar_base.stl": "0d3dd011cbfea804aa10a1c90990e89e1a83893b737f0bbc70dd66d0dd21a5b8",
+        "releases/sidecar/v2/preview/05_M5_sidecar_cover.stl": "eefacf871951bd07b8713bf15a25914b4c4f3f93cc5db7ceeb75322a42452d1d",
+        "releases/sidecar/v2/preview/REF_M5Stick_factory_geometry.stl": "54b2ceeea5feeed673e5b6d85542851d8929942eb842e4afde0d3f7dabcf8a77",
+        "releases/sidecar/v2/preview/REF_Display_visual.stl": "3e8c225d7be7f4ebb2ad8980581b2fb2ea66d1aa053db503e508bdda012ace2b",
+        "releases/sidecar/v2/preview/REF_M2x4_DEVICE_1.stl": "986d801eb44c9e7e46c14edcdcd70a9beff811d3776f3af993c8a5ea700eeca4",
+        "releases/sidecar/v2/preview/REF_M2x4_DEVICE_2.stl": "7bd730c8cb7a33ab5d8562d11774554d6673c7813316c197c801d1b90173f8ba"
+      }
+    },
+    {
+      "path": "hardware/images/side-qre-exploded.webp",
+      "width": 1600,
+      "height": 1600,
+      "shot": "side-qre-exploded",
+      "colorway": "attack",
+      "sha256": "e8cb0923e9eabb9dfa6e152278d3bbc02a784e7461b131d1c8795dce3832f848",
+      "inputs": {
+        "inspection/QRE_uniform_hinges_v102/preview/01_QRE_open_holder_body.stl": "feedbe704acc859646e124b3987cd142219001d353d19208050df6bc74a643be",
+        "inspection/QRE_uniform_hinges_v102/preview/08_QRE_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/QRE_uniform_hinges_v102/preview/09_QRE_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_red_PCB.stl": "4129eb717f995e357edf5ec17bdb2a2b0ea4617cb37bcf5243429c4b40552bb9",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_downward_optics.stl": "0328c81029755ea8d4aa03b43afc7c503427049788f31a96e30be04cd507b288",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_-1.524.stl": "315da10ada7820c6ec60127bba640805c671de6ba6f9d2fc518f8106c208e0ec",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_1.524.stl": "1f1dfb9900551a2344d272fb7a29cf88eb6298208d11d3b4f7b79e065d991341",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_right_angle_plugs.stl": "9850ba8db3d5b21cdccbd97d4a34dcc9df8ee30764720aaa3263dc8da6e659a5",
+        "inspection/QRE_uniform_hinges_v102/preview/03_QRE_pressure_bar.stl": "e82e2bc22c8123e8659a039ff0c032d1ac1c49e727733c4c790e188de2cd1f41",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_1.stl": "59ed0a0db3a2c315268d80463f6a92a3a09d4128d92bff5dcbcf740d16ab35b7",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_2.stl": "3241d1a13f8ff6204cfa98d1f5193d02df88a887c5bccbc3584dee5b3e3b9b05",
+        "releases/sidecar/v2/preview/06_M5_sidecar_base.stl": "0d3dd011cbfea804aa10a1c90990e89e1a83893b737f0bbc70dd66d0dd21a5b8",
+        "releases/sidecar/v2/preview/05_M5_sidecar_cover.stl": "eefacf871951bd07b8713bf15a25914b4c4f3f93cc5db7ceeb75322a42452d1d",
+        "releases/sidecar/v2/preview/REF_M5Stick_factory_geometry.stl": "54b2ceeea5feeed673e5b6d85542851d8929942eb842e4afde0d3f7dabcf8a77",
+        "releases/sidecar/v2/preview/REF_Display_visual.stl": "3e8c225d7be7f4ebb2ad8980581b2fb2ea66d1aa053db503e508bdda012ace2b",
+        "releases/sidecar/v2/preview/REF_M2x4_DEVICE_1.stl": "986d801eb44c9e7e46c14edcdcd70a9beff811d3776f3af993c8a5ea700eeca4",
+        "releases/sidecar/v2/preview/REF_M2x4_DEVICE_2.stl": "7bd730c8cb7a33ab5d8562d11774554d6673c7813316c197c801d1b90173f8ba"
+      }
+    },
+    {
+      "path": "hardware/images/side-qre-exploded-960.webp",
+      "width": 960,
+      "height": 960,
+      "shot": "side-qre-exploded",
+      "colorway": "attack",
+      "sha256": "046bcaa0397d2ba694fc69b9993e2e4ceeed6e949a932cfb88fc0fc9f6614272",
+      "inputs": {
+        "inspection/QRE_uniform_hinges_v102/preview/01_QRE_open_holder_body.stl": "feedbe704acc859646e124b3987cd142219001d353d19208050df6bc74a643be",
+        "inspection/QRE_uniform_hinges_v102/preview/08_QRE_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/QRE_uniform_hinges_v102/preview/09_QRE_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_red_PCB.stl": "4129eb717f995e357edf5ec17bdb2a2b0ea4617cb37bcf5243429c4b40552bb9",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_downward_optics.stl": "0328c81029755ea8d4aa03b43afc7c503427049788f31a96e30be04cd507b288",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_-1.524.stl": "315da10ada7820c6ec60127bba640805c671de6ba6f9d2fc518f8106c208e0ec",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_1.524.stl": "1f1dfb9900551a2344d272fb7a29cf88eb6298208d11d3b4f7b79e065d991341",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_right_angle_plugs.stl": "9850ba8db3d5b21cdccbd97d4a34dcc9df8ee30764720aaa3263dc8da6e659a5",
+        "inspection/QRE_uniform_hinges_v102/preview/03_QRE_pressure_bar.stl": "e82e2bc22c8123e8659a039ff0c032d1ac1c49e727733c4c790e188de2cd1f41",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_1.stl": "59ed0a0db3a2c315268d80463f6a92a3a09d4128d92bff5dcbcf740d16ab35b7",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_2.stl": "3241d1a13f8ff6204cfa98d1f5193d02df88a887c5bccbc3584dee5b3e3b9b05",
+        "releases/sidecar/v2/preview/06_M5_sidecar_base.stl": "0d3dd011cbfea804aa10a1c90990e89e1a83893b737f0bbc70dd66d0dd21a5b8",
+        "releases/sidecar/v2/preview/05_M5_sidecar_cover.stl": "eefacf871951bd07b8713bf15a25914b4c4f3f93cc5db7ceeb75322a42452d1d",
+        "releases/sidecar/v2/preview/REF_M5Stick_factory_geometry.stl": "54b2ceeea5feeed673e5b6d85542851d8929942eb842e4afde0d3f7dabcf8a77",
+        "releases/sidecar/v2/preview/REF_Display_visual.stl": "3e8c225d7be7f4ebb2ad8980581b2fb2ea66d1aa053db503e508bdda012ace2b",
+        "releases/sidecar/v2/preview/REF_M2x4_DEVICE_1.stl": "986d801eb44c9e7e46c14edcdcd70a9beff811d3776f3af993c8a5ea700eeca4",
+        "releases/sidecar/v2/preview/REF_M2x4_DEVICE_2.stl": "7bd730c8cb7a33ab5d8562d11774554d6673c7813316c197c801d1b90173f8ba"
+      }
+    },
+    {
+      "path": "hardware/images/side-tcrt.webp",
+      "width": 2000,
+      "height": 1500,
+      "shot": "side-tcrt",
+      "colorway": "balance",
+      "sha256": "9a0a646ca3bae18963407a92ac9803a1c15e120034d73b7bb40b12cf2e21d066",
+      "inputs": {
+        "inspection/TCRT_uniform_hinges_v102/preview/01_TCRT_open_holder_body.stl": "4203a97c77f9a438101f16c8477e72e7d02c7d5bab209653347ea4eaa4afdb94",
+        "inspection/TCRT_uniform_hinges_v102/preview/08_TCRT_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/TCRT_uniform_hinges_v102/preview/09_TCRT_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_PCB_MEASURED.stl": "e12c532e2b9237e627facc2461f500d35cfdf0a78b1694f148457d9ded8cf3ff",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_HEAD_AND_LEGS.stl": "88874157321991a6ac16677640bd87ecba6a34745ebb419cfc6649d1fd56c7f5",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_LENS_PAIR.stl": "5da3286787f780d8ae0905d1413bc9fb943e0d75b81dc80ca46e97e1d2756ec2",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_POT.stl": "6c666db6c4908b69065d996683e9580a8777f69f89a264cbfac8df1f6b0089e9",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_HEADER.stl": "700c3ec50185cef67b0c2b3fd7d32a6e3626bf32f4023c0421cf7c2776e3636b",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_M3x6_SENSOR.stl": "7fda29d4bfb320e66ccbf04e5edde204ce789e3a6f72c762ede166f57b0a0068",
+        "releases/sidecar/v2/preview/06_M5_sidecar_base.stl": "0d3dd011cbfea804aa10a1c90990e89e1a83893b737f0bbc70dd66d0dd21a5b8",
+        "releases/sidecar/v2/preview/05_M5_sidecar_cover.stl": "eefacf871951bd07b8713bf15a25914b4c4f3f93cc5db7ceeb75322a42452d1d",
+        "releases/sidecar/v2/preview/REF_M5Stick_factory_geometry.stl": "54b2ceeea5feeed673e5b6d85542851d8929942eb842e4afde0d3f7dabcf8a77",
+        "releases/sidecar/v2/preview/REF_Display_visual.stl": "3e8c225d7be7f4ebb2ad8980581b2fb2ea66d1aa053db503e508bdda012ace2b",
+        "releases/sidecar/v2/preview/REF_M2x4_DEVICE_1.stl": "986d801eb44c9e7e46c14edcdcd70a9beff811d3776f3af993c8a5ea700eeca4",
+        "releases/sidecar/v2/preview/REF_M2x4_DEVICE_2.stl": "7bd730c8cb7a33ab5d8562d11774554d6673c7813316c197c801d1b90173f8ba"
+      }
+    },
+    {
+      "path": "hardware/images/side-tcrt-960.webp",
+      "width": 960,
+      "height": 720,
+      "shot": "side-tcrt",
+      "colorway": "balance",
+      "sha256": "f1f8e7ab353db603e459abc0f45a4aa87e305234d5e32d9c5b51d6da644ad4fa",
+      "inputs": {
+        "inspection/TCRT_uniform_hinges_v102/preview/01_TCRT_open_holder_body.stl": "4203a97c77f9a438101f16c8477e72e7d02c7d5bab209653347ea4eaa4afdb94",
+        "inspection/TCRT_uniform_hinges_v102/preview/08_TCRT_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/TCRT_uniform_hinges_v102/preview/09_TCRT_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_PCB_MEASURED.stl": "e12c532e2b9237e627facc2461f500d35cfdf0a78b1694f148457d9ded8cf3ff",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_HEAD_AND_LEGS.stl": "88874157321991a6ac16677640bd87ecba6a34745ebb419cfc6649d1fd56c7f5",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_LENS_PAIR.stl": "5da3286787f780d8ae0905d1413bc9fb943e0d75b81dc80ca46e97e1d2756ec2",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_POT.stl": "6c666db6c4908b69065d996683e9580a8777f69f89a264cbfac8df1f6b0089e9",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_HEADER.stl": "700c3ec50185cef67b0c2b3fd7d32a6e3626bf32f4023c0421cf7c2776e3636b",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_M3x6_SENSOR.stl": "7fda29d4bfb320e66ccbf04e5edde204ce789e3a6f72c762ede166f57b0a0068",
+        "releases/sidecar/v2/preview/06_M5_sidecar_base.stl": "0d3dd011cbfea804aa10a1c90990e89e1a83893b737f0bbc70dd66d0dd21a5b8",
+        "releases/sidecar/v2/preview/05_M5_sidecar_cover.stl": "eefacf871951bd07b8713bf15a25914b4c4f3f93cc5db7ceeb75322a42452d1d",
+        "releases/sidecar/v2/preview/REF_M5Stick_factory_geometry.stl": "54b2ceeea5feeed673e5b6d85542851d8929942eb842e4afde0d3f7dabcf8a77",
+        "releases/sidecar/v2/preview/REF_Display_visual.stl": "3e8c225d7be7f4ebb2ad8980581b2fb2ea66d1aa053db503e508bdda012ace2b",
+        "releases/sidecar/v2/preview/REF_M2x4_DEVICE_1.stl": "986d801eb44c9e7e46c14edcdcd70a9beff811d3776f3af993c8a5ea700eeca4",
+        "releases/sidecar/v2/preview/REF_M2x4_DEVICE_2.stl": "7bd730c8cb7a33ab5d8562d11774554d6673c7813316c197c801d1b90173f8ba"
+      }
+    },
+    {
+      "path": "hardware/images/side-tcrt-exploded.webp",
+      "width": 1600,
+      "height": 1600,
+      "shot": "side-tcrt-exploded",
+      "colorway": "balance",
+      "sha256": "4220936b665d1a74ff768f14c003d18d039c836112522c8c532be9c099a5fd58",
+      "inputs": {
+        "inspection/TCRT_uniform_hinges_v102/preview/01_TCRT_open_holder_body.stl": "4203a97c77f9a438101f16c8477e72e7d02c7d5bab209653347ea4eaa4afdb94",
+        "inspection/TCRT_uniform_hinges_v102/preview/08_TCRT_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/TCRT_uniform_hinges_v102/preview/09_TCRT_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_PCB_MEASURED.stl": "e12c532e2b9237e627facc2461f500d35cfdf0a78b1694f148457d9ded8cf3ff",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_HEAD_AND_LEGS.stl": "88874157321991a6ac16677640bd87ecba6a34745ebb419cfc6649d1fd56c7f5",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_LENS_PAIR.stl": "5da3286787f780d8ae0905d1413bc9fb943e0d75b81dc80ca46e97e1d2756ec2",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_POT.stl": "6c666db6c4908b69065d996683e9580a8777f69f89a264cbfac8df1f6b0089e9",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_HEADER.stl": "700c3ec50185cef67b0c2b3fd7d32a6e3626bf32f4023c0421cf7c2776e3636b",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_M3x6_SENSOR.stl": "7fda29d4bfb320e66ccbf04e5edde204ce789e3a6f72c762ede166f57b0a0068",
+        "releases/sidecar/v2/preview/06_M5_sidecar_base.stl": "0d3dd011cbfea804aa10a1c90990e89e1a83893b737f0bbc70dd66d0dd21a5b8",
+        "releases/sidecar/v2/preview/05_M5_sidecar_cover.stl": "eefacf871951bd07b8713bf15a25914b4c4f3f93cc5db7ceeb75322a42452d1d",
+        "releases/sidecar/v2/preview/REF_M5Stick_factory_geometry.stl": "54b2ceeea5feeed673e5b6d85542851d8929942eb842e4afde0d3f7dabcf8a77",
+        "releases/sidecar/v2/preview/REF_Display_visual.stl": "3e8c225d7be7f4ebb2ad8980581b2fb2ea66d1aa053db503e508bdda012ace2b",
+        "releases/sidecar/v2/preview/REF_M2x4_DEVICE_1.stl": "986d801eb44c9e7e46c14edcdcd70a9beff811d3776f3af993c8a5ea700eeca4",
+        "releases/sidecar/v2/preview/REF_M2x4_DEVICE_2.stl": "7bd730c8cb7a33ab5d8562d11774554d6673c7813316c197c801d1b90173f8ba"
+      }
+    },
+    {
+      "path": "hardware/images/side-tcrt-exploded-960.webp",
+      "width": 960,
+      "height": 960,
+      "shot": "side-tcrt-exploded",
+      "colorway": "balance",
+      "sha256": "4a61d28b357a0f9ee3da48c65602991dffb403afe1799fb31d4a57fcc65748f1",
+      "inputs": {
+        "inspection/TCRT_uniform_hinges_v102/preview/01_TCRT_open_holder_body.stl": "4203a97c77f9a438101f16c8477e72e7d02c7d5bab209653347ea4eaa4afdb94",
+        "inspection/TCRT_uniform_hinges_v102/preview/08_TCRT_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/TCRT_uniform_hinges_v102/preview/09_TCRT_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_PCB_MEASURED.stl": "e12c532e2b9237e627facc2461f500d35cfdf0a78b1694f148457d9ded8cf3ff",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_HEAD_AND_LEGS.stl": "88874157321991a6ac16677640bd87ecba6a34745ebb419cfc6649d1fd56c7f5",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_LENS_PAIR.stl": "5da3286787f780d8ae0905d1413bc9fb943e0d75b81dc80ca46e97e1d2756ec2",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_POT.stl": "6c666db6c4908b69065d996683e9580a8777f69f89a264cbfac8df1f6b0089e9",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_HEADER.stl": "700c3ec50185cef67b0c2b3fd7d32a6e3626bf32f4023c0421cf7c2776e3636b",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_M3x6_SENSOR.stl": "7fda29d4bfb320e66ccbf04e5edde204ce789e3a6f72c762ede166f57b0a0068",
+        "releases/sidecar/v2/preview/06_M5_sidecar_base.stl": "0d3dd011cbfea804aa10a1c90990e89e1a83893b737f0bbc70dd66d0dd21a5b8",
+        "releases/sidecar/v2/preview/05_M5_sidecar_cover.stl": "eefacf871951bd07b8713bf15a25914b4c4f3f93cc5db7ceeb75322a42452d1d",
+        "releases/sidecar/v2/preview/REF_M5Stick_factory_geometry.stl": "54b2ceeea5feeed673e5b6d85542851d8929942eb842e4afde0d3f7dabcf8a77",
+        "releases/sidecar/v2/preview/REF_Display_visual.stl": "3e8c225d7be7f4ebb2ad8980581b2fb2ea66d1aa053db503e508bdda012ace2b",
+        "releases/sidecar/v2/preview/REF_M2x4_DEVICE_1.stl": "986d801eb44c9e7e46c14edcdcd70a9beff811d3776f3af993c8a5ea700eeca4",
+        "releases/sidecar/v2/preview/REF_M2x4_DEVICE_2.stl": "7bd730c8cb7a33ab5d8562d11774554d6673c7813316c197c801d1b90173f8ba"
+      }
+    },
+    {
+      "path": "hardware/images/compact-sensor.webp",
+      "width": 1600,
+      "height": 1200,
+      "shot": "compact-sensor",
+      "colorway": "attack",
+      "sha256": "a164cbfa304ca6c6db09e6e32a82e193699457a5930c89bfc7079b160702a250",
+      "inputs": {
+        "inspection/QRE_uniform_hinges_v102/preview/01_QRE_open_holder_body.stl": "feedbe704acc859646e124b3987cd142219001d353d19208050df6bc74a643be",
+        "inspection/QRE_uniform_hinges_v102/preview/08_QRE_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/QRE_uniform_hinges_v102/preview/09_QRE_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_red_PCB.stl": "4129eb717f995e357edf5ec17bdb2a2b0ea4617cb37bcf5243429c4b40552bb9",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_downward_optics.stl": "0328c81029755ea8d4aa03b43afc7c503427049788f31a96e30be04cd507b288",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_-1.524.stl": "315da10ada7820c6ec60127bba640805c671de6ba6f9d2fc518f8106c208e0ec",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_1.524.stl": "1f1dfb9900551a2344d272fb7a29cf88eb6298208d11d3b4f7b79e065d991341",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_right_angle_plugs.stl": "9850ba8db3d5b21cdccbd97d4a34dcc9df8ee30764720aaa3263dc8da6e659a5",
+        "inspection/QRE_uniform_hinges_v102/preview/03_QRE_pressure_bar.stl": "e82e2bc22c8123e8659a039ff0c032d1ac1c49e727733c4c790e188de2cd1f41",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_1.stl": "59ed0a0db3a2c315268d80463f6a92a3a09d4128d92bff5dcbcf740d16ab35b7",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_2.stl": "3241d1a13f8ff6204cfa98d1f5193d02df88a887c5bccbc3584dee5b3e3b9b05"
+      }
+    },
+    {
+      "path": "hardware/images/compact-sensor-960.webp",
+      "width": 960,
+      "height": 720,
+      "shot": "compact-sensor",
+      "colorway": "attack",
+      "sha256": "f7acf43c0ae5600b326b3efcc30a6d5f553511923114e1c95ba6db882912ebe2",
+      "inputs": {
+        "inspection/QRE_uniform_hinges_v102/preview/01_QRE_open_holder_body.stl": "feedbe704acc859646e124b3987cd142219001d353d19208050df6bc74a643be",
+        "inspection/QRE_uniform_hinges_v102/preview/08_QRE_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/QRE_uniform_hinges_v102/preview/09_QRE_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_red_PCB.stl": "4129eb717f995e357edf5ec17bdb2a2b0ea4617cb37bcf5243429c4b40552bb9",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_downward_optics.stl": "0328c81029755ea8d4aa03b43afc7c503427049788f31a96e30be04cd507b288",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_-1.524.stl": "315da10ada7820c6ec60127bba640805c671de6ba6f9d2fc518f8106c208e0ec",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_1.524.stl": "1f1dfb9900551a2344d272fb7a29cf88eb6298208d11d3b4f7b79e065d991341",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_right_angle_plugs.stl": "9850ba8db3d5b21cdccbd97d4a34dcc9df8ee30764720aaa3263dc8da6e659a5",
+        "inspection/QRE_uniform_hinges_v102/preview/03_QRE_pressure_bar.stl": "e82e2bc22c8123e8659a039ff0c032d1ac1c49e727733c4c790e188de2cd1f41",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_1.stl": "59ed0a0db3a2c315268d80463f6a92a3a09d4128d92bff5dcbcf740d16ab35b7",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_2.stl": "3241d1a13f8ff6204cfa98d1f5193d02df88a887c5bccbc3584dee5b3e3b9b05"
+      }
+    },
+    {
+      "path": "hardware/images/standard-sensor.webp",
+      "width": 1600,
+      "height": 1200,
+      "shot": "standard-sensor",
+      "colorway": "balance",
+      "sha256": "b6bc585e8bb7007e951d72c4a8b89a0432cbd8ce2a446a7093d606f9fc785a8a",
+      "inputs": {
+        "inspection/TCRT_uniform_hinges_v102/preview/01_TCRT_open_holder_body.stl": "4203a97c77f9a438101f16c8477e72e7d02c7d5bab209653347ea4eaa4afdb94",
+        "inspection/TCRT_uniform_hinges_v102/preview/08_TCRT_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/TCRT_uniform_hinges_v102/preview/09_TCRT_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_PCB_MEASURED.stl": "e12c532e2b9237e627facc2461f500d35cfdf0a78b1694f148457d9ded8cf3ff",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_HEAD_AND_LEGS.stl": "88874157321991a6ac16677640bd87ecba6a34745ebb419cfc6649d1fd56c7f5",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_LENS_PAIR.stl": "5da3286787f780d8ae0905d1413bc9fb943e0d75b81dc80ca46e97e1d2756ec2",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_POT.stl": "6c666db6c4908b69065d996683e9580a8777f69f89a264cbfac8df1f6b0089e9",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_HEADER.stl": "700c3ec50185cef67b0c2b3fd7d32a6e3626bf32f4023c0421cf7c2776e3636b",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_M3x6_SENSOR.stl": "7fda29d4bfb320e66ccbf04e5edde204ce789e3a6f72c762ede166f57b0a0068"
+      }
+    },
+    {
+      "path": "hardware/images/standard-sensor-960.webp",
+      "width": 960,
+      "height": 720,
+      "shot": "standard-sensor",
+      "colorway": "balance",
+      "sha256": "471ebaedcaa48d38b6a9987567717db5bcb003c208bec77823ccd863e42fdcab",
+      "inputs": {
+        "inspection/TCRT_uniform_hinges_v102/preview/01_TCRT_open_holder_body.stl": "4203a97c77f9a438101f16c8477e72e7d02c7d5bab209653347ea4eaa4afdb94",
+        "inspection/TCRT_uniform_hinges_v102/preview/08_TCRT_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/TCRT_uniform_hinges_v102/preview/09_TCRT_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_PCB_MEASURED.stl": "e12c532e2b9237e627facc2461f500d35cfdf0a78b1694f148457d9ded8cf3ff",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_HEAD_AND_LEGS.stl": "88874157321991a6ac16677640bd87ecba6a34745ebb419cfc6649d1fd56c7f5",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_LENS_PAIR.stl": "5da3286787f780d8ae0905d1413bc9fb943e0d75b81dc80ca46e97e1d2756ec2",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_POT.stl": "6c666db6c4908b69065d996683e9580a8777f69f89a264cbfac8df1f6b0089e9",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_HEADER.stl": "700c3ec50185cef67b0c2b3fd7d32a6e3626bf32f4023c0421cf7c2776e3636b",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_M3x6_SENSOR.stl": "7fda29d4bfb320e66ccbf04e5edde204ce789e3a6f72c762ede166f57b0a0068"
+      }
+    },
+    {
+      "path": "hardware/images/carrier-bare.webp",
+      "width": 1600,
+      "height": 1200,
+      "shot": "carrier-bare",
+      "colorway": "balance",
+      "sha256": "46990b145753c9c6fb3e6c49bc6ce3a49d07073f0c6e586ae8fd6c62089a732f",
+      "inputs": {
+        "releases/sidecar/v2/preview/06_M5_sidecar_base.stl": "0d3dd011cbfea804aa10a1c90990e89e1a83893b737f0bbc70dd66d0dd21a5b8"
+      }
+    },
+    {
+      "path": "hardware/images/carrier-bare-960.webp",
+      "width": 960,
+      "height": 720,
+      "shot": "carrier-bare",
+      "colorway": "balance",
+      "sha256": "3749f76a357573f382e9336dde4260954fb15c9ef341b5b71f98b2003e7dcdca",
+      "inputs": {
+        "releases/sidecar/v2/preview/06_M5_sidecar_base.stl": "0d3dd011cbfea804aa10a1c90990e89e1a83893b737f0bbc70dd66d0dd21a5b8"
+      }
+    },
+    {
+      "path": "hardware/images/carrier-compact.webp",
+      "width": 1600,
+      "height": 1200,
+      "shot": "carrier-compact",
+      "colorway": "attack",
+      "sha256": "61c93798a7cc8c08abd34b6d26ab05272bf3f1424b97bbabe3261e5e110dafb3",
+      "inputs": {
+        "releases/sidecar/v2/preview/06_M5_sidecar_base.stl": "0d3dd011cbfea804aa10a1c90990e89e1a83893b737f0bbc70dd66d0dd21a5b8",
+        "releases/sidecar/v2/preview/05_M5_sidecar_cover.stl": "eefacf871951bd07b8713bf15a25914b4c4f3f93cc5db7ceeb75322a42452d1d",
+        "releases/sidecar/v2/preview/REF_M5Stick_factory_geometry.stl": "54b2ceeea5feeed673e5b6d85542851d8929942eb842e4afde0d3f7dabcf8a77",
+        "releases/sidecar/v2/preview/REF_Display_visual.stl": "3e8c225d7be7f4ebb2ad8980581b2fb2ea66d1aa053db503e508bdda012ace2b",
+        "releases/sidecar/v2/preview/REF_M2x4_DEVICE_1.stl": "986d801eb44c9e7e46c14edcdcd70a9beff811d3776f3af993c8a5ea700eeca4",
+        "releases/sidecar/v2/preview/REF_M2x4_DEVICE_2.stl": "7bd730c8cb7a33ab5d8562d11774554d6673c7813316c197c801d1b90173f8ba"
+      }
+    },
+    {
+      "path": "hardware/images/carrier-compact-960.webp",
+      "width": 960,
+      "height": 720,
+      "shot": "carrier-compact",
+      "colorway": "attack",
+      "sha256": "d8e7d30ed87e75dcaa9150e16eba2fdd5f9885328ec82d3f218ce448aecac30c",
+      "inputs": {
+        "releases/sidecar/v2/preview/06_M5_sidecar_base.stl": "0d3dd011cbfea804aa10a1c90990e89e1a83893b737f0bbc70dd66d0dd21a5b8",
+        "releases/sidecar/v2/preview/05_M5_sidecar_cover.stl": "eefacf871951bd07b8713bf15a25914b4c4f3f93cc5db7ceeb75322a42452d1d",
+        "releases/sidecar/v2/preview/REF_M5Stick_factory_geometry.stl": "54b2ceeea5feeed673e5b6d85542851d8929942eb842e4afde0d3f7dabcf8a77",
+        "releases/sidecar/v2/preview/REF_Display_visual.stl": "3e8c225d7be7f4ebb2ad8980581b2fb2ea66d1aa053db503e508bdda012ace2b",
+        "releases/sidecar/v2/preview/REF_M2x4_DEVICE_1.stl": "986d801eb44c9e7e46c14edcdcd70a9beff811d3776f3af993c8a5ea700eeca4",
+        "releases/sidecar/v2/preview/REF_M2x4_DEVICE_2.stl": "7bd730c8cb7a33ab5d8562d11774554d6673c7813316c197c801d1b90173f8ba"
+      }
+    },
+    {
+      "path": "hardware/images/dock-part.webp",
+      "width": 1600,
+      "height": 1200,
+      "shot": "dock-part",
+      "colorway": "attack",
+      "sha256": "9329c68997bead1def5400d19d712e0a70413bded3b9b0ef3944bbf98eae0a46",
+      "inputs": {
+        "releases/top_mount/v2/preview/04_M5_dock_top_mount_v2.stl": "7d06d90dc2d225784b9da1c74f7bea312263aec4bc0e8c85eb85f742b85d3480",
+        "releases/top_mount/v2/preview/05_M5_cover.stl": "f2200856eabc1fb382881f6c520f0702df5767cf66feff500d9e65a520a18bed"
+      }
+    },
+    {
+      "path": "hardware/images/dock-part-960.webp",
+      "width": 960,
+      "height": 720,
+      "shot": "dock-part",
+      "colorway": "attack",
+      "sha256": "2d50ed414aedd3d85909ecc7f79362e147e0132a47b2b8784f904b2cd6cef105",
+      "inputs": {
+        "releases/top_mount/v2/preview/04_M5_dock_top_mount_v2.stl": "7d06d90dc2d225784b9da1c74f7bea312263aec4bc0e8c85eb85f742b85d3480",
+        "releases/top_mount/v2/preview/05_M5_cover.stl": "f2200856eabc1fb382881f6c520f0702df5767cf66feff500d9e65a520a18bed"
+      }
+    },
+    {
+      "path": "hardware/images/dock-underside.webp",
+      "width": 1600,
+      "height": 1200,
+      "shot": "dock-underside",
+      "colorway": "attack",
+      "sha256": "a48e14148c9634dc992be7232e835ccd251cc339f78e0f7c192417f0ed7f13b8",
+      "inputs": {
+        "releases/top_mount/v2/preview/04_M5_dock_top_mount_v2.stl": "7d06d90dc2d225784b9da1c74f7bea312263aec4bc0e8c85eb85f742b85d3480",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_right_angle_plugs.stl": "9850ba8db3d5b21cdccbd97d4a34dcc9df8ee30764720aaa3263dc8da6e659a5"
+      }
+    },
+    {
+      "path": "hardware/images/dock-underside-960.webp",
+      "width": 960,
+      "height": 720,
+      "shot": "dock-underside",
+      "colorway": "attack",
+      "sha256": "2f80fe1fa91cac1412f5414b49a6ee3042e6682c7446c4f7cb1940cf2b8e8025",
+      "inputs": {
+        "releases/top_mount/v2/preview/04_M5_dock_top_mount_v2.stl": "7d06d90dc2d225784b9da1c74f7bea312263aec4bc0e8c85eb85f742b85d3480",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_right_angle_plugs.stl": "9850ba8db3d5b21cdccbd97d4a34dcc9df8ee30764720aaa3263dc8da6e659a5"
+      }
+    },
+    {
+      "path": "hardware/images/holder-detail.webp",
+      "width": 1600,
+      "height": 1200,
+      "shot": "holder-detail",
+      "colorway": "attack",
+      "sha256": "1358aa0c7df4bb0f029f3e9dff9fa73bf4788f221d77769dc0a7c20c2baab06c",
+      "inputs": {
+        "inspection/QRE_uniform_hinges_v102/preview/01_QRE_open_holder_body.stl": "feedbe704acc859646e124b3987cd142219001d353d19208050df6bc74a643be",
+        "inspection/QRE_uniform_hinges_v102/preview/08_QRE_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/QRE_uniform_hinges_v102/preview/09_QRE_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_red_PCB.stl": "4129eb717f995e357edf5ec17bdb2a2b0ea4617cb37bcf5243429c4b40552bb9",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_downward_optics.stl": "0328c81029755ea8d4aa03b43afc7c503427049788f31a96e30be04cd507b288",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_-1.524.stl": "315da10ada7820c6ec60127bba640805c671de6ba6f9d2fc518f8106c208e0ec",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_1.524.stl": "1f1dfb9900551a2344d272fb7a29cf88eb6298208d11d3b4f7b79e065d991341",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_right_angle_plugs.stl": "9850ba8db3d5b21cdccbd97d4a34dcc9df8ee30764720aaa3263dc8da6e659a5",
+        "inspection/QRE_uniform_hinges_v102/preview/03_QRE_pressure_bar.stl": "e82e2bc22c8123e8659a039ff0c032d1ac1c49e727733c4c790e188de2cd1f41",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_1.stl": "59ed0a0db3a2c315268d80463f6a92a3a09d4128d92bff5dcbcf740d16ab35b7",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_2.stl": "3241d1a13f8ff6204cfa98d1f5193d02df88a887c5bccbc3584dee5b3e3b9b05"
+      }
+    },
+    {
+      "path": "hardware/images/holder-detail-960.webp",
+      "width": 960,
+      "height": 720,
+      "shot": "holder-detail",
+      "colorway": "attack",
+      "sha256": "8b2faf4631c17880aaea002c8bc361a0d57c04057ab533f4cfa38d5ad54f6271",
+      "inputs": {
+        "inspection/QRE_uniform_hinges_v102/preview/01_QRE_open_holder_body.stl": "feedbe704acc859646e124b3987cd142219001d353d19208050df6bc74a643be",
+        "inspection/QRE_uniform_hinges_v102/preview/08_QRE_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/QRE_uniform_hinges_v102/preview/09_QRE_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_red_PCB.stl": "4129eb717f995e357edf5ec17bdb2a2b0ea4617cb37bcf5243429c4b40552bb9",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_downward_optics.stl": "0328c81029755ea8d4aa03b43afc7c503427049788f31a96e30be04cd507b288",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_-1.524.stl": "315da10ada7820c6ec60127bba640805c671de6ba6f9d2fc518f8106c208e0ec",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_1.524.stl": "1f1dfb9900551a2344d272fb7a29cf88eb6298208d11d3b4f7b79e065d991341",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_right_angle_plugs.stl": "9850ba8db3d5b21cdccbd97d4a34dcc9df8ee30764720aaa3263dc8da6e659a5",
+        "inspection/QRE_uniform_hinges_v102/preview/03_QRE_pressure_bar.stl": "e82e2bc22c8123e8659a039ff0c032d1ac1c49e727733c4c790e188de2cd1f41",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_1.stl": "59ed0a0db3a2c315268d80463f6a92a3a09d4128d92bff5dcbcf740d16ab35b7",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_2.stl": "3241d1a13f8ff6204cfa98d1f5193d02df88a887c5bccbc3584dee5b3e3b9b05"
+      }
+    },
+    {
+      "path": "hardware/images/print-compact-base.webp",
+      "width": 1600,
+      "height": 1200,
+      "shot": "print-compact-base",
+      "colorway": "attack",
+      "sha256": "dacb0ee7c19beeecc75f63b108b827f32fde0c0a3895c27fccb43a7a551c5769",
+      "inputs": {
+        "releases/LaunchLab_v102_QRE_uniform_hinges_base/stl/01_QRE_OPEN_PRINT_IN_PLACE.stl": "43868599bf563f93bda80e3054dcca5f4b5673491f32faa7aa48c7f6781ac8d1",
+        "releases/LaunchLab_v102_QRE_uniform_hinges_base/stl/03_QRE_pressure_bar.stl": "3c30eef675bb74ef50cc1886f2665e0f2e9a9602c3f486365887e6b5d56ea68f"
+      }
+    },
+    {
+      "path": "hardware/images/print-compact-base-960.webp",
+      "width": 960,
+      "height": 720,
+      "shot": "print-compact-base",
+      "colorway": "attack",
+      "sha256": "c6d0000e44b44b566a1db256fa9f8e85435d848a64563014ae39ea51b486048b",
+      "inputs": {
+        "releases/LaunchLab_v102_QRE_uniform_hinges_base/stl/01_QRE_OPEN_PRINT_IN_PLACE.stl": "43868599bf563f93bda80e3054dcca5f4b5673491f32faa7aa48c7f6781ac8d1",
+        "releases/LaunchLab_v102_QRE_uniform_hinges_base/stl/03_QRE_pressure_bar.stl": "3c30eef675bb74ef50cc1886f2665e0f2e9a9602c3f486365887e6b5d56ea68f"
+      }
+    },
+    {
+      "path": "hardware/images/print-standard-sensor.webp",
+      "width": 1600,
+      "height": 1200,
+      "shot": "print-standard-sensor",
+      "colorway": "balance",
+      "sha256": "0d96f91c5837a871f5bf1136000aebeaf65c96e394323a8fdce29be14427d0d1",
+      "inputs": {
+        "releases/LaunchLab_v102_TCRT_uniform_hinges/stl/01_TCRT_OPEN_PRINT_IN_PLACE.stl": "259a08ac6915288e59bc187d7161ea1234bd37eabe6dbcb99c068f89cbeb4fc5"
+      }
+    },
+    {
+      "path": "hardware/images/print-standard-sensor-960.webp",
+      "width": 960,
+      "height": 720,
+      "shot": "print-standard-sensor",
+      "colorway": "balance",
+      "sha256": "60dbbb0fd378e765faeb8035859d41db797751af9c4cd2224d95200b0886ed81",
+      "inputs": {
+        "releases/LaunchLab_v102_TCRT_uniform_hinges/stl/01_TCRT_OPEN_PRINT_IN_PLACE.stl": "259a08ac6915288e59bc187d7161ea1234bd37eabe6dbcb99c068f89cbeb4fc5"
+      }
+    },
+    {
+      "path": "hardware/images/print-dock.webp",
+      "width": 1600,
+      "height": 1200,
+      "shot": "print-dock",
+      "colorway": "attack",
+      "sha256": "aee90b0987470e91a8b4911f82591b74c7513f2980524422669568648433b0e5",
+      "inputs": {
+        "releases/top_mount/v2/stl/LaunchLab_Top_Mount_v2_dock_FLAT.stl": "2dbbe029f4f524d8304dad030dacfb302f37eba15d5fe888e5cfc32c4d4619b2",
+        "releases/top_mount/v2/stl/LaunchLab_Top_Mount_v2_shell_UPRIGHT.stl": "0ab7147f4e7cf97e511f701ff6ba38f01147b551e0a1c9f7450acbd2522e6500"
+      }
+    },
+    {
+      "path": "hardware/images/print-dock-960.webp",
+      "width": 960,
+      "height": 720,
+      "shot": "print-dock",
+      "colorway": "attack",
+      "sha256": "6bc038951bb52dc4e36697189c750fe7462c854b237c560343f946483bcf768a",
+      "inputs": {
+        "releases/top_mount/v2/stl/LaunchLab_Top_Mount_v2_dock_FLAT.stl": "2dbbe029f4f524d8304dad030dacfb302f37eba15d5fe888e5cfc32c4d4619b2",
+        "releases/top_mount/v2/stl/LaunchLab_Top_Mount_v2_shell_UPRIGHT.stl": "0ab7147f4e7cf97e511f701ff6ba38f01147b551e0a1c9f7450acbd2522e6500"
+      }
+    },
+    {
+      "path": "hardware/images/print-carrier.webp",
+      "width": 1600,
+      "height": 1200,
+      "shot": "print-carrier",
+      "colorway": "balance",
+      "sha256": "b8c2985e31c5d66a1b07fc093c08d2026d9954a909d204bfbbeb76f87ce71776",
+      "inputs": {
+        "releases/sidecar/v2/stl/LaunchLab_Sidecar_v2_base_SEAT_DOWN.stl": "6ff963ee156242bee6c79c339d317c2e49ff56559e900d57f45e38fb0da48a9f",
+        "releases/sidecar/v2/stl/LaunchLab_Sidecar_v2_shell_UPRIGHT.stl": "8cb54f4a5678ce2899721fc2857491557fcbff351bd749e50296049769bdefb3"
+      }
+    },
+    {
+      "path": "hardware/images/print-carrier-960.webp",
+      "width": 960,
+      "height": 720,
+      "shot": "print-carrier",
+      "colorway": "balance",
+      "sha256": "61dc6790ef8987d5e645e01fb1c53b1b5580324958593822f934f13655586bfd",
+      "inputs": {
+        "releases/sidecar/v2/stl/LaunchLab_Sidecar_v2_base_SEAT_DOWN.stl": "6ff963ee156242bee6c79c339d317c2e49ff56559e900d57f45e38fb0da48a9f",
+        "releases/sidecar/v2/stl/LaunchLab_Sidecar_v2_shell_UPRIGHT.stl": "8cb54f4a5678ce2899721fc2857491557fcbff351bd749e50296049769bdefb3"
+      }
+    },
+    {
+      "path": "hardware/images/sensor-size.webp",
+      "width": 2000,
+      "height": 720,
+      "shot": "sensor-size",
+      "colorway": "attack",
+      "sha256": "7ef8bdf87578336208674dafac895a8960ac46b3fb60a0bb70f5341351342dd3",
+      "inputs": {
+        "inspection/TCRT_uniform_hinges_v102/preview/01_TCRT_open_holder_body.stl": "4203a97c77f9a438101f16c8477e72e7d02c7d5bab209653347ea4eaa4afdb94",
+        "inspection/TCRT_uniform_hinges_v102/preview/08_TCRT_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/TCRT_uniform_hinges_v102/preview/09_TCRT_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_PCB_MEASURED.stl": "e12c532e2b9237e627facc2461f500d35cfdf0a78b1694f148457d9ded8cf3ff",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_HEAD_AND_LEGS.stl": "88874157321991a6ac16677640bd87ecba6a34745ebb419cfc6649d1fd56c7f5",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_LENS_PAIR.stl": "5da3286787f780d8ae0905d1413bc9fb943e0d75b81dc80ca46e97e1d2756ec2",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_POT.stl": "6c666db6c4908b69065d996683e9580a8777f69f89a264cbfac8df1f6b0089e9",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_HEADER.stl": "700c3ec50185cef67b0c2b3fd7d32a6e3626bf32f4023c0421cf7c2776e3636b",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_M3x6_SENSOR.stl": "7fda29d4bfb320e66ccbf04e5edde204ce789e3a6f72c762ede166f57b0a0068",
+        "inspection/QRE_uniform_hinges_v102/preview/01_QRE_open_holder_body.stl": "feedbe704acc859646e124b3987cd142219001d353d19208050df6bc74a643be",
+        "inspection/QRE_uniform_hinges_v102/preview/08_QRE_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/QRE_uniform_hinges_v102/preview/09_QRE_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_red_PCB.stl": "4129eb717f995e357edf5ec17bdb2a2b0ea4617cb37bcf5243429c4b40552bb9",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_downward_optics.stl": "0328c81029755ea8d4aa03b43afc7c503427049788f31a96e30be04cd507b288",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_-1.524.stl": "315da10ada7820c6ec60127bba640805c671de6ba6f9d2fc518f8106c208e0ec",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_1.524.stl": "1f1dfb9900551a2344d272fb7a29cf88eb6298208d11d3b4f7b79e065d991341",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_right_angle_plugs.stl": "9850ba8db3d5b21cdccbd97d4a34dcc9df8ee30764720aaa3263dc8da6e659a5",
+        "inspection/QRE_uniform_hinges_v102/preview/03_QRE_pressure_bar.stl": "e82e2bc22c8123e8659a039ff0c032d1ac1c49e727733c4c790e188de2cd1f41",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_1.stl": "59ed0a0db3a2c315268d80463f6a92a3a09d4128d92bff5dcbcf740d16ab35b7",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_2.stl": "3241d1a13f8ff6204cfa98d1f5193d02df88a887c5bccbc3584dee5b3e3b9b05"
+      }
+    },
+    {
+      "path": "hardware/images/sensor-size-960.webp",
+      "width": 960,
+      "height": 346,
+      "shot": "sensor-size",
+      "colorway": "attack",
+      "sha256": "8d5cae47dfbd8bec54ef6d8c3c326a942da01fdc5041e835d14911b4a47b5085",
+      "inputs": {
+        "inspection/TCRT_uniform_hinges_v102/preview/01_TCRT_open_holder_body.stl": "4203a97c77f9a438101f16c8477e72e7d02c7d5bab209653347ea4eaa4afdb94",
+        "inspection/TCRT_uniform_hinges_v102/preview/08_TCRT_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/TCRT_uniform_hinges_v102/preview/09_TCRT_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_PCB_MEASURED.stl": "e12c532e2b9237e627facc2461f500d35cfdf0a78b1694f148457d9ded8cf3ff",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_HEAD_AND_LEGS.stl": "88874157321991a6ac16677640bd87ecba6a34745ebb419cfc6649d1fd56c7f5",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_LENS_PAIR.stl": "5da3286787f780d8ae0905d1413bc9fb943e0d75b81dc80ca46e97e1d2756ec2",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_POT.stl": "6c666db6c4908b69065d996683e9580a8777f69f89a264cbfac8df1f6b0089e9",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_HEADER.stl": "700c3ec50185cef67b0c2b3fd7d32a6e3626bf32f4023c0421cf7c2776e3636b",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_M3x6_SENSOR.stl": "7fda29d4bfb320e66ccbf04e5edde204ce789e3a6f72c762ede166f57b0a0068",
+        "inspection/QRE_uniform_hinges_v102/preview/01_QRE_open_holder_body.stl": "feedbe704acc859646e124b3987cd142219001d353d19208050df6bc74a643be",
+        "inspection/QRE_uniform_hinges_v102/preview/08_QRE_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/QRE_uniform_hinges_v102/preview/09_QRE_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_red_PCB.stl": "4129eb717f995e357edf5ec17bdb2a2b0ea4617cb37bcf5243429c4b40552bb9",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_downward_optics.stl": "0328c81029755ea8d4aa03b43afc7c503427049788f31a96e30be04cd507b288",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_-1.524.stl": "315da10ada7820c6ec60127bba640805c671de6ba6f9d2fc518f8106c208e0ec",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_1.524.stl": "1f1dfb9900551a2344d272fb7a29cf88eb6298208d11d3b4f7b79e065d991341",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_right_angle_plugs.stl": "9850ba8db3d5b21cdccbd97d4a34dcc9df8ee30764720aaa3263dc8da6e659a5",
+        "inspection/QRE_uniform_hinges_v102/preview/03_QRE_pressure_bar.stl": "e82e2bc22c8123e8659a039ff0c032d1ac1c49e727733c4c790e188de2cd1f41",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_1.stl": "59ed0a0db3a2c315268d80463f6a92a3a09d4128d92bff5dcbcf740d16ab35b7",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_2.stl": "3241d1a13f8ff6204cfa98d1f5193d02df88a887c5bccbc3584dee5b3e3b9b05"
+      }
+    }
+  ],
+  "models": [
+    {
+      "path": "hardware/models/top-qre.glb",
+      "size": 376084,
+      "sha256": "0edaced597fe8e7896bbfe6102393d324ca307d70f2cd7ad5b84c80e96981b8f",
+      "inputs": {
+        "inspection/QRE_uniform_hinges_v102/preview/01_QRE_open_holder_body.stl": "feedbe704acc859646e124b3987cd142219001d353d19208050df6bc74a643be",
+        "inspection/QRE_uniform_hinges_v102/preview/08_QRE_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/QRE_uniform_hinges_v102/preview/09_QRE_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_red_PCB.stl": "4129eb717f995e357edf5ec17bdb2a2b0ea4617cb37bcf5243429c4b40552bb9",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_downward_optics.stl": "0328c81029755ea8d4aa03b43afc7c503427049788f31a96e30be04cd507b288",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_-1.524.stl": "315da10ada7820c6ec60127bba640805c671de6ba6f9d2fc518f8106c208e0ec",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_1.524.stl": "1f1dfb9900551a2344d272fb7a29cf88eb6298208d11d3b4f7b79e065d991341",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_right_angle_plugs.stl": "9850ba8db3d5b21cdccbd97d4a34dcc9df8ee30764720aaa3263dc8da6e659a5",
+        "inspection/QRE_uniform_hinges_v102/preview/03_QRE_pressure_bar.stl": "e82e2bc22c8123e8659a039ff0c032d1ac1c49e727733c4c790e188de2cd1f41",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_1.stl": "59ed0a0db3a2c315268d80463f6a92a3a09d4128d92bff5dcbcf740d16ab35b7",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_2.stl": "3241d1a13f8ff6204cfa98d1f5193d02df88a887c5bccbc3584dee5b3e3b9b05",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x6_DOCK_1.stl": "231f5a7e2815e18c43ecb3955d2c048c6704f4c7ae5e069075f19e46ba982205",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x6_DOCK_2.stl": "0ac4856239450d894c27a489b3cdd43dc092fbaed4629229290878ce926ab112",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x6_DOCK_3.stl": "87add7b36b5ea8b2309dea0627361b2250ed521985344f02d14b3eb5cb27548e",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x6_DOCK_4.stl": "f1fbb689c219a4f8682f4b5753fc0c10ee1f950e5b765aed2cefd8e86e7d3f8f",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_DEVICE_1.stl": "62c711e66afefb9ad14ccbcd7feac7f469124dd4b1ade2029fa202fd23b6ad5d",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_DEVICE_2.stl": "1aaf24ee9cb5db963031cf8fe9cb2a645519475249d9be61363f95455fa69e43",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M5Stick_factory_geometry.stl": "ff944a5955e2c5d4ea740c1080af41b8e0dfdfdc9ee08061ddfd0fd8432d3d4a",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Display_visual.stl": "3e8c225d7be7f4ebb2ad8980581b2fb2ea66d1aa053db503e508bdda012ace2b",
+        "releases/top_mount/v2/preview/04_M5_dock_top_mount_v2.stl": "7d06d90dc2d225784b9da1c74f7bea312263aec4bc0e8c85eb85f742b85d3480",
+        "releases/top_mount/v2/preview/05_M5_cover.stl": "f2200856eabc1fb382881f6c520f0702df5767cf66feff500d9e65a520a18bed"
+      },
+      "compression": "gltfpack 1.2.0 -cc -kn -ke -vp 16 -vn 10 (EXT_meshopt_compression, KHR_mesh_quantization)"
+    },
+    {
+      "path": "hardware/models/side-qre.glb",
+      "size": 330784,
+      "sha256": "40fa5fec7b76dca02f6b72dc2748159a2d94555d35fbe876c2847e48199fda6f",
+      "inputs": {
+        "inspection/QRE_uniform_hinges_v102/preview/01_QRE_open_holder_body.stl": "feedbe704acc859646e124b3987cd142219001d353d19208050df6bc74a643be",
+        "inspection/QRE_uniform_hinges_v102/preview/08_QRE_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/QRE_uniform_hinges_v102/preview/09_QRE_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_red_PCB.stl": "4129eb717f995e357edf5ec17bdb2a2b0ea4617cb37bcf5243429c4b40552bb9",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_downward_optics.stl": "0328c81029755ea8d4aa03b43afc7c503427049788f31a96e30be04cd507b288",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_-1.524.stl": "315da10ada7820c6ec60127bba640805c671de6ba6f9d2fc518f8106c208e0ec",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_Underside_resistor_1.524.stl": "1f1dfb9900551a2344d272fb7a29cf88eb6298208d11d3b4f7b79e065d991341",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_QRE_right_angle_plugs.stl": "9850ba8db3d5b21cdccbd97d4a34dcc9df8ee30764720aaa3263dc8da6e659a5",
+        "inspection/QRE_uniform_hinges_v102/preview/03_QRE_pressure_bar.stl": "e82e2bc22c8123e8659a039ff0c032d1ac1c49e727733c4c790e188de2cd1f41",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_1.stl": "59ed0a0db3a2c315268d80463f6a92a3a09d4128d92bff5dcbcf740d16ab35b7",
+        "inspection/QRE_uniform_hinges_v102/preview/REF_M2x4_SENSOR_2.stl": "3241d1a13f8ff6204cfa98d1f5193d02df88a887c5bccbc3584dee5b3e3b9b05",
+        "releases/sidecar/v2/preview/06_M5_sidecar_base.stl": "0d3dd011cbfea804aa10a1c90990e89e1a83893b737f0bbc70dd66d0dd21a5b8",
+        "releases/sidecar/v2/preview/05_M5_sidecar_cover.stl": "eefacf871951bd07b8713bf15a25914b4c4f3f93cc5db7ceeb75322a42452d1d",
+        "releases/sidecar/v2/preview/REF_M5Stick_factory_geometry.stl": "54b2ceeea5feeed673e5b6d85542851d8929942eb842e4afde0d3f7dabcf8a77",
+        "releases/sidecar/v2/preview/REF_Display_visual.stl": "3e8c225d7be7f4ebb2ad8980581b2fb2ea66d1aa053db503e508bdda012ace2b",
+        "releases/sidecar/v2/preview/REF_M2x4_DEVICE_1.stl": "986d801eb44c9e7e46c14edcdcd70a9beff811d3776f3af993c8a5ea700eeca4",
+        "releases/sidecar/v2/preview/REF_M2x4_DEVICE_2.stl": "7bd730c8cb7a33ab5d8562d11774554d6673c7813316c197c801d1b90173f8ba"
+      },
+      "compression": "gltfpack 1.2.0 -cc -kn -ke -vp 16 -vn 10 (EXT_meshopt_compression, KHR_mesh_quantization)"
+    },
+    {
+      "path": "hardware/models/side-tcrt.glb",
+      "size": 271248,
+      "sha256": "9e32ac8b5e4ab3761e6883f6885d3b51951f70e2759a849125bf238e53549311",
+      "inputs": {
+        "inspection/TCRT_uniform_hinges_v102/preview/01_TCRT_open_holder_body.stl": "4203a97c77f9a438101f16c8477e72e7d02c7d5bab209653347ea4eaa4afdb94",
+        "inspection/TCRT_uniform_hinges_v102/preview/08_TCRT_latch_LEFT.stl": "90556c63e1136b00b433920039b2181363abc890787f596f17739483f1094a84",
+        "inspection/TCRT_uniform_hinges_v102/preview/09_TCRT_latch_RIGHT.stl": "51c75d370d6b70a979499a27f4dd48ceebf0e2513efdb8ba93cffabd77c38624",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_PCB_MEASURED.stl": "e12c532e2b9237e627facc2461f500d35cfdf0a78b1694f148457d9ded8cf3ff",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_HEAD_AND_LEGS.stl": "88874157321991a6ac16677640bd87ecba6a34745ebb419cfc6649d1fd56c7f5",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_LENS_PAIR.stl": "5da3286787f780d8ae0905d1413bc9fb943e0d75b81dc80ca46e97e1d2756ec2",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_POT.stl": "6c666db6c4908b69065d996683e9580a8777f69f89a264cbfac8df1f6b0089e9",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_TCRT_HEADER.stl": "700c3ec50185cef67b0c2b3fd7d32a6e3626bf32f4023c0421cf7c2776e3636b",
+        "inspection/TCRT_uniform_hinges_v102/preview/REF_M3x6_SENSOR.stl": "7fda29d4bfb320e66ccbf04e5edde204ce789e3a6f72c762ede166f57b0a0068",
+        "releases/sidecar/v2/preview/06_M5_sidecar_base.stl": "0d3dd011cbfea804aa10a1c90990e89e1a83893b737f0bbc70dd66d0dd21a5b8",
+        "releases/sidecar/v2/preview/05_M5_sidecar_cover.stl": "eefacf871951bd07b8713bf15a25914b4c4f3f93cc5db7ceeb75322a42452d1d",
+        "releases/sidecar/v2/preview/REF_M5Stick_factory_geometry.stl": "54b2ceeea5feeed673e5b6d85542851d8929942eb842e4afde0d3f7dabcf8a77",
+        "releases/sidecar/v2/preview/REF_Display_visual.stl": "3e8c225d7be7f4ebb2ad8980581b2fb2ea66d1aa053db503e508bdda012ace2b",
+        "releases/sidecar/v2/preview/REF_M2x4_DEVICE_1.stl": "986d801eb44c9e7e46c14edcdcd70a9beff811d3776f3af993c8a5ea700eeca4",
+        "releases/sidecar/v2/preview/REF_M2x4_DEVICE_2.stl": "7bd730c8cb7a33ab5d8562d11774554d6673c7813316c197c801d1b90173f8ba"
+      },
+      "compression": "gltfpack 1.2.0 -cc -kn -ke -vp 16 -vn 10 (EXT_meshopt_compression, KHR_mesh_quantization)"
+    }
+  ],
+  "pipeline": {
+    "renderer": "Blender 5.2.0, Cycles, Khronos PBR Neutral",
+    "sha256": {
+      "make_shots.py": "60120cccb328a6a0aea6a3826fa2305a9c1bf43c11e34796de011407ccf33bb8",
+      "render.py": "4d61e4242116b3b727d7c7a95fdd075bb7fd5c9a8474d7b259eca8d37994a7a3",
+      "shots.json": "7301b9def63589fa90475861245d36ee583a136497703bd1415497ca059deebe",
+      "export-models.py": "8151ac5d5d58dcf15a80de1cc56d6406dd1b55a1f07c9e2fb7c8356f64627a42",
+      "verify-model-sources.py": "dcf9ed907a527bec7ee9c3e5b17fbb0b0c410d019f6592061fdc6cd945cbe2ed",
+      "import-hardware-v2.py": "2ea048e1e8e409ff7a414246df46675eed5381412be6fcc14893b27d829af1f6"
+    },
+    "sourceProof": "provenance/hardware-assembly-validation.json",
+    "sourceProofSha256": "761fce2ff31bc399c01b8de1563050b2cc412dcf8e2567427fc75d5d46a596b8",
+    "note": "CAD visualizations with presentation colors; digital checks do not establish printed fit or sensor performance."
+  }
+}

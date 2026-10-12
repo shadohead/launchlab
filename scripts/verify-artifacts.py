@@ -77,4 +77,32 @@ for path in (current/'source').rglob('*'):
         working=root/'firmware/LaunchLabMini'/path.relative_to(current/'source')
         assert working.is_file() and working.read_bytes()==path.read_bytes(),working
 assert (root/'firmware/LaunchLabRpm/analog_tachometer.h').read_bytes()==(current/'source/analog_tachometer.h').read_bytes()
+# Current hardware presentation and downloads are independently hash-pinned.
+# Frozen firmware and historical hardware continue through the checks above.
+hardware_provenance=root/'site/public/provenance/hardware.json'
+assert hardware_provenance.is_file(), hardware_provenance
+h=json.loads(hardware_provenance.read_text())
+for entry in h['releases']:
+    for f in entry['outputs']:
+        data=(root/'site/public'/f['path']).read_bytes()
+        assert len(data)==f['size'] and hashlib.sha256(data).hexdigest()==f['sha256'],f['path']
+        count+=1
+        if f['kind']=='package':
+            with zipfile.ZipFile(root/'site/public'/f['path']) as archive:
+                names=archive.namelist()
+                assert len(names)==f['files'] and archive.testzip() is None,f['path']
+                inventories=[n for n in names if n.endswith('/SHA256SUMS.txt')]
+                assert len(inventories)==1,f['path']
+                prefix=inventories[0].removesuffix('SHA256SUMS.txt')
+                for line in archive.read(inventories[0]).decode().splitlines():
+                    digest,name=line.split(maxsplit=1)
+                    assert hashlib.sha256(archive.read(prefix+name)).hexdigest()==digest,(f['path'],name)
+for entry in h['images']+h['models']:
+    data=(root/'site/public'/entry['path']).read_bytes()
+    assert hashlib.sha256(data).hexdigest()==entry['sha256'],entry['path']
+    if 'size' in entry: assert len(data)==entry['size'],entry['path']
+    count+=1
+proof=root/'site/public'/h['pipeline']['sourceProof']
+assert hashlib.sha256(proof.read_bytes()).hexdigest()==h['pipeline']['sourceProofSha256'],proof
+assert json.loads(proof.read_text())['status']=='PASS'
 print(f"PASS: {count} checksums; all 3MF archives intact; updater default {catalog['version']} and source {source_version} independently match frozen firmware")

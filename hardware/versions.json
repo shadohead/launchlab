@@ -1,9 +1,10 @@
 {
-  "description": "Independent firmware, sensor mount and M5 carrier versions. CAD checks are not physical fit acceptance. Existing QRE v0.33 / complete v0.40 packages remain unchanged.",
+  "description": "Independent shared sensor and mount-family versions; exact current download bytes are pinned alongside preserved historical snapshots. Digital checks are not physical fit acceptance.",
   "latest": {
-    "QRE1113": "0.33",
-    "TCRT5000": "0.43",
-    "M5StickS3 carrier": "0.68"
+    "QRE1113": "102",
+    "TCRT5000": "102",
+    "M5StickS3 carrier": "Sidecar v2",
+    "Top Mount": "2"
   },
   "versions": [
     {
@@ -2647,6 +2648,116 @@
           "sha256": "ed377548a0bad8747bb26d3d9adffa7d96e626f5f7a05b9f4df567bfa5341682"
         }
       ]
+    },
+    {
+      "id": "compact-base-v102",
+      "version": "102",
+      "family": "QRE1113",
+      "directory": "site/public/hardware/downloads",
+      "source": "custom-beypass/releases/LaunchLab_v102_QRE_uniform_hinges_base",
+      "status": "frozen source bytes, CAD/readback/saved plate checks passed; physical fit and retention untested",
+      "redistribution": "preserved source notices apply",
+      "files": [
+        {
+          "path": "site/public/hardware/downloads/compact-base-v102.zip",
+          "size": 2270734,
+          "sha256": "8bf39dc17611b303aa4458614d3d7bee2dcb78b6d7e028d9ee83fd0838a4ad06"
+        },
+        {
+          "path": "site/public/hardware/downloads/compact-base-v102.3mf",
+          "size": 1446603,
+          "sha256": "b51a7e42b386bdd829867086917aadaaa6059455a9c123a15ad1b4bda861f433"
+        }
+      ]
+    },
+    {
+      "id": "top-mount-v2",
+      "version": "2",
+      "family": "Top Mount",
+      "directory": "site/public/hardware/downloads",
+      "source": "custom-beypass/releases/top_mount/v2",
+      "status": "frozen source bytes, CAD/readback/saved plate checks passed; physical fit and retention untested",
+      "redistribution": "preserved source notices apply",
+      "files": [
+        {
+          "path": "site/public/hardware/downloads/top-mount-v2.zip",
+          "size": 2778220,
+          "sha256": "3879a9ecaacfb2d7728a32c5ea03c4ff44ec8609ed652c781698f80601ef82d3"
+        },
+        {
+          "path": "site/public/hardware/downloads/top-mount-v2-pla.3mf",
+          "size": 1129806,
+          "sha256": "d73e2cda98bdd1641615abc566c039b8aebd2309fda4ee9fc6472aba9de9c352"
+        },
+        {
+          "path": "site/public/hardware/downloads/top-mount-v2-petg.3mf",
+          "size": 1142900,
+          "sha256": "71373f74dfe09e22cfea81edc6bd9bd142a074be1017c52bf0f1034c1e49a36b"
+        }
+      ]
+    },
+    {
+      "id": "sidecar-v2",
+      "version": "2",
+      "family": "Sidecar",
+      "directory": "site/public/hardware/downloads",
+      "source": "custom-beypass/releases/sidecar/v2",
+      "status": "frozen source bytes, CAD/readback/saved plate checks passed; physical fit and retention untested",
+      "files": [
+        {
+          "path": "site/public/hardware/downloads/sidecar-v2.zip",
+          "size": 2730090,
+          "sha256": "6397e72fa65940dfc1a7aa7ca75d5ec44e57c959a2e0c5657e2f2eb672d8e2f6"
+        },
+        {
+          "path": "site/public/hardware/downloads/sidecar-v2-pla.3mf",
+          "size": 1138785,
+          "sha256": "c51305a21ac0a00bccba2541f29f355f1f6cab61b928ae58eea6411c2cd8eb28"
+        },
+        {
+          "path": "site/public/hardware/downloads/sidecar-v2-petg.3mf",
+          "size": 1155773,
+          "sha256": "023b844dc908358c188f654c113eaf785011eb75cf00b0a9fd7a6222f0c833e7"
+        }
+      ]
+    },
+    {
+      "id": "standard-sensor-v102",
+      "version": "102",
+      "family": "TCRT5000",
+      "directory": "site/public/hardware/downloads",
+      "source": "custom-beypass/releases/LaunchLab_v102_TCRT_uniform_hinges",
+      "status": "frozen source bytes, CAD/readback/saved plate checks passed; physical fit and retention untested",
+      "redistribution": "preserved source notices apply",
+      "files": [
+        {
+          "path": "site/public/hardware/downloads/standard-sensor-v102.zip",
+          "size": 1876989,
+          "sha256": "2a5506462cfddfac64c3a282aeb5a671fc1359fa8245356b575629658d16247d"
+        },
+        {
+          "path": "site/public/hardware/downloads/standard-sensor-v102.3mf",
+          "size": 1091614,
+          "sha256": "4f760ffe1a404af8d52be93d1909411be08fecd85167764bcae78e45bb72f1e3"
+        }
+      ]
     }
-  ]
+  ],
+  "currentArrangements": {
+    "top-qre": {
+      "label": "Compact",
+      "sensor": "compact-base-v102",
+      "mount": "top-mount-v2"
+    },
+    "side-qre": {
+      "label": "Compact Sidecar",
+      "sensor": "compact-base-v102",
+      "mount": "sidecar-v2"
+    },
+    "side-tcrt": {
+      "label": "Standard Sidecar",
+      "sensor": "standard-sensor-v102",
+      "mount": "sidecar-v2"
+    }
+  }
 }
