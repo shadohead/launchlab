@@ -39,6 +39,10 @@ The firmware does not change the physical supply or automatically identify the s
 
 ## Printing and assembly
 
+**PETG is recommended over PLA for the printed mounts**, especially flexing clips, M5 bracket snap arms and parts that receive screws. Use the PETG project matching your release where supplied; otherwise import the STLs and slice with your printer's PETG profile. Keep the supplied orientation, walls, infill, hinge support blockers and captive-clip positions. PLA projects remain available; saved PLA toolpaths and PLA estimates do not become PETG profiles or estimates.
+
+Start screws straight and tighten only enough to seat the parts, using the exact type and length specified for the release. If a screw or snap arm binds, check the print and fit rather than forcing it. The PETG recommendation does not establish dimensional accuracy, screw-cycle durability or physical fit; check the actual print and assembly.
+
 Open the [QRE v102 PLA source plate](../site/public/hardware/downloads/compact-base-v102.3mf), retaining both hinge support blockers.
 It contains the base with both clips captive and fully open, plus the pressure bar.
 The source profile targets P1S, 0.4 mm nozzle, PLA and 0.2 mm layers.

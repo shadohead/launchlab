@@ -33,6 +33,7 @@ Use one sensor plate plus the matching mount-pair plate.
 These are exact saved source projects, not a newly sliced combined full-kit plate.
 Mount plates contain both mating pieces; sensors remain separate.
 Re-slice for your own printer and loaded filament.
+PETG is recommended for printed mounts, especially flexing clips, snap arms and parts that receive screws. Select the PETG project where supplied; if only a PLA project is supplied, import the STLs and slice with your printer's PETG profile, retaining the release's orientations and support blockers. PLA projects remain available. This material recommendation does not change the geometry, filenames, screw specifications or saved profiles, or establish dimensional accuracy or screw-cycle durability.
 Sensor source plates use P1S PLA, a 0.4 mm nozzle, 0.2 mm layers and retained hinge support blockers.
 Both current mount pairs have audited P1S PLA and PETG source projects.
 Both v2 shells are byte-identical to their family's v1 shell; existing v1 shell owners need only the v2 base or dock.
