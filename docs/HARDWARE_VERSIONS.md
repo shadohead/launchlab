@@ -9,9 +9,9 @@ Sensor, mount-family and firmware versions are independent.
 
 | Kit | Sensor | M5 mount pair | Firmware |
 | --- | --- | --- | --- |
-| Compact | Analog SparkFun QRE1113, sensor attachment v102 | Top Mount v2 cover and dock | Current 0.13.5, QRE / Standard profile |
-| Compact Sidecar | Analog SparkFun QRE1113, sensor attachment v102 | Sidecar v2 cover and base | Current 0.13.5, QRE / Standard profile |
-| Standard Sidecar | TCRT5000 / LM393 analog AO, sensor attachment v102 | Sidecar v2 cover and base | Current 0.13.5, TCRT5000 profile |
+| Compact | Analog SparkFun QRE1113, sensor attachment v102 | Top Mount v2 M5 snap cover and M5 cradle | Current 0.13.5, QRE / Standard profile |
+| Compact Sidecar | Analog SparkFun QRE1113, sensor attachment v102 | Sidecar v2 M5 snap cover and M5 cradle | Current 0.13.5, QRE / Standard profile |
+| Standard Sidecar | TCRT5000 / LM393 analog AO, sensor attachment v102 | Sidecar v2 M5 snap cover and M5 cradle | Current 0.13.5, TCRT5000 profile |
 
 Sidecar describes a separate sensor attachment and M5 display attachment beside it.
 Top Mount holds the M5 above the QRE sensor base; no TCRT Top Mount kit is supplied.
@@ -24,28 +24,28 @@ Saved CAD, STL readback and print-project audits passed; physical fit, retention
 
 | Part set | Exact source package | P1S PLA source plate | P1S PETG source plate |
 | --- | --- | --- | --- |
-| QRE1113 v102 base with captive clips and pressure bar | [STL/source ZIP](../site/public/hardware/downloads/compact-base-v102.zip) | [PLA](../site/public/hardware/downloads/compact-base-v102.3mf) | Not supplied |
+| QRE1113 v102 launcher clamp base with captive clips and sensor retainer | [STL/source ZIP](../site/public/hardware/downloads/compact-base-v102.zip) | [PLA](../site/public/hardware/downloads/compact-base-v102.3mf) | Not supplied |
 | TCRT5000 v102 mount with captive clips | [STL/source ZIP](../site/public/hardware/downloads/standard-sensor-v102.zip) | [PLA](../site/public/hardware/downloads/standard-sensor-v102.3mf) | Not supplied |
-| Top Mount v2 cover and dock | [STL/source ZIP](../site/public/hardware/downloads/top-mount-v2.zip) | [PLA pair](../site/public/hardware/downloads/top-mount-v2-pla.3mf) | [PETG pair](../site/public/hardware/downloads/top-mount-v2-petg.3mf) |
-| Sidecar v2 cover and base | [STL/source ZIP](../site/public/hardware/downloads/sidecar-v2.zip) | [PLA pair](../site/public/hardware/downloads/sidecar-v2-pla.3mf) | [PETG pair](../site/public/hardware/downloads/sidecar-v2-petg.3mf) |
+| Top Mount v2 M5 snap cover and M5 cradle | [STL/source ZIP](../site/public/hardware/downloads/top-mount-v2.zip) | [PLA pair](../site/public/hardware/downloads/top-mount-v2-pla.3mf) | [PETG pair](../site/public/hardware/downloads/top-mount-v2-petg.3mf) |
+| Sidecar v2 M5 snap cover and M5 cradle | [STL/source ZIP](../site/public/hardware/downloads/sidecar-v2.zip) | [PLA pair](../site/public/hardware/downloads/sidecar-v2-pla.3mf) | [PETG pair](../site/public/hardware/downloads/sidecar-v2-petg.3mf) |
 
 Use one sensor plate plus the matching mount-pair plate.
 These are exact saved source projects, not a newly sliced combined full-kit plate.
 Mount plates contain both mating pieces; sensors remain separate.
 Re-slice for your own printer and loaded filament.
-PETG is recommended for printed mounts, especially flexing clips, snap arms and parts that receive screws. Select the PETG project where supplied; if only a PLA project is supplied, import the STLs and slice with your printer's PETG profile, retaining the release's orientations and support blockers. PLA projects remain available. This material recommendation does not change the geometry, filenames, screw specifications or saved profiles, or establish dimensional accuracy or screw-cycle durability.
+PETG is recommended for printed mounts, especially flexing clips, snap arms and parts that receive screws. Select the matching PETG project where supplied. For the PLA-only QRE1113 v102 and TCRT5000 v102 sensor projects, open the saved PLA 3MF as a project, select the correct printer and PETG profile, retain both HINGE SUPPORT BLOCKER objects and per-object support settings, and reslice. Importing only the STL loses these blocker objects; do not print the saved PLA G-code with PETG. PLA projects remain available. This material recommendation does not change the geometry, filenames, screw specifications or saved profiles, or establish dimensional accuracy or screw-cycle durability.
 Sensor source plates use P1S PLA, a 0.4 mm nozzle, 0.2 mm layers and retained hinge support blockers.
 Both current mount pairs have audited P1S PLA and PETG source projects.
-Both v2 shells are byte-identical to their family's v1 shell; existing v1 shell owners need only the v2 base or dock.
+Both v2 M5 snap covers are byte-identical to their family's v1 M5 snap cover; existing v1 M5 snap cover owners need only the v2 M5 cradle.
 
 ## Assembly and fasteners
 
 | Part | Assembly detail | Fasteners |
 | --- | --- | --- |
-| QRE1113 v102 | Uniform-height hinge blocks with captive print-in-place launcher clips; secure the analog board with its pressure bar. | 2 × M2×4 pan-head; no clip screws |
-| Top Mount v2 | Two flexible dock arms snap into the removable cover; press both arms inward to release. | 2 × M2×4 M5-to-dock, 4 × M2×6 dock-to-QRE-base |
-| Sidecar v2 | Base includes the native grip head and two integral snap arms; thread wires through the enclosed left-side exit before fitting the cover. | 2 × M2×4 into the M5 secondary back holes |
-| TCRT5000 v102 | Measured sensor cradle with captive launcher clips; no top keeper. | One existing M3 board screw (M3×6 CAD reference); no clip screws |
+| QRE1113 v102 | Uniform-height hinge blocks with captive print-in-place launcher clips; secure the analog board with its sensor retainer. | 2 × M2×4 pan-head; no clip screws |
+| Top Mount v2 | Two flexible M5 cradle arms snap into the removable M5 snap cover; press both arms inward to release. | 2 × M2×4 M5-to-cradle, 4 × M2×6 cradle-to-QRE-base |
+| Sidecar v2 | M5 cradle includes the native grip head and two integral snap arms; thread wires through the enclosed left-side exit before fitting the M5 snap cover. | 2 × M2×4 into the M5 secondary back holes |
+| TCRT5000 v102 | Measured sensor cradle with captive launcher clips; no top sensor retainer. | One existing M3 board screw (M3×6 CAD reference); no clip screws |
 
 Digital checks do not replace dry-fit checks of your device, launcher, connectors and screws.
 Keep the factory M5 enclosure intact and verify sensor AO, supply voltage and optical alignment using [BUILD.md](BUILD.md) or [TCRT5000.md](TCRT5000.md).

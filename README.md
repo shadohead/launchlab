@@ -31,7 +31,7 @@ Start with **one M5StickS3 K150 + one analog sensor + three short wires + printe
 | 1 | **USB-C data cable** | Flashing and charging; use an existing cable that carries data. | Use an existing data cable, or [Amazon search — USB-C data cable](https://www.amazon.com/s?k=USB-C+data+cable&tag=beywatchgg-20) |
 | 1 set | **Printed M5 + sensor mounts** | QRE1113 or TCRT5000 sensor v102, paired with Top Mount v2 (QRE only) or Sidecar v2. Download the sensor and matching mount pair separately. | [Print files](docs/HARDWARE_VERSIONS.md#current-downloads) |
 | See below | **M2 machine screws** | Head style and length depend on the mount revision. | [Amazon — ordered MEIYYJ countersunk assortment](https://www.amazon.com/dp/B07HC3LQYS?tag=beywatchgg-20); pan-head sizes below |
-| Small amount | **1.75 mm PETG filament — recommended** | Prefer PETG for printed mounts, especially flexing clips, snap arms and parts that receive screws. Use a PETG project where supplied; otherwise reslice the STLs with your printer's PETG profile. PLA projects remain available. | Use existing PETG, a printing service, or [Amazon search — PETG filament](https://www.amazon.com/s?k=1.75mm+PETG+filament&tag=beywatchgg-20) |
+| Small amount | **1.75 mm PETG filament — recommended** | Prefer PETG for printed mounts, especially flexing clips, snap arms and parts that receive screws. Use the matching PETG 3MF where supplied. For a PLA-only release, open its saved 3MF as a project, select your printer and PETG profile, retain all modifier/blocker objects, and reslice; do not print its saved PLA G-code with PETG. PLA projects remain available. | Use existing PETG, a printing service, or [Amazon search — PETG filament](https://www.amazon.com/s?k=1.75mm+PETG+filament&tag=beywatchgg-20) |
 
 Links marked **ordered**, plus the SparkFun, SinLoon, ELEGOO and uxcell links, match the project-related product listings from purchase history. Cable, filament and pan-head links marked **Amazon search** are general supplies, not exact ordered products. Check the selected variant and pack contents; purchasing a component does not establish printed fit.
 
@@ -43,9 +43,9 @@ Use the specified **pan-head** pieces for current mounts: [Amazon search — M2�
 
 | Assembly | Screws required |
 | --- | --- |
-| QRE1113 v102 sensor | 2 × **M2×4 pan-head** for the pressure bar; captive clips need no screws. |
-| Top Mount v2 | 2 × **M2×4 pan-head** from below into M5, plus 4 × **M2×6 pan-head** into the QRE base; cover snaps on. |
-| Sidecar v2 | 2 × **M2×4 pan-head** into M5 secondary back holes; cover snaps on. |
+| QRE1113 v102 sensor | 2 × **M2×4 pan-head** for the sensor retainer; captive clips need no screws. |
+| Top Mount v2 | 2 × **M2×4 pan-head** from below into M5, plus 4 × **M2×6 pan-head** into the QRE base; M5 snap cover snaps on. |
+| Sidecar v2 | 2 × **M2×4 pan-head** into M5 secondary back holes; M5 snap cover snaps on. |
 | TCRT5000 v102 sensor | 1 × **M3 board screw** (M3×6 CAD reference); captive clips need no screws. |
 
 If your sensor has bare pads, add a **3-pin 2.54 mm header** or solder the three wires directly. The ordered [uxcell right-angle male header strip](https://www.amazon.com/dp/B01461DQ6S?tag=beywatchgg-20) can be cut to three pins; check header direction and cable clearance against the printed seat. You will also need a small screwdriver, cutters, and a soldering iron/solder if attaching bare wires or headers.
@@ -134,23 +134,23 @@ Explosion offsets illustrate assembly order, not a measured position on a comple
 
 | Kit | Shared sensor | M5 mount | Current assembly |
 | --- | --- | --- | --- |
-| Compact | QRE1113 v102 | Top Mount v2 cover and dock | ![Compact Top Mount assembly](site/public/hardware/images/top-qre-exploded-960.webp) |
-| Compact Sidecar | QRE1113 v102 | Sidecar v2 cover and base | ![Compact Sidecar assembly](site/public/hardware/images/side-qre-exploded-960.webp) |
-| Standard Sidecar | TCRT5000 v102 | Sidecar v2 cover and base | ![Standard Sidecar assembly](site/public/hardware/images/side-tcrt-exploded-960.webp) |
+| Compact | QRE1113 v102 | Top Mount v2 M5 snap cover and M5 cradle | ![Compact Top Mount assembly](site/public/hardware/images/top-qre-exploded-960.webp) |
+| Compact Sidecar | QRE1113 v102 | Sidecar v2 M5 snap cover and M5 cradle | ![Compact Sidecar assembly](site/public/hardware/images/side-qre-exploded-960.webp) |
+| Standard Sidecar | TCRT5000 v102 | Sidecar v2 M5 snap cover and M5 cradle | ![Standard Sidecar assembly](site/public/hardware/images/side-tcrt-exploded-960.webp) |
 
 ### Exact print downloads
 
 | Part set | STL/source package | P1S PLA plate | P1S PETG plate |
 | --- | --- | --- | --- |
-| QRE1113 v102 base, captive clips and pressure bar | [Package](site/public/hardware/downloads/compact-base-v102.zip) | [PLA](site/public/hardware/downloads/compact-base-v102.3mf) | No sensor PETG plate supplied |
+| QRE1113 v102 launcher clamp base, captive clips and sensor retainer | [Package](site/public/hardware/downloads/compact-base-v102.zip) | [PLA](site/public/hardware/downloads/compact-base-v102.3mf) | No sensor PETG plate supplied |
 | TCRT5000 v102 mount and captive clips | [Package](site/public/hardware/downloads/standard-sensor-v102.zip) | [PLA](site/public/hardware/downloads/standard-sensor-v102.3mf) | No sensor PETG plate supplied |
-| Top Mount v2 cover and dock | [Package](site/public/hardware/downloads/top-mount-v2.zip) | [PLA pair](site/public/hardware/downloads/top-mount-v2-pla.3mf) | [PETG pair](site/public/hardware/downloads/top-mount-v2-petg.3mf) |
-| Sidecar v2 cover and base | [Package](site/public/hardware/downloads/sidecar-v2.zip) | [PLA pair](site/public/hardware/downloads/sidecar-v2-pla.3mf) | [PETG pair](site/public/hardware/downloads/sidecar-v2-petg.3mf) |
+| Top Mount v2 M5 snap cover and M5 cradle | [Package](site/public/hardware/downloads/top-mount-v2.zip) | [PLA pair](site/public/hardware/downloads/top-mount-v2-pla.3mf) | [PETG pair](site/public/hardware/downloads/top-mount-v2-petg.3mf) |
+| Sidecar v2 M5 snap cover and M5 cradle | [Package](site/public/hardware/downloads/sidecar-v2.zip) | [PLA pair](site/public/hardware/downloads/sidecar-v2-pla.3mf) | [PETG pair](site/public/hardware/downloads/sidecar-v2-petg.3mf) |
 
 Choose one sensor plate and the matching mount-pair plate.
 These source plates are separate, not a newly sliced combined full kit.
 The pair plate contains both mating mount pieces.
-Both v2 shells are unchanged from their family's v1; existing v1 shell owners need only the matching v2 base or dock.
+Both v2 M5 snap covers are unchanged from their family's v1; existing v1 M5 snap cover owners need only the matching v2 M5 cradle.
 Saved CAD, STL readback and print-project audits passed.
 Physical fit, snap retention, fatigue, optical alignment and absolute RPM calibration remain unverified for these current hardware combinations.
 Choose **Settings → Mounting → Top or Sidecar** to match the physical layout; display flip is a separate setting.
