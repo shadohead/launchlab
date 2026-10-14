@@ -1,6 +1,6 @@
 # Firmware 0.13.5 build context
 
-The shipping runtime is `0.13.5-sticks3-idle-adc-pm`, application SHA-256 `0203763a133de42bf09dd3c5a93a6cbe074c974e815d8d5aff6d2541f6a88edf`. The compiled source snapshot is frozen in the [release directory](../firmware/releases/0.13.5-sticks3-idle-adc-pm/). Use the [USB updater](https://shadohead.github.io/launchlab/) for the shipping image.
+The shipping runtime is `0.13.5-sticks3-idle-adc-pm`, application SHA-256 `0203763a133de42bf09dd3c5a93a6cbe074c974e815d8d5aff6d2541f6a88edf`. The compiled source snapshot is frozen in the [release directory](../firmware/releases/0.13.5-sticks3-idle-adc-pm/). Use the [USB updater](https://launchlab.beywatch.gg/update) for the shipping image.
 
 ## Build from source
 
@@ -23,4 +23,4 @@ The full qio_opi SDK was rebuilt with `CONFIG_PM_ENABLE=y` and `CONFIG_PM_PROFIL
 
 Bootloader: `0x0`; partitions: `0x8000`; boot selection: `0xe000`; application: `0x10000`. Ordinary updates and deliberate rollback write only the application and preserve settings/history. First install uses all four images after the updater's explicit confirmation.
 
-Run `bash scripts/test-firmware.sh`, `python3 scripts/verify-artifacts.py`, and `npm test` in `site/` to check firmware behavior, frozen artifact identities and updater guards. Site production build: `npm run build` in `site/`.
+Run `bash scripts/test-firmware.sh`, `python3 scripts/verify-artifacts.py`, and `npm test` in `site/` to check firmware behavior, frozen artifact identities and updater guards. `npm run build` in `site/` creates the compatibility redirect and copies the unchanged public artifacts; it builds no flashing interface.

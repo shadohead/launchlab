@@ -83,7 +83,7 @@ The historical [v0.40 plate](../hardware/LaunchLab_v040_ALL_ITEMS_PRINT/) and [v
 
 ## Firmware and controls
 
-Use the [USB updater](https://shadohead.github.io/launchlab/) in desktop Chrome or Edge. A USB data cable is required. Connect USB, then hold the side Power/Reset button until the internal green LED flashes. Close serial monitors, then connect through the page. Firmware installation begins only after clicking Connect & update/install and choosing a device. See [update instructions](UPDATER.md) for current firmware release gates; this prototype has the limits recorded below.
+Use the [USB updater](https://launchlab.beywatch.gg/update) in desktop Chrome or Edge. A USB data cable is required. Connect USB, then hold the side Power/Reset button until the internal green LED flashes. Close serial monitors, then connect through the page. Firmware installation begins only after clicking Connect & update/install and choosing a device. See [update instructions](UPDATER.md) for current firmware release gates; this prototype has the limits recorded below.
 
 Update checks for the expected partition table and writes only `0x10000`. First install replaces bootloader `0x0`, partitions `0x8000`, OTA selection `0xe000`, and application `0x10000`, without erase-all. Back up factory firmware before first install if you need to restore it. A full 8 MB backup contains personal settings/data and should stay private.
 

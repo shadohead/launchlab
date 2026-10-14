@@ -105,4 +105,4 @@ for entry in h['images']+h['models']:
 proof=root/'site/public'/h['pipeline']['sourceProof']
 assert hashlib.sha256(proof.read_bytes()).hexdigest()==h['pipeline']['sourceProofSha256'],proof
 assert json.loads(proof.read_text())['status']=='PASS'
-print(f"PASS: {count} checksums; all 3MF archives intact; updater default {catalog['version']} and source {source_version} independently match frozen firmware")
+print(f"PASS: {count} checksums; all 3MF archives intact; preserved catalog {catalog['version']} and source {source_version} independently match frozen firmware")

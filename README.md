@@ -2,7 +2,7 @@
 
 A removable practice meter for **Beyblade X string launchers**. An analog optical sensor measures launcher-shaft RPM; an **M5StickS3 K150** shows your peak, launch history, trends and tilt/rotation replay. The screen and battery are built in, so practice does not require a phone.
 
-**[Website & build guide](https://launchlab.beywatch.gg) · [Public USB updater](https://shadohead.github.io/launchlab/) · [Releases](https://github.com/shadohead/launchlab/releases)**
+**[Website & build guide](https://launchlab.beywatch.gg) · [USB updater](https://launchlab.beywatch.gg/update) · [Releases](https://github.com/shadohead/launchlab/releases)**
 
 ## Choose a build
 
@@ -20,7 +20,7 @@ Sidecar puts the M5 on a separate carrier beside the sensor. Both sensors use th
 3. Prefer **PETG** for flexing clips, snap arms and screwed parts. Retain project modifiers/support blockers and reslice for your printer and filament.
 4. Back up factory firmware before **First install**. Use desktop Chrome or Edge and a data cable; review [updater instructions](docs/UPDATER.md) and [recovery](docs/RECOVERY.md).
 
-The public updater recommends **0.13.5** for both sensors ([release notes](firmware/releases/0.13.5-sticks3-idle-adc-pm/README.md)). The Beywatch website maintains a separate imported firmware catalog; check the version it offers before installing.
+The [LaunchLab USB updater](https://launchlab.beywatch.gg/update) is the maintained interface for both sensors. Check its selected version and release notes before installing. Firmware source and published release files remain in this repository.
 
 ## Files and limits
 

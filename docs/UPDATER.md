@@ -1,6 +1,6 @@
 # Update, repair and rollback
 
-The [public USB updater](https://shadohead.github.io/launchlab/) currently recommends **0.13.5**, runtime `0.13.5-sticks3-idle-adc-pm`, for both QRE1113 and TCRT5000. The [release catalog](../site/public/firmware/versions.json) lists available targets; see the [current release notes](../firmware/releases/0.13.5-sticks3-idle-adc-pm/README.md) and [build context](FIRMWARE_0.13.5.md). The Beywatch website has a separate imported catalog, so check the version offered by the updater you use.
+Use the [LaunchLab USB updater](https://launchlab.beywatch.gg/update). It is the only maintained browser updater; the former GitHub Pages address redirects there. Check the selected target version and release notes before installing. This repository preserves the [0.13.5 release notes](../firmware/releases/0.13.5-sticks3-idle-adc-pm/README.md), [build context](FIRMWARE_0.13.5.md) and [firmware catalog](../site/public/firmware/versions.json) as source and artifact references.
 
 Ordinary Update blocks downgrades and unknown or incomplete applications. Repair / rollback and First install require their own explicit confirmations. Current byte verification does not establish physical rollback, stock reinstall or reliable pull measurement. Follow the procedures below and keep private backups.
 
@@ -31,7 +31,7 @@ Complete post-write MD5 verification and deliberate repair for a different build
 
 1. Save important history/settings and a private full-device backup before flashing. There is no automatic browser backup. Do not upload a full flash dump to an issue.
 2. Open the USB updater in desktop Chrome or Edge with a data cable. Read the selected target version and confirm K150.
-3. Choose **Update existing LaunchLab** for a normal application update. Connect USB with the M5 powered on and close other serial apps. The updater attempts to enter download mode automatically. If connection fails, hold the side Power/Reset button with USB connected until the green LED flashes, release it, then retry and select the download-mode port.
+3. Use the default **Update** mode for a normal application update. Connect USB with the M5 powered on and close other serial apps. The updater attempts to enter download mode automatically. If connection fails, hold the side Power/Reset button with USB connected until the green LED flashes, release it, then retry and select the download-mode port.
 4. Connect. The updater checks every downloaded file's SHA-256, the bundle's fixed partition map, the detected chip and 8 MB flash capacity, the actual device partition and boot-selection bytes, and the installed application identity plus complete device MD5. The device label remains necessary for K150 confirmation.
 5. An older target is blocked. An unknown or incomplete application is blocked. If the selected exact application is already installed, no flash is written.
 6. After a verified write/no-op, restart automatically or use the side button when prompted. Check the runtime version, history/settings, references, READY state and an ordinary pull afterward.

@@ -47,7 +47,7 @@ For [LaunchLab support](https://github.com/shadohead/launchlab/issues), include 
 
 ## Release validation limits
 
-The public updater currently recommends [0.13.5](../firmware/releases/0.13.5-sticks3-idle-adc-pm/README.md). Its [build context](FIRMWARE_0.13.5.md) describes the current image and layout; a newer release does not establish physical browser recovery, stock reinstall or rollback.
+Use the [LaunchLab USB updater](https://launchlab.beywatch.gg/update) and check its selected release. The preserved [0.13.5 release](../firmware/releases/0.13.5-sticks3-idle-adc-pm/README.md) and [build context](FIRMWARE_0.13.5.md) describe that image and layout; a newer release does not establish physical browser recovery, stock reinstall or rollback.
 
 ### Historical 0.11.1 prototype checks
 

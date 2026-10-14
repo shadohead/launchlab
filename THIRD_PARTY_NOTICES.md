@@ -5,10 +5,10 @@
 - Bosch BMI270 Sensor API: **BSD-3-Clause**, vendored via SparkFun_BMI270_Arduino_Library commit `21ea234de321da07c552f7a43cb36f7df4f73a27`. Copyright, conditions and disclaimer are retained in `firmware/LaunchLabMini/src/bmi270/LICENSE` and each frozen source release.
 - [M5Unified](https://github.com/m5stack/M5Unified) 0.2.23 and [M5GFX](https://github.com/m5stack/M5GFX) 0.2.30: retain upstream MIT licenses when downloaded by the build.
 - [Arduino ESP32](https://github.com/espressif/arduino-esp32) 3.3.0: upstream LGPL-2.1 and component licenses apply. Toolchain sources are obtained by the build script; compiled firmware includes these components.
-- [esptool-js](https://github.com/espressif/esptool-js) 0.7.0: Apache-2.0; installed and bundled with its dependency licenses by npm/Vite.
-- [spark-md5](https://github.com/satazor/js-spark-md5) 3.0.2: MIT.
+- [esptool-js](https://github.com/espressif/esptool-js) 0.7.0: Apache-2.0; dependency of the retired GitHub Pages updater.
+- [spark-md5](https://github.com/satazor/js-spark-md5) 3.0.2: MIT; dependency of the retired GitHub Pages updater.
 
-Google Fonts serves DM Sans and Space Grotesk under the SIL Open Font License. USB data stays on the client; no analytics or device-data uploads are implemented.
+The retired GitHub Pages interface used DM Sans and Space Grotesk from Google Fonts under the SIL Open Font License. The compatibility page now contains only an HTML redirect and static artifacts. The maintained updater and its dependencies live in [Beywatch](https://github.com/shadohead/beywatch).
 
 ## Bosch BMI270 binary distribution notice
 
