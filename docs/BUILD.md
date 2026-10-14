@@ -1,6 +1,6 @@
 # Build a LaunchLab Mini - current QRE1113 kits
 
-[Parts list and quantities](../README.md#parts-list--build-your-own) are in the README.
+[Parts list and quantities](PARTS.md) are in the parts guide.
 Use an intact M5StickS3 K150 and the analog SparkFun QRE1113 breakout, ROB-09453.
 A digital-output or capacitor-timing QRE board is not interchangeable.
 M5StickC, C Plus and C Plus2 are different boards and are not supported by these firmware images.

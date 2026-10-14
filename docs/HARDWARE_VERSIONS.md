@@ -82,4 +82,4 @@ Every row links to a frozen local snapshot with source files, manufacturing STLs
 
 [Machine-readable inventory and SHA-256 hashes](../hardware/versions.json) identify all newly published files. Older versions remain available; no published firmware binary or existing v0.40 geometry was replaced. One v0.42 render had a stale local checksum; its original checksum list is preserved under `provenance/`, and the publication list records the final saved render. All original CAD/STL/STEP hashes matched.
 
-The [README exploded views](../README.md#exploded-assemblies) are rendered directly from these frozen STL meshes. Explosion distances and electronics/fastener references are illustrative. Digital CAD, archive and slicing checks do not establish printed fit, absolute RPM accuracy or launch-load retention.
+The [bundled hardware images](../site/public/hardware/images/) are rendered directly from these frozen STL meshes. Explosion distances and electronics/fastener references are illustrative. Digital CAD, archive and slicing checks do not establish printed fit, absolute RPM accuracy or launch-load retention.
