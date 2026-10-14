@@ -1,4 +1,4 @@
-# LaunchLab Mini for M5StickS3
+# LaunchLab for M5StickS3
 
 Current revision: **0.13.5-sticks3-idle-adc-pm** for **M5StickS3 K150 (ESP32-S3, 8 MB flash / 8 MB OPI PSRAM)**.
 One application supports analog QRE1113 and TCRT5000 through the saved Sensor profile setting.

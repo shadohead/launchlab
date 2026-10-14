@@ -1,10 +1,16 @@
 # Update, repair and rollback
 
-Firmware **0.12.1 is under investigation** after owner-reported unusually high readings and intermittent missed pulls.
-It is removed from the updater’s selections, with its source, tag and release files preserved.
-The updater defaults to the previous **0.11.2** release, runtime `0.11.2-sticks3-score-preview`, without claiming it fixes these symptoms.
+The [public USB updater](https://shadohead.github.io/launchlab/) currently recommends **0.13.5**, runtime `0.13.5-sticks3-idle-adc-pm`, for both QRE1113 and TCRT5000. The [release catalog](../site/public/firmware/versions.json) lists available targets; see the [current release notes](../firmware/releases/0.13.5-sticks3-idle-adc-pm/README.md) and [build context](FIRMWARE_0.13.5.md). The Beywatch website has a separate imported catalog, so check the version offered by the updater you use.
+
+Ordinary Update blocks downgrades and unknown or incomplete applications. Repair / rollback and First install require their own explicit confirmations. Current byte verification does not establish physical rollback, stock reinstall or reliable pull measurement. Follow the procedures below and keep private backups.
+
+## Historical 0.12.1 investigation
+
+Firmware **0.12.1 was placed under investigation** after owner-reported unusually high readings and intermittent missed pulls.
+It was removed from the updater’s selections, with its source, tag and release files preserved.
+At that time the updater defaulted to the previous **0.11.2** release, runtime `0.11.2-sticks3-score-preview`, without claiming it fixes these symptoms.
 Ordinary Update blocks downgrades; deliberate Repair / rollback still requires explicit confirmation.
-Earlier **0.11.1**, **0.10.22**, **0.10.21**, **0.10.14**, **0.10.11**, **0.10.7** and **0.10.1** remain selectable; the withdrawn 0.11.0 is recognised as an installed application so it can be updated, but is not offered.
+At that time, earlier **0.11.1**, **0.10.22**, **0.10.21**, **0.10.14**, **0.10.11**, **0.10.7** and **0.10.1** remained selectable; the withdrawn 0.11.0 is recognised as an installed application so it can be updated, but is not offered.
 These files target M5StickS3 K150 with an analog QRE1113 or TCRT5000 sensor: after installing, choose Menu → Settings → Sensor profile.
 The old TCRT 0.2.0 build remains separate.
 **0.11.1** is the user-checked prototype revision.
@@ -20,6 +26,8 @@ See [recovery guidance](RECOVERY.md).
 Both saved sensor profiles use one application.
 Older released identities and the previously installed 0.12.0 identity remain recognized.
 Complete post-write MD5 verification and deliberate repair for a different build sharing the same version are retained.
+
+## Update an existing LaunchLab
 
 1. Save important history/settings and a private full-device backup before flashing. There is no automatic browser backup. Do not upload a full flash dump to an issue.
 2. Open the USB updater in desktop Chrome or Edge with a data cable. Read the selected target version and confirm K150.
@@ -46,7 +54,7 @@ The partition-table image is limited to its 4 KB slot ending at `0x9000`; the ga
 
 Follow [Recovery and M5Stack software reinstall](RECOVERY.md) for the official M5Burner/StickS3 route, backup limits and failed-update steps. Vendor software reinstall does not restore original data/settings/calibration or identify the exact as-shipped demo. No vendor binary is hosted here; physical stock reinstall remains unverified.
 
-## Verification scope
+## Historical 0.12.1 verification scope
 
 The exact 0.12.1 application is 808064 bytes, SHA-256 `a13d590f11c3c8e8f8ab84a0b8ebd8d69761cf1046e2a0f9fd1d9c162d01ad41`.
 Its native app-only install, complete readback and complete backup retention passed.

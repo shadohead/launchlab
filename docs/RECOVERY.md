@@ -45,7 +45,11 @@ Use a direct USB connection and another known data cable; close apps holding the
 
 For [LaunchLab support](https://github.com/shadohead/launchlab/issues), include K150 identification, OS/browser, selected version/mode, the exact error, whether writing started, and a scrubbed installation log. Remove personal paths, port identifiers and other private details.
 
-## Current release gate
+## Release validation limits
+
+The public updater currently recommends [0.13.5](../firmware/releases/0.13.5-sticks3-idle-adc-pm/README.md). Its [build context](FIRMWARE_0.13.5.md) describes the current image and layout; a newer release does not establish physical browser recovery, stock reinstall or rollback.
+
+### Historical 0.11.1 prototype checks
 
 **0.11.1** is the user-checked prototype revision. It adds saved themes (Classic, Mint, Amber, Violet), a personal-best effect on the recap, and USB backup and restore of history, personal bests, appearance and settings (`K` export, `R` restore). It fixes 0.11.0, which restarted about once a second after boot (a loop-task stack overflow) and was withdrawn. One firmware still serves both sensors through the saved **Sensor profile** setting (QRE / Standard with an 80-count mark floor, TCRT5000 with 60). It was installed app-only on the owner's M5StickS3 K150: no restarts in a 120 s soak, history kept, a backup and restore round trip identical, and the screen, themes and pulls confirmed. The detector, sampling, thresholds and saved history format are unchanged from 0.10.22, which keeps measuring pulls that start right after an automatic save. Battery endurance, long-session reliability, absolute RPM/angle calibration, physical browser transfer and first install/rollback, and stock recovery remain separate checks.
 
