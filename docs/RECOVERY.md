@@ -43,7 +43,7 @@ Restoring a whole-device backup needs a separate model, provenance and security 
 
 Use a direct USB connection and another known data cable; close apps holding the port and re-enter download mode. Keep power steady. Check [Espressif's troubleshooting guide](https://docs.espressif.com/projects/esptool/en/latest/esp32s3/troubleshooting.html) if connection or verification keeps failing. If download mode remains unavailable, stop and contact support rather than repeatedly changing images or erasing flash.
 
-For [LaunchLab support](https://github.com/shadohead/launchlab-mini/issues), include K150 identification, OS/browser, selected version/mode, the exact error, whether writing started, and a scrubbed installation log. Remove personal paths, port identifiers and other private details.
+For [LaunchLab support](https://github.com/shadohead/launchlab/issues), include K150 identification, OS/browser, selected version/mode, the exact error, whether writing started, and a scrubbed installation log. Remove personal paths, port identifiers and other private details.
 
 ## Current release gate
 

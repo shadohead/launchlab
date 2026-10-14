@@ -1,6 +1,6 @@
 # Hardware and sensor versions
 
-LaunchLab Mini uses an intact M5StickS3 K150, one analog sensor and printed attachments.
+LaunchLab uses an intact M5StickS3 K150, one analog sensor and printed attachments.
 This page describes the bundled public snapshots. For newer Top Mount v19 and Sidecar v7 packages, use the [website downloads](https://launchlab.beywatch.gg/downloads) and matching build guide.
 The bundled shared sensor revisions are QRE1113 v102 and TCRT5000 v102.
 The bundled mount families are Top Mount v2 and Sidecar v2.
@@ -10,9 +10,9 @@ Sensor, mount-family and firmware versions are independent.
 
 | Kit | Sensor | M5 mount pair | Firmware |
 | --- | --- | --- | --- |
-| Compact | Analog SparkFun QRE1113, sensor attachment v102 | Top Mount v2 M5 snap cover and M5 cradle | Current 0.13.5, QRE / Standard profile |
-| Compact Sidecar | Analog SparkFun QRE1113, sensor attachment v102 | Sidecar v2 M5 snap cover and M5 cradle | Current 0.13.5, QRE / Standard profile |
-| Standard Sidecar | TCRT5000 / LM393 analog AO, sensor attachment v102 | Sidecar v2 M5 snap cover and M5 cradle | Current 0.13.5, TCRT5000 profile |
+| LaunchLab | Analog SparkFun QRE1113, sensor attachment v102 | Top Mount v2 M5 snap cover and M5 cradle | Current 0.13.5, QRE / Standard profile |
+| LaunchLab Sidecar | Analog SparkFun QRE1113, sensor attachment v102 | Sidecar v2 M5 snap cover and M5 cradle | Current 0.13.5, QRE / Standard profile |
+| LaunchLab TCRT5000 Sidecar | TCRT5000 / LM393 analog AO, sensor attachment v102 | Sidecar v2 M5 snap cover and M5 cradle | Current 0.13.5, TCRT5000 profile |
 
 Sidecar describes a separate sensor attachment and M5 display attachment beside it.
 Top Mount holds the M5 above the QRE sensor base; no TCRT Top Mount kit is supplied.

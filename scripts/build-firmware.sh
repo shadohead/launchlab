@@ -19,7 +19,7 @@ YAML
 if [[ -z "${LAUNCHLAB_PM_SDK:-}" ]]; then
   sdk_archive="$CACHE/launchlab-esp32s3-pm-sdk.tar.gz"
   if [[ ! -f "$sdk_archive" ]]; then
-    curl --fail --location --output "$sdk_archive" 'https://github.com/shadohead/launchlab-mini/releases/download/firmware-v0.13.5/launchlab-esp32s3-pm-sdk.tar.gz'
+    curl --fail --location --output "$sdk_archive" 'https://github.com/shadohead/launchlab/releases/download/firmware-v0.13.5/launchlab-esp32s3-pm-sdk.tar.gz'
   fi
   python3 - "$sdk_archive" <<'CHECK'
 import sys,hashlib

@@ -1,6 +1,6 @@
 # Firmware 0.13.5 build context
 
-The shipping runtime is `0.13.5-sticks3-idle-adc-pm`, application SHA-256 `0203763a133de42bf09dd3c5a93a6cbe074c974e815d8d5aff6d2541f6a88edf`. The compiled source snapshot is frozen in the [release directory](../firmware/releases/0.13.5-sticks3-idle-adc-pm/). Use the [USB updater](https://shadohead.github.io/launchlab-mini/) for the shipping image.
+The shipping runtime is `0.13.5-sticks3-idle-adc-pm`, application SHA-256 `0203763a133de42bf09dd3c5a93a6cbe074c974e815d8d5aff6d2541f6a88edf`. The compiled source snapshot is frozen in the [release directory](../firmware/releases/0.13.5-sticks3-idle-adc-pm/). Use the [USB updater](https://shadohead.github.io/launchlab/) for the shipping image.
 
 ## Build from source
 

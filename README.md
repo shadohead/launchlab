@@ -1,15 +1,15 @@
-# LaunchLab Mini
+# LaunchLab
 
 A removable practice meter for **Beyblade X string launchers**. An analog optical sensor measures launcher-shaft RPM; an **M5StickS3 K150** shows your peak, launch history, trends and tilt/rotation replay. The screen and battery are built in, so practice does not require a phone.
 
-**[Website & build guide](https://launchlab.beywatch.gg) · [Public USB updater](https://shadohead.github.io/launchlab-mini/) · [Releases](https://github.com/shadohead/launchlab-mini/releases)**
+**[Website & build guide](https://launchlab.beywatch.gg) · [Public USB updater](https://shadohead.github.io/launchlab/) · [Releases](https://github.com/shadohead/launchlab/releases)**
 
 ## Choose a build
 
 | Build | Sensor | Layout |
 | --- | --- | --- |
-| Compact | SparkFun analog QRE1113, ROB-09453 | Top Mount or Sidecar |
-| Standard | TCRT5000 / LM393, analog AO | Sidecar |
+| LaunchLab | SparkFun analog QRE1113, ROB-09453 | Top Mount or Sidecar |
+| LaunchLab (TCRT5000) | TCRT5000 / LM393, analog AO | Sidecar |
 
 Sidecar puts the M5 on a separate carrier beside the sensor. Both sensors use the same current firmware; select your Sensor profile in Settings. Use the cradle and screws supplied with your chosen release; a common part name does not establish interchangeability.
 

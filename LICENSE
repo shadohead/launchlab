@@ -1,4 +1,4 @@
-LaunchLab Mini uses separate licenses for software and hardware.
+LaunchLab uses separate licenses for software and hardware.
 
 Original LaunchLab firmware, website and utility scripts: MIT (see LICENSE-MIT).
 The vendored VQF implementation retains its upstream MIT license at
