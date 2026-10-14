@@ -1,11 +1,12 @@
 # Hardware and sensor versions
 
 LaunchLab Mini uses an intact M5StickS3 K150, one analog sensor and printed attachments.
-The current shared sensor revisions are QRE1113 v102 and TCRT5000 v102.
-The current mount families are Top Mount v2 and Sidecar v2.
+This page describes the bundled public snapshots. For newer Top Mount v19 and Sidecar v7 packages, use the [website downloads](https://launchlab.beywatch.gg/downloads) and matching build guide.
+The bundled shared sensor revisions are QRE1113 v102 and TCRT5000 v102.
+The bundled mount families are Top Mount v2 and Sidecar v2.
 Sensor, mount-family and firmware versions are independent.
 
-## Current kits
+## Bundled kits
 
 | Kit | Sensor | M5 mount pair | Firmware |
 | --- | --- | --- | --- |
@@ -21,6 +22,8 @@ Choose **Settings → Mounting → Top or Sidecar** to match the physical layout
 Saved CAD, STL readback and print-project audits passed; physical fit, retention, fatigue, optical alignment and absolute RPM calibration remain unverified for these current combinations.
 
 ## Current downloads
+
+These are this repository’s bundled v102/v2 files; use each newer website release’s own complete package.
 
 | Part set | Exact source package | P1S PLA source plate | P1S PETG source plate |
 | --- | --- | --- | --- |

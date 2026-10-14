@@ -1,4 +1,4 @@
-# Build a LaunchLab Mini - current QRE1113 kits
+# Build a LaunchLab Mini — bundled QRE1113 kits
 
 [Parts list and quantities](PARTS.md) are in the parts guide.
 Use an intact M5StickS3 K150 and the analog SparkFun QRE1113 breakout, ROB-09453.
