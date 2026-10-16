@@ -55,8 +55,9 @@ struct FakeAcquisition {
   AnalogTachometer detector;
   HistoryCheckpoint saved;
   unsigned begins=0,ends=0;
+  bool busy=false;
   bool request(Action action,uint32_t=0){
-    if(action==Action::IdleCheckpointBegin){++begins;saved=HistoryCheckpoint(detector);}
+    if(action==Action::IdleCheckpointBegin){++begins;if(busy)return false;saved=HistoryCheckpoint(detector);}
     else {++ends;saved.restore(detector);}
     return true;
   }
@@ -98,6 +99,15 @@ static void run(const char* name,bool ready,bool fail){
 #endif
 }
 int main(){
+#ifdef EXPECT_FIXED
+  reset(true,false);acquisition.busy=true;
+  for(unsigned i=0;i<250;++i){clockMs=300000+i*10;tickPowerLog(clockMs,{AnalogTachometer::Phase::Ready,0});}
+  assert(acquisition.begins==1 && !acquisition.ends && !powerPrefs.writes && powerLogDirty);
+  // A late release retries at the existing optional-log interval and saves.
+  acquisition.busy=false;clockMs=600000;
+  tickPowerLog(clockMs,{AnalogTachometer::Phase::Ready,0});
+  assert(acquisition.begins==2 && acquisition.ends==1 && powerPrefs.writes==1 && !powerLogDirty);
+#endif
   reset(true,false);
   for(unsigned i=0;i<250;++i){clockMs=300000+i*10;tickPowerLog(clockMs,{AnalogTachometer::Phase::Ready,0,true});}
   assert(acquisition.begins==0 && powerPrefs.writes==0 && powerLogDirty);

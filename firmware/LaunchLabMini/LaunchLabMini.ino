@@ -192,12 +192,13 @@ static bool startMotion() {
 }
 
 // Every flash write runs inside an ADC checkpoint (DMA cannot survive the
-// cache stall either). The same boundary keeps IMU transfers out of the stall.
-static void quietImuForFlash(Action action,bool done,bool ok) {
+// cache stall either). The same boundary keeps gated FIFO reads out of the stall.
+static bool quietImuForFlash(Action action,bool done,bool ok) {
   const bool writes=action==Action::IdleCheckpointBegin || action==Action::ShutdownBegin ||
     action==Action::HistoryIdleCheckpointBegin || action==Action::CheckpointBegin;
-  if(writes && !done)imuAcquisition.quiet();
+  if(writes && !done)return imuAcquisition.quiet();
   else if((writes && done && !ok) || (action==Action::CheckpointEnd && done))imuAcquisition.endQuiet();
+  return true;
 }
 
 LOOP_HELPER static void retryMotion(uint32_t now,const Snapshot &s) {
@@ -254,8 +255,10 @@ LOOP_HELPER static void tickPowerLog(uint32_t now,const Snapshot &s){
   // A resting owner already holds its checkpoint. Keep optional diagnostics
   // in RAM until motion resumes it or final shutdown flushes the log.
   if(!s.resting && powerLogReady && powerLogDirty && now-lastPowerSaveTry>=300000 &&
-    HistoryCheckpoint::practiceIdle(now,lastAcceptedAt,HISTORY_COALESCE_MS,motionPending,launchFeedback.shown(),s.phase)
-    && acquisition.request(Action::IdleCheckpointBegin,s.launches)){
+    HistoryCheckpoint::practiceIdle(now,lastAcceptedAt,HISTORY_COALESCE_MS,motionPending,launchFeedback.shown(),s.phase)){
+    // A busy/stuck IMU veto must not repeat the 250 ms preflight every UI tick.
+    lastPowerSaveTry=now;
+    if(!acquisition.request(Action::IdleCheckpointBegin,s.launches))return;
     if(!savePowerLog())Serial.println("POWER_LOG_NOTICE checkpoint_failed");acquisition.request(Action::CheckpointEnd);
   }
 }
@@ -1650,7 +1653,7 @@ LOOP_HELPER static void pollCommands(const Snapshot &s) {
     else if(c=='h')toggleHistory();
     else if(c=='c')nextView();
     else if(c=='e')exportMotion();
-    else if(c=='Q'){imuAcquisition.quiet(300);Serial.println("IMU_QUIET_TEST ms=300 flash_write=0");}
+    else if(c=='Q'){const bool ok=imuAcquisition.quiet(300);Serial.printf("IMU_QUIET_TEST ms=300 ok=%d flash_write=0\n",ok);}
     else if(c=='E')effectPreview=true;
     else if(c=='q') {
       if(tournamentMode){Serial.println("RECAP_DEMO_ERROR leave_tournament_first");continue;}

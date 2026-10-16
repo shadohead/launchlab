@@ -60,14 +60,18 @@ public:
   // which is reported and becomes an honest gap. The cap only guards against
   // a missing checkpoint end, which would also leave the optical ADC stopped.
   static constexpr uint32_t QUIET_MAX_MS=10000;
-  void quiet(uint32_t ms=QUIET_MAX_MS) {
+  static constexpr uint32_t QUIET_WAIT_MS=250;
+  bool quiet(uint32_t ms=QUIET_MAX_MS) {
     // A catch-up burst can outlast lock()'s ordinary 20 ms UI timeout.
-    // Establish quiescence before returning to a caller that may write flash.
-    if(gate_)while(xSemaphoreTake(gate_,portMAX_DELAY)!=pdTRUE){}
+    // Wait beyond the ~90 ms valid FIFO budget, but a stuck owner must defer
+    // the checkpoint rather than block saving/UI forever. Failure changes no
+    // quiet state; the request preflight must veto the flash checkpoint.
+    if(gate_ && xSemaphoreTake(gate_,pdMS_TO_TICKS(QUIET_WAIT_MS))!=pdTRUE)return false;
     const int64_t now=esp_timer_get_time();
     quietBeganMs_=uint32_t(now/1000);
     quietUntil_=now+int64_t(std::min(ms,QUIET_MAX_MS))*1000;
     unlock();
+    return true;
   }
   void endQuiet(){quietUntil_=0;quietEndedMs_=uint32_t(esp_timer_get_time()/1000);}
   uint32_t quietBeganMs()const{return quietBeganMs_;}

@@ -9,6 +9,7 @@ for suite in accel_range bmi270_fifo appearance nvs_budget best_effect_sound dev
 done
 "${CXX:-c++}" -std=c++17 -O1 -g -DVQF_SINGLE_PRECISION -fsanitize=address,undefined -fno-omit-frame-pointer -Ifirmware/tests/fakes/motion -Ifirmware/LaunchLabMini firmware/tests/test_motion_acquisition_timing.cpp firmware/LaunchLabMini/src/vqf/vqf.cpp -o "$TEST_BUILD/motion_acquisition_timing"
 "$TEST_BUILD/motion_acquisition_timing"
+python3 firmware/tests/check_checkpoint_barrier.py
 python3 firmware/tests/check_motion_playback.py
 python3 firmware/tests/check_motion_pipeline.py
 python3 firmware/tests/check_power_log_retry.py

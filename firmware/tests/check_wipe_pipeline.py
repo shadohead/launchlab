@@ -86,7 +86,7 @@ struct M5Fake {
 }M5;
 struct IdleFake {template<class F>bool run(F fn){return fn();}};
 static IdleFake &pm1Idle(){static IdleFake idle;return idle;}
-struct {bool available=true;bool lock(){return available;}void unlock(){}void quiet(uint32_t){}}imuAcquisition;
+struct {bool available=true;bool lock(){return available;}void unlock(){}bool quiet(uint32_t){return available;}}imuAcquisition;
 static Controls::State controls;static Controls::Gesture gestureA,gestureB;
 static WipeConfirmation wipeConfirmation;
 static bool wipeFailed=false,wipeBlocked=false,wipeComplete=false;

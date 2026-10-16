@@ -6,6 +6,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 namespace Bmi270Fifo {
 bool readRegisters(uint8_t,uint8_t*,size_t);
@@ -33,6 +34,33 @@ void reset(){
   reads=flushes=0;lengthUs=100;burstUs=48000;failLength=failData=false;batch(120);
 }
 void poll(){try{MotionFake::task();}catch(const Finished&) {}}
+// Also compile against the preceding void-returning implementation to prove
+// its unbounded-wait regression, independently of the API change.
+template<class Owner> bool attemptQuiet(Owner &owner){
+  if constexpr(std::is_same_v<decltype(owner.quiet()),bool>)return owner.quiet();
+  else {owner.quiet();return true;}
+}
+void boundedWaitTest(){
+  reset();StickS3MotionAcquisition owner;check(owner.begin(),"begin failed");
+  auto *gate=MotionFake::gates[0].get();gate->availableAt=MotionFake::now+60000000;
+  const int64_t started=MotionFake::now;
+  const bool ok=attemptQuiet(owner);
+  std::cout<<"bounded quiet: 60 s held gate, wait="<<MotionFake::now-started<<" us, accepted="<<ok<<'\n';
+  check(MotionFake::now-started<=250000,"checkpoint preflight exceeded its bounded gate wait");
+  check(!ok && !owner.quietBeganMs() && !owner.quietEndedMs(),"busy gate changed quiet state or accepted the checkpoint");
+  // An owner that never releases (including an accidental recursive caller)
+  // must also fail without retrying forever or publishing a quiet window.
+  gate->unavailable=true;
+  check(!attemptQuiet(owner) && MotionFake::now-started==500000,"unavailable gate did not fail within one wait");
+  gate->unavailable=false;gate->availableAt=MotionFake::now;
+  MotionFake::afterPoll=[]{throw Finished{};};poll();check(reads==1,"failed preflight suppressed subsequent reads");
+  // A later failure must preserve an existing quiet window and its markers.
+  check(attemptQuiet(owner),"retry failed after the owner released the gate");
+  const auto began=owner.quietBeganMs();gate->unavailable=true;
+  check(!attemptQuiet(owner) && owner.quietBeganMs()==began && !owner.quietEndedMs(),"timeout overwrote an existing quiet window");
+  gate->unavailable=false;poll();check(reads==1,"timeout cancelled an existing quiet window");
+  owner.endQuiet();poll();check(reads==2,"endQuiet failed after a timeout");
+}
 void quietTest(){
   // No gate exists if the sensor never started.
   {StickS3MotionAcquisition inactive;inactive.quiet();inactive.endQuiet();}
@@ -111,6 +139,7 @@ bool writeRegister(uint8_t reg,uint8_t value){
 int main(int argc,char** argv){
   try{
     if(argc==1 || std::string(argv[1])=="quiet")quietTest();
+    if(argc==1 || std::string(argv[1])=="bounded")boundedWaitTest();
     if(argc==1 || std::string(argv[1])=="timestamp")timestampTest();
     std::cout<<"PASS: acquisition timing regressions\n";
   }catch(const std::exception& e){std::cerr<<"FAIL: "<<e.what()<<'\n';return 1;}

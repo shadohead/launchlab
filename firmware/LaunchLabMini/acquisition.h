@@ -68,11 +68,13 @@ public:
     if(!commands_ || !replies_ || !events_)return false;
     return xTaskCreatePinnedToCore(taskEntry,"optical",8192,this,3,&task_,0)==pdPASS;
   }
-  // Observes every request before it is sent and after its reply (or failure).
-  using RequestHook=void(*)(Action action,bool done,bool ok);
+  // Preflight may veto before enqueueing or stopping the ADC. A veto changes
+  // no ownership and has no completion callback. An accepted request reports
+  // its reply/failure so the hook can release any established quiet window.
+  using RequestHook=bool(*)(Action action,bool done,bool ok);
   void setRequestHook(RequestHook hook){hook_=hook;}
   bool request(Action action,uint32_t value=0) {
-    if(hook_)hook_(action,false,false);
+    if(hook_ && !hook_(action,false,false))return false;
     const bool ok=send(action,value);
     if(hook_)hook_(action,true,ok);
     return ok;

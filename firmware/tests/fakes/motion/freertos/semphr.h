@@ -6,7 +6,7 @@
 #include <vector>
 using TickType_t=uint32_t;
 using TaskHandle_t=void*;
-struct MotionFakeMutex {int64_t availableAt=0;};
+struct MotionFakeMutex {int64_t availableAt=0;bool unavailable=false;};
 using SemaphoreHandle_t=MotionFakeMutex*;
 static constexpr int pdTRUE=1,pdPASS=1;
 static constexpr TickType_t portMAX_DELAY=UINT32_MAX;
@@ -21,6 +21,7 @@ inline SemaphoreHandle_t xSemaphoreCreateMutex(){
 // Virtual blocking: an in-flight bus owner releases at availableAt. No sleeps,
 // host scheduling or wall-clock races are involved in these regression tests.
 inline int xSemaphoreTake(SemaphoreHandle_t gate,TickType_t timeout){
+  if(gate->unavailable){MotionFake::now+=int64_t(timeout)*1000;return 0;}
   if(gate->availableAt>MotionFake::now){
     if(timeout!=portMAX_DELAY && gate->availableAt-MotionFake::now>int64_t(timeout)*1000){
       MotionFake::now+=int64_t(timeout)*1000;return 0;
