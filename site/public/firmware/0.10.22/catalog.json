@@ -468,6 +468,15 @@
       "md5": "7ff2cc3246a3d67d52f3e1e79a65dfe3",
       "elfSha256": "8ae3448af70f3251e42adf7f2f7d88734d8c1c0b61f9ae3b62494203cdf01bd8",
       "sensor": "qre1113"
+    },
+    {
+      "version": "0.13.7",
+      "runtime": "0.13.7-sticks3-accel-16g-pm",
+      "size": 838800,
+      "sha256": "83aa6b7610241e45ae5ed2957b958576886967eacdef19e72c7ad5e836f96e52",
+      "md5": "5c10e7c3567ab2faccd20867a89ca298",
+      "elfSha256": "6aa656f3af9063861422d8e55493f26ea9a808386b23bed10f5e8c2d92b999fc",
+      "sensor": "qre1113"
     }
   ]
 }

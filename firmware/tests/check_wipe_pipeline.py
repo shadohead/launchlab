@@ -37,6 +37,7 @@ def function(source, name, result="void", static=True):
 
 PREFIX = r'''
 #include "controls.h"
+#include "accel_range.h"
 #include "wipe_confirmation.h"
 #include "device_wipe.h"
 #include "analog_tachometer.h"
@@ -85,7 +86,7 @@ struct M5Fake {
 }M5;
 struct IdleFake {template<class F>bool run(F fn){return fn();}};
 static IdleFake &pm1Idle(){static IdleFake idle;return idle;}
-struct {bool available=true;bool lock(){return available;}void unlock(){}}imuAcquisition;
+struct {bool available=true;bool lock(){return available;}void unlock(){}void quiet(uint32_t){}}imuAcquisition;
 static Controls::State controls;static Controls::Gesture gestureA,gestureB;
 static WipeConfirmation wipeConfirmation;
 static bool wipeFailed=false,wipeBlocked=false,wipeComplete=false;
@@ -177,6 +178,9 @@ static void finishMotion(){normal();}static void retryMotion(uint32_t,const Snap
 static void saveHistory(uint32_t,const Snapshot &){normal();}
 static void pollBattery(uint32_t,const Snapshot &){normal();}static void tickPowerLog(uint32_t,const Snapshot &){normal();}
 static void pollUsbAwake(uint32_t,const Snapshot &){normal();}static void tickSound(const Snapshot &){normal();}
+// Side-key power-off has its own production harness; its wipe guard is tested there.
+static bool powerKeyRequested=false;static uint32_t powerKeyRequestedAt=0;
+static void pollPowerKey(uint32_t){}static void powerKeyOff(uint32_t,const Snapshot &){}
 static void beginWipe();static void cancelWipe();
 namespace DeviceWipe {
 // Host replacement of the platform adapter only. The transaction core above

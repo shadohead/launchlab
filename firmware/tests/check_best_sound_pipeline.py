@@ -43,6 +43,7 @@ prefix = r'''
 #include "analog_tachometer.h"
 #include "best_effect_sound.h"
 #include "controls.h"
+#include "accel_range.h"
 #include "launch_feedback.h"
 #include "launch_motion.h"
 #include "practice_history.h"

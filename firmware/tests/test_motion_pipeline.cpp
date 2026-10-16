@@ -27,6 +27,7 @@ public:
   bool contains(const char *s)const{return std::find(text.begin(),text.end(),s)!=text.end();}
 };
 }
+#include "../LaunchLabMini/accel_range.h"
 #include "../LaunchLabMini/motion_ui.h"
 #include "../LaunchLabMini/launch_feedback.h"
 #include "../LaunchLabMini/appearance_store.h"
@@ -95,6 +96,8 @@ static void pollBattery(uint32_t,const Snapshot&){}
 // exercised with the actual startup/retry functions in check_imu_startup.py.
 static void retryMotion(uint32_t,const Snapshot&){}
 static void pollUsbAwake(uint32_t,const Snapshot&,bool=false){}static void tickPowerLog(uint32_t,const Snapshot&){}static void autoPowerOff(uint32_t,const Snapshot&){}
+// Side-key power-off has its own production harness (check_power_key_pipeline.py).
+static void powerKeyOff(uint32_t,const Snapshot&){}
 // Display electrical policy is exercised separately by check_idle_power_pipeline.
 static void tickDisplayPower(uint32_t,const Snapshot&){}
 // Sound playback is device-only; its scheduling has no effect on capture or drawing here.

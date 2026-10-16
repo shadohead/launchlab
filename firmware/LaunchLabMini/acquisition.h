@@ -68,16 +68,14 @@ public:
     if(!commands_ || !replies_ || !events_)return false;
     return xTaskCreatePinnedToCore(taskEntry,"optical",8192,this,3,&task_,0)==pdPASS;
   }
+  // Observes every request before it is sent and after its reply (or failure).
+  using RequestHook=void(*)(Action action,bool done,bool ok);
+  void setRequestHook(RequestHook hook){hook_=hook;}
   bool request(Action action,uint32_t value=0) {
-    if(!task_)return false;
-    const Command command{action,value,++requestId_};
-    if(xQueueSend(commands_,&command,pdMS_TO_TICKS(100))!=pdTRUE)return false;
-    const TickType_t started=xTaskGetTickCount(),timeout=pdMS_TO_TICKS(2000);
-    Reply reply{};
-    while(xTaskGetTickCount()-started<timeout) {
-      if(xQueueReceive(replies_,&reply,pdMS_TO_TICKS(20))==pdTRUE && reply.id==command.id)return reply.ok;
-    }
-    return false;
+    if(hook_)hook_(action,false,false);
+    const bool ok=send(action,value);
+    if(hook_)hook_(action,true,ok);
+    return ok;
   }
   Snapshot snapshot() {
     portENTER_CRITICAL(&snapshotMux_);Snapshot copy=snapshot_;portEXIT_CRITICAL(&snapshotMux_);return copy;
@@ -91,6 +89,18 @@ public:
     portENTER_CRITICAL(&marksMux_);pendingMarks_|=start?0x8000:0x4000;portEXIT_CRITICAL(&marksMux_);
   }
 private:
+  RequestHook hook_=nullptr;
+  bool send(Action action,uint32_t value) {
+    if(!task_)return false;
+    const Command command{action,value,++requestId_};
+    if(xQueueSend(commands_,&command,pdMS_TO_TICKS(100))!=pdTRUE)return false;
+    const TickType_t started=xTaskGetTickCount(),timeout=pdMS_TO_TICKS(2000);
+    Reply reply{};
+    while(xTaskGetTickCount()-started<timeout) {
+      if(xQueueReceive(replies_,&reply,pdMS_TO_TICKS(20))==pdTRUE && reply.id==command.id)return reply.ok;
+    }
+    return false;
+  }
   struct Command {Action action;uint32_t value;uint32_t id;};
   struct Reply {uint32_t id;bool ok;};
   uint16_t *storage_=nullptr;

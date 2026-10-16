@@ -751,5 +751,19 @@
       "qre1113",
       "tcrt5000"
     ]
+  },
+  {
+    "release": "0.13.7-sticks3-accel-16g-pm",
+    "runtime_version": "0.13.7-sticks3-accel-16g-pm",
+    "board": "M5StickS3 K150",
+    "date": "2026-10-16",
+    "binary": "LaunchLabMini.ino.bin",
+    "binary_bytes": 838800,
+    "sha256": "83aa6b7610241e45ae5ed2957b958576886967eacdef19e72c7ad5e836f96e52",
+    "application_offset": "0x10000",
+    "profiles": [
+      "qre1113",
+      "tcrt5000"
+    ]
   }
 ]

@@ -22,6 +22,17 @@ def function(name):
         cursor+=1
     return source[start:cursor]
 
+def shutdown_flush():
+    # Shared save-before-power-down helper with its result type.
+    start = source.index("static ShutdownFlush flushForShutdown(")
+    cursor = source.index("{", start) + 1
+    depth = 1
+    while depth:
+        depth += (source[cursor] == "{") - (source[cursor] == "}")
+        cursor += 1
+    enum = source.index("enum class ShutdownFlush")
+    return source[enum:source.index("};", enum) + 2] + "\n" + source[start:cursor]
+
 prefix=r'''
 #include "usb_awake.h"
 #include "power_status.h"
@@ -219,7 +230,7 @@ int main(){
 '''
 with tempfile.TemporaryDirectory() as tmp:
     cpp=pathlib.Path(tmp)/'usb_pipeline.cpp'
-    cpp.write_text(prefix+function('pollUsbAwake')+'\n'+function('autoPowerOff')+tests)
+    cpp.write_text(prefix+function('pollUsbAwake')+'\n'+shutdown_flush()+'\n'+function('autoPowerOff')+tests)
     exe=pathlib.Path(tmp)/'usb_pipeline'
     cmd=['c++','-std=c++17','-O1','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer',
          '-I'+str(args.firmware/'tests/fakes'),'-I'+str(args.firmware/'LaunchLabMini'),'-I'+str(args.firmware/'LaunchLabRpm'),str(cpp),'-o',str(exe)]

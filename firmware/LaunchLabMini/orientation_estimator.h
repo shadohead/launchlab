@@ -39,6 +39,8 @@ public:
       filter_.updateAcc(acceleration);
       emit(result(raw));return;
     }
+    // A grid sample touching a full-scale reading on either side is approximate.
+    const bool saturated=previous_.saturated || raw.saturated;
     // Integrate each piece of the measured gyro interval onto the fixed grid.
     // This preserves actual elapsed time even when USB/I2C polling jitters.
     uint64_t cursor=previous_.us;
@@ -48,7 +50,7 @@ public:
       const float f1=float(end-previous_.us)/float(raw.us-previous_.us);
       for(unsigned j=0;j<3;++j)integral_[j]+=(previous_.g[j]+(raw.g[j]-previous_.g[j])*(f0+f1)*.5f)*(end-cursor);
       if(end==next_) {
-        LaunchMotion::Sample sample;sample.us=next_;vqf_real_t rate[3],acceleration[3];
+        LaunchMotion::Sample sample;sample.us=next_;sample.saturated=saturated;vqf_real_t rate[3],acceleration[3];
         for(unsigned j=0;j<3;++j) {
           sample.a[j]=previous_.a[j]+(raw.a[j]-previous_.a[j])*f1;
           sample.g[j]=integral_[j]/STEP_US;integral_[j]=0;

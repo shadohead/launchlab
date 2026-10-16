@@ -72,7 +72,12 @@ struct Trace {
   uint32_t number=0,durationMs=0;
   float rpm=0;
   unsigned count=0;
-  bool stationaryBias=false,fused=false;
+  bool stationaryBias=false,fused=false,saturated=false;
+  // Largest single-axis reading from optical onset through post-roll, in the
+  // launcher frame. Diagnostics only; never stored or compared.
+  float peakAccelG=0,peakGyroDps=0;
+  // Time of the first rejected sample relative to optical onset, if any.
+  static constexpr int32_t NO_ISSUE=INT32_MIN;int32_t issueMs=NO_ISSUE;
   float gravity[3]={};
   StickS3Level::Reading startLevel,endLevel;
   Point points[POINTS];
@@ -81,8 +86,11 @@ struct Trace {
 };
 // q maps the sensor axes to a gravity-aligned frame; heading is arbitrary.
 // Fusion runs continuously before trace reduction. g is bias-corrected deg/s.
+// clipped: unusable (non-finite) data. saturated: a finite reading at sensor
+// full scale. Fusion continues through saturation, which under-reads the true
+// rate, so a trace containing it is kept but marked approximate.
 struct Sample {uint64_t us=0;float a[3]={},g[3]={};Quaternion q;
-  bool clipped=false,fused=false,settled=false,stationary=false;};
+  bool clipped=false,saturated=false,fused=false,settled=false,stationary=false;};
 static constexpr uint64_t PRE_ROLL_US=500000,POST_ROLL_US=150000;
 inline bool captureReady(uint64_t now,uint64_t end,uint64_t latestFused) {
   // Resampling can lag the newest raw poll by one grid interval. Only fused
@@ -134,12 +142,18 @@ public:
       for(unsigned j=0;j<3;++j)if(!std::isfinite(s.a[j]) || !std::isfinite(s.g[j]))return Quality::Clipped;
       return Quality::Valid;
     };
+    for(unsigned i=onset;i<=stop;++i)for(unsigned j=0;j<3;++j) {
+      const auto &s=at(i);
+      if(std::isfinite(s.a[j]))out.peakAccelG=std::max(out.peakAccelG,std::fabs(s.a[j]));
+      if(std::isfinite(s.g[j]))out.peakGyroDps=std::max(out.peakGyroDps,std::fabs(s.g[j]));
+    }
     // Optical onset through the measured post-roll is mandatory. A gap or
     // unsettled pose in the actual pull is never trimmed or interpolated over.
     for(unsigned i=onset;i<=stop;++i) {
       const auto &s=at(i);
-      if(i>onset && s.us-at(i-1).us>35000){out.quality=Quality::Gap;return out;}
-      const auto q=quality(s);if(q!=Quality::Valid){out.quality=q;return out;}
+      const int32_t ms=int32_t((int64_t(s.us)-int64_t(start))/1000);
+      if(i>onset && s.us-at(i-1).us>35000){out.quality=Quality::Gap;out.issueMs=ms;return out;}
+      const auto q=quality(s);if(q!=Quality::Valid){out.quality=q;out.issueMs=ms;return out;}
     }
     // Pre-launch context is optional. Keep only its newest continuous, settled
     // segment instead of rejecting a healthy pull for older startup/gap data.
@@ -148,6 +162,7 @@ public:
           quality(at(begin-1))==Quality::Valid)--begin;
     const uint64_t first=std::max(desiredFirst,at(begin).us);
     for(unsigned i=begin;i<=stop;++i)out.stationaryBias|=at(i).stationary;
+    for(unsigned i=onset;i<=stop;++i)out.saturated|=at(i).saturated;
     // Gravity comes from continuous orientation fusion, never from a moving
     // acceleration average. Acceleration is retained for diagnostics only.
     out.gravity[2]=1;out.fused=true;
@@ -234,7 +249,7 @@ inline void encode(const Trace &t,uint32_t generation,Image &image) {
   put32(image.data()+12,t.number);uint32_t rpm;std::memcpy(&rpm,&t.rpm,4);put32(image.data()+16,rpm);
   put32(image.data()+20,t.durationMs);put32(image.data()+24,generation);
   for(unsigned j=0;j<3;++j)put16(image.data()+28+j*2,int16_t(std::lround(t.gravity[j]*1000)));
-  image[34]=t.stationaryBias;image[35]=t.fused;
+  image[34]=t.stationaryBias;image[35]=t.fused;image[52]=t.saturated;
   for(unsigned i=0;i<2;++i) {
     const auto &level=i?t.endLevel:t.startLevel;auto *p=image.data()+36+i*8;
     if(level.valid()) {
@@ -254,7 +269,7 @@ inline bool decode(const Image &image,Trace &out,uint32_t &generation) {
   const uint32_t schema=get32(p+4);
   if(get32(p)!=0x544f4d4c || (schema!=1 && schema!=2 && schema!=3 && schema!=4) || get32(p+IMAGE_BYTES-4)!=checksum(p,IMAGE_BYTES-4))return false;
   const unsigned count=get32(p+8);if(count<12 || count>Trace::POINTS)return false;
-  Trace t;t.fused=schema>=4 && p[35]!=0;t.stationaryBias=schema==1 || p[34]!=0;t.count=count;t.number=get32(p+12);const uint32_t rpm=get32(p+16);std::memcpy(&t.rpm,&rpm,4);
+  Trace t;t.fused=schema>=4 && p[35]!=0;t.saturated=schema>=4 && p[52]!=0;t.stationaryBias=schema==1 || p[34]!=0;t.count=count;t.number=get32(p+12);const uint32_t rpm=get32(p+16);std::memcpy(&t.rpm,&rpm,4);
   t.durationMs=get32(p+20);if(!std::isfinite(t.rpm) || t.rpm<1000 || t.durationMs>2500)return false;
   for(unsigned j=0;j<3;++j)t.gravity[j]=get16(p+28+j*2)*.001f;
   for(unsigned i=0;i<count;++i) {

@@ -54,6 +54,8 @@ struct FakeImu {
   void setCalibration(int,int,int){++calibrations;}
 };
 struct FakeM5 {FakeImu Imu;int In_I2C=0;} M5;
+static unsigned rangeConfigs=0,rangeFailures=0;
+static bool configureMotionSensor(){++rangeConfigs;if(rangeFailures){--rangeFailures;return false;}return M5.Imu.enabled;}
 struct FakeSerial {template<class... T>void printf(const char*,T...){}}Serial;
 using TaskHandle_t=void*;
 using SemaphoreHandle_t=void*;
@@ -85,7 +87,7 @@ struct Snapshot {AnalogTachometer::Phase phase=AnalogTachometer::Phase::Ready;};
 '''
 tests = r'''
 static void reset(){
-  clockMs=100;M5=FakeM5{};imuAcquisition=FakeAcquisition{};
+  clockMs=100;M5=FakeM5{};imuAcquisition=FakeAcquisition{};rangeConfigs=rangeFailures=0;
   mutexCalls=taskCalls=mutexFailures=taskFailures=0;
   motionInitAttempts=lastMotionInit=0;
   motionInitPaired=motionInitSuccess=motionPending=dirty=false;
@@ -108,7 +110,17 @@ int main(){
   assert(M5.Imu.begins==3 && mutexCalls==2 && taskCalls==1);
   unsigned reads=M5.Imu.reads;assert(startMotion());
   assert(motionInitAttempts==3 && M5.Imu.reads==reads);
+  assert(rangeConfigs==1);
   std::cout<<"cold boot: two failed detections recover on third attempt; real paired moving data required\n";
+
+  // M5 begin resets the BMI270 to 8 g. Fusion never starts on an unverified
+  // range: an unreadable range forces re-detection, then a later retry.
+  reset();M5.Imu.enabled=true;assert(startMotion() && rangeConfigs==1 && M5.Imu.begins==0);
+  reset();M5.Imu.enabled=true;rangeFailures=1;
+  assert(startMotion() && rangeConfigs==2 && M5.Imu.begins==1 && imuAcquisition.running());
+  reset();M5.Imu.enabled=true;rangeFailures=2;
+  assert(!startMotion() && rangeConfigs==2 && M5.Imu.begins==1 && !imuAcquisition.running() && M5.Imu.reads==0);
+  std::cout<<"range: configured after every detection; unverified range blocks fusion start\n";
 
   reset();M5.Imu.enabled=true;M5.Imu.stale=true;
   assert(startMotion() && M5.Imu.begins==1 && clockMs>=380);

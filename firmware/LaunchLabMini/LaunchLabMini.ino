@@ -45,9 +45,9 @@
 // real calls so each one uses stack only while it runs.
 #define LOOP_HELPER __attribute__((noinline))
 #if LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = "0.13.5-sticks3-idle-adc-pm";
+static constexpr char VERSION[] = "0.13.7-sticks3-accel-16g-pm";
 #else
-static constexpr char VERSION[] = "0.13.5-sticks3-idle-adc";
+static constexpr char VERSION[] = "0.13.7-sticks3-accel-16g";
 #endif
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ
@@ -104,6 +104,11 @@ static SensorIdle sensorIdle;
 static UsbHostAwake usbAwake;
 static bool usbAutoOffInhibited=false;
 static StickS3ShakeWake shakeWake;
+// A side-key click is latched by the G13 edge ISR and acted on by the loop.
+static volatile bool powerKeyIrq=false;
+static bool powerKeyRequested=false;
+static uint32_t powerKeyRequestedAt=0,lastPowerKeyRead=0;
+static constexpr uint32_t POWER_KEY_WAIT_MS=10000;
 static bool settingsSaveError=false;
 static uint8_t brightnessPercent=40;
 static bool displayFlipped=false;
@@ -148,6 +153,7 @@ static AnalogTachometer::Phase lastPhase=AnalogTachometer::Phase::Paused;
 static bool lastFault=false;
 using Action=StickS3Acquisition::Action;
 using Snapshot=StickS3Acquisition::Snapshot;
+enum class ShutdownFlush:uint8_t {Busy,NewPull,SaveFailed,Ready};
 
 static bool motionSensorPaired() {
   // isEnabled only establishes driver detection. Require an actual new paired
@@ -172,16 +178,26 @@ static bool startMotion() {
   // No IMU owner exists here. Main-thread power/level calls are serialized;
   // only the missing IMU is reinitialized, not M5 or optical acquisition.
   ++motionInitAttempts;lastMotionInit=millis();
-  motionInitPaired=M5.Imu.isEnabled() && motionSensorPaired();
+  // Every M5 begin resets the BMI270 range and FIFO; both must follow detection.
+  motionInitPaired=M5.Imu.isEnabled() && configureMotionSensor() && motionSensorPaired();
   if(!motionInitPaired) {
     const bool detected=M5.Imu.begin(&M5.In_I2C,m5::board_t::board_M5StickS3);
-    motionInitPaired=detected && motionSensorPaired();
+    motionInitPaired=detected && configureMotionSensor() && motionSensorPaired();
   }
   motionInitSuccess=motionInitPaired && imuAcquisition.setMount(mountMode) && imuAcquisition.begin();
   Serial.printf("IMU_STARTUP attempt=%lu enabled=%d type=%d paired=%d task=%d elapsed_ms=%lu\n",
     (unsigned long)motionInitAttempts,M5.Imu.isEnabled(),int(M5.Imu.getType()),motionInitPaired,
     imuAcquisition.running(),(unsigned long)(millis()-lastMotionInit));
   return motionInitSuccess;
+}
+
+// Every flash write runs inside an ADC checkpoint (DMA cannot survive the
+// cache stall either). The same boundary keeps IMU transfers out of the stall.
+static void quietImuForFlash(Action action,bool done,bool ok) {
+  const bool writes=action==Action::IdleCheckpointBegin || action==Action::ShutdownBegin ||
+    action==Action::HistoryIdleCheckpointBegin || action==Action::CheckpointBegin;
+  if(writes && !done)imuAcquisition.quiet();
+  else if((writes && done && !ok) || (action==Action::CheckpointEnd && done))imuAcquisition.endQuiet();
 }
 
 LOOP_HELPER static void retryMotion(uint32_t now,const Snapshot &s) {
@@ -340,6 +356,8 @@ LOOP_HELPER static void status() {
   Serial.printf("POWER_DETAIL uptime_s=%lu cpu_mhz=%lu backlight=%u pm1_cfg_valid=%d pm1_cfg=0x%02x led_enabled=%d current_measurement=unavailable\n",
     (unsigned long)(now/1000),(unsigned long)ESP.getCpuFreqMHz(),unsigned(M5.Display.getBrightness()),
     powerConfigValid,powerConfig,powerConfigValid?int(bool(powerConfig&0x10)):-1);
+  Serial.printf("POWER_KEY single_click=%s pending=%d clear_failures=%lu\n",
+    powerKey().configured()?"firmware_power_off":"pm1_reset",powerKeyRequested,(unsigned long)powerKey().clearFailures());
   Serial.printf("CPU_PM requested=%d enabled=%d min_mhz=%u max_mhz=80 light_sleep=0 error=%s\n",
     LAUNCHLAB_CPU_PM,CpuPower::active(),CpuPower::active()?40u:80u,CpuPower::errorName());
   Serial.printf("POWER_POLICY effective_timeout_s=%lu unused_shake=%d dim_after_ms=%lu level_poll_ms=%lu ui_poll_ms=%lu battery_estimate_mv=%u battery_estimate=voltage_median5\n",
@@ -378,6 +396,22 @@ LOOP_HELPER static void status() {
   Serial.printf("ORIENTATION_STATUS algorithm=VQF6D position=disabled absolute_heading=disabled ready=%d rest=%d updates=%lu resets=%lu max_fusion_us=%lu bias_dps=%.4f,%.4f,%.4f bias_sigma_dps=%.4f\n",
     imu.orientationReady,imu.rest,(unsigned long)imu.fusionSamples,(unsigned long)imu.fusionResets,
     (unsigned long)imu.maxFusionUs,imu.bias[0],imu.bias[1],imu.bias[2],imu.biasSigma);
+  Serial.printf("IMU_FIFO_STATUS reads=%lu errors=%lu skipped_frames=%lu anchors=%lu max_bytes=%lu period_us=%.1f gyro_samples=%lu accel_samples=%lu flash_quiet_polls=%lu length_errors=%lu data_errors=%lu parse_errors=%lu oversize=%lu overflows=%lu stalls=%lu last_stall_us=%lu last_stall_ms=%lu last_error_bytes=%lu last_error_offset=%lu last_error_ms=%lu last_quiet_ms=%lu..%lu\n",
+    (unsigned long)imu.fifoReads,(unsigned long)imu.fifoErrors,(unsigned long)imu.fifoSkipped,(unsigned long)imu.fifoAnchors,
+    (unsigned long)imu.fifoMaxBytes,imu.fifoPeriodUs,(unsigned long)imu.pairedSamples,(unsigned long)imu.accelSamples,(unsigned long)imu.quietPolls,
+    (unsigned long)imu.fifoLengthErrors,(unsigned long)imu.fifoDataErrors,(unsigned long)imu.fifoParseErrors,(unsigned long)imu.fifoOversize,(unsigned long)imu.fifoOverflows,
+    (unsigned long)imu.fifoStalls,(unsigned long)imu.lastStallUs,(unsigned long)imu.lastStallMs,
+    (unsigned long)imu.lastErrorBytes,(unsigned long)imu.lastErrorOffset,(unsigned long)imu.lastErrorMs,
+    (unsigned long)imuAcquisition.quietBeganMs(),(unsigned long)imuAcquisition.quietEndedMs());
+  Serial.printf("MOTION_CLIP accel_range_g=%.0f gyro_range_dps=%.0f samples=%lu max_run=%lu last_run=%lu last_ms=%lu last_axes=0x%02lx\n",
+    accelRange().fullScaleG(),StickS3AccelRange::GYRO_FULL_SCALE_DPS,(unsigned long)imu.clipSamples,(unsigned long)imu.maxClipRun,
+    (unsigned long)imu.lastClipRun,(unsigned long)imu.lastClipMs,(unsigned long)imu.lastClipAxes);
+  for(unsigned i=imu.gapNext>StickS3MotionAcquisition::Snapshot::GAPS?imu.gapNext-StickS3MotionAcquisition::Snapshot::GAPS:0;i<imu.gapNext;++i) {
+    const auto &g=imu.gapLog[i%StickS3MotionAcquisition::Snapshot::GAPS];
+    Serial.printf("MOTION_GAP n=%u at_ms=%lu gap_us=%lu polls=%lu empty_polls=%lu max_period_us=%lu max_lock_us=%lu max_poll_us=%lu max_ring_us=%lu\n",
+      i+1,(unsigned long)g.atMs,(unsigned long)g.gapUs,(unsigned long)g.polls,(unsigned long)g.emptyPolls,
+      (unsigned long)g.periodUs,(unsigned long)g.lockUs,(unsigned long)g.pollUs,(unsigned long)g.ringUs);
+  }
 }
 
 // No serial reader is needed: isPlugged() uses IDF's SOF monitor, not CDC I/O.
@@ -656,7 +690,8 @@ LOOP_HELPER static void pollLevel(uint32_t now) {
   // update's returned accel bit establishes freshness; cached data is not a new sample.
   if(M5.Imu.update() & m5::IMU_Class::sensor_mask_accel) {
     const auto data=M5.Imu.getImuData();
-    const float native[3]={data.accel.x,data.accel.y,data.accel.z};float mapped[3];
+    const auto &range=accelRange();
+    const float native[3]={range.toG(data.accel.x),range.toG(data.accel.y),range.toG(data.accel.z)};float mapped[3];
     MountOrientation::mapVector(mountMode,native,mapped);
     level.feed(mapped[0],mapped[1],mapped[2],millis());
   }
@@ -715,9 +750,13 @@ LOOP_HELPER static void finishMotion() {
   else bestEffect.captured(latestMotion.number);
   if(launchFeedback.shown())launchFeedback.show(millis());
   Serial.printf("MAIN_FEEDBACK shown=%d reason=result t_ms=%lu\n",launchFeedback.shown(),(unsigned long)millis());
-  Serial.printf("MOTION_RESULT launch=%lu quality=%s points=%u duration_ms=%lu rpm=%.1f stationary_bias=%d\n",
+  Serial.printf("MOTION_RESULT launch=%lu quality=%s points=%u duration_ms=%lu rpm=%.1f stationary_bias=%d saturated=%d peak_accel_g=%.2f accel_range_g=%.0f peak_gyro_dps=%.0f gyro_range_dps=%.0f\n",
     (unsigned long)latestMotion.number,LaunchMotion::name(latestMotion.quality),latestMotion.count,
-    (unsigned long)latestMotion.durationMs,latestMotion.rpm,latestMotion.stationaryBias);
+    (unsigned long)latestMotion.durationMs,latestMotion.rpm,latestMotion.stationaryBias,latestMotion.saturated,
+    latestMotion.peakAccelG,accelRange().fullScaleG(),latestMotion.peakGyroDps,StickS3AccelRange::GYRO_FULL_SCALE_DPS);
+  if(latestMotion.issueMs!=LaunchMotion::Trace::NO_ISSUE)
+    Serial.printf("MOTION_ISSUE launch=%lu quality=%s at_ms=%ld pull_ms=%lu\n",(unsigned long)latestMotion.number,
+      LaunchMotion::name(latestMotion.quality),(long)latestMotion.issueMs,(unsigned long)((motionEnd-motionStart)/1000));
   Serial.printf("MOTION_TIMING launch=%lu ready_after_end_ms=%lu pre_ms=%d post_ms=%d\n",
     (unsigned long)latestMotion.number,(unsigned long)((now-motionEnd)/1000),
     latestMotion.count?-int(latestMotion.points[0].ms):0,
@@ -1063,6 +1102,32 @@ LOOP_HELPER static void saveHistory(uint32_t now,const Snapshot &s) {
   dirty=true;
 }
 
+// Stops sampling, accepts queued pulls and saves history/bests before power
+// down. Only Ready leaves acquisition stopped; otherwise sampling continues
+// and the caller retries. A new pull is recorded but restarts the decision.
+LOOP_HELPER static ShutdownFlush flushForShutdown(uint32_t now,const Snapshot &s) {
+  if(!acquisition.request(Action::ShutdownBegin,s.launches))return ShutdownFlush::Busy;
+  // Finish any queued accepted result before saving; the owner is now stopped.
+  Snapshot event;
+  bool newPull=false;
+  while(acquisition.takeEvent(event))if(practice.accept(event.launches,event.valid,event.resultRpm,now)){prepareMotion(event);logLaunchMetrics(event);newPull=true;}
+  if(newPull) {
+    inactivity.touch(now);dirty=true;
+    if(!acquisition.request(Action::CheckpointEnd))acquisition.request(Action::Pin,s.pin);
+    return ShutdownFlush::NewPull;
+  }
+  const bool historyFailed=practiceStore.pending(practice) && (!practiceStore.ready() || !practiceStore.save(practice));
+  if(historyFailed || (bestStore.pending(personalBests) && (!bestStore.ready() || !bestStore.save(personalBests)))) {
+    saveError=true;++saveErrors;dirty=true;
+    Serial.printf("POWER_OFF_DEFERRED %s_save_failed\n",historyFailed?"history":"best");
+    if(!acquisition.request(Action::CheckpointEnd))acquisition.request(Action::Pin,s.pin);
+    lastSaveTry=millis();
+    return ShutdownFlush::SaveFailed;
+  }
+  historyPendingSince=0;saveError=false;
+  return ShutdownFlush::Ready;
+}
+
 LOOP_HELPER static void autoPowerOff(uint32_t now,const Snapshot &s) {
   if(wipeBlocked || controls.page==Controls::Page::Wipe)return;
   if(usbAwake.inhibited(now))return;
@@ -1073,30 +1138,10 @@ LOOP_HELPER static void autoPowerOff(uint32_t now,const Snapshot &s) {
   pollUsbAwake(now,s,true);
   if(usbAwake.inhibited(now) || !inactivity.due(now,s.phase==AnalogTachometer::Phase::Launch))return;
   lastShutdownTry=now;
-  if(!acquisition.request(Action::ShutdownBegin,s.launches))return;
-  // Finish any queued accepted result before saving; the owner is now stopped.
-  Snapshot event;
-  bool newPull=false;
-  while(acquisition.takeEvent(event))if(practice.accept(event.launches,event.valid,event.resultRpm,now)){prepareMotion(event);logLaunchMetrics(event);newPull=true;}
-  if(newPull) {
-    inactivity.touch(now);lastShutdownTry=0;dirty=true;
-    if(!acquisition.request(Action::CheckpointEnd))acquisition.request(Action::Pin,s.pin);
-    return;
-  }
-  if(practiceStore.pending(practice) && (!practiceStore.ready() || !practiceStore.save(practice))) {
-    saveError=true;++saveErrors;dirty=true;
-    Serial.println("POWER_OFF_DEFERRED history_save_failed; retry in 60s");
-    if(!acquisition.request(Action::CheckpointEnd))acquisition.request(Action::Pin,s.pin);
-    lastSaveTry=millis();
-    return;
-  }
-  if(bestStore.pending(personalBests) && (!bestStore.ready() || !bestStore.save(personalBests))) {
-    saveError=true;++saveErrors;dirty=true;
-    Serial.println("POWER_OFF_DEFERRED best_save_failed; retry in 60s");
-    if(!acquisition.request(Action::CheckpointEnd))acquisition.request(Action::Pin,s.pin);
-    lastSaveTry=millis();return;
-  }
-  historyPendingSince=0;saveError=false;
+  // A failed save retries after 60 s; a new pull restarts the full timeout.
+  const auto flushed=flushForShutdown(now,s);
+  if(flushed==ShutdownFlush::NewPull)lastShutdownTry=0;
+  if(flushed!=ShutdownFlush::Ready)return;
   // A host may attach while the forced history flush is blocking.
   pollUsbAwake(millis(),acquisition.snapshot(),true);
   if(usbAwake.inhibited(millis())) {
@@ -1148,6 +1193,51 @@ LOOP_HELPER static void autoPowerOff(uint32_t now,const Snapshot &s) {
     if(!extRestored)Serial.println("EXT_POWER_NOTICE restore_wake_failed");
     Serial.printf("POWER_OFF_DEFERRED reason=%s restored=%d retry_s=%u\n",usbCancelled?"usb_host_attached":"shake_sleep_failed",restored,usbCancelled?0:60);
   } else Serial.println("POWER_OFF_DEFERRED imu_bus_busy");
+  if(!acquisition.request(Action::CheckpointEnd))acquisition.request(Action::Pin,s.pin);
+}
+
+// The IRQ edge is latched by the ISR. The line level is rechecked at most
+// once a second in case an edge was missed, so a stuck line cannot keep PM1
+// out of its idle sleep with constant I2C reads.
+static void IRAM_ATTR onPowerKeyIrq(){powerKeyIrq=true;}
+LOOP_HELPER static void pollPowerKey(uint32_t now) {
+  if(!powerKeyIrq && (digitalRead(POWER_KEY_IRQ_PIN) || now-lastPowerKeyRead<1000))return;
+  if(!imuAcquisition.lock())return;
+  powerKeyIrq=false;lastPowerKeyRead=now;
+  const bool click=powerKey().takeClick();
+  imuAcquisition.unlock();
+  if(!click || powerKeyRequested)return;
+  powerKeyRequested=true;powerKeyRequestedAt=now;inactivity.touch(now);
+  Serial.println("POWER_KEY click=1 action=power_off");
+}
+
+// A single click switches off like PM1's own double click, after saving.
+// A measured burst or motion capture finishes first. Manual power-off stays
+// manual: shake wake is not armed and the side key turns the unit back on.
+LOOP_HELPER static void powerKeyOff(uint32_t now,const Snapshot &s) {
+  if(!powerKeyRequested)return;
+  if(wipeBlocked){powerKeyRequested=false;Serial.println("POWER_KEY_IGNORED wipe_in_progress");return;}
+  if(now-powerKeyRequestedAt>=POWER_KEY_WAIT_MS) {
+    powerKeyRequested=false;Serial.println("POWER_KEY_OFF_DEFERRED acquisition_busy");return;
+  }
+  if(motionPending)return;
+  const auto flushed=flushForShutdown(now,s);
+  if(flushed==ShutdownFlush::Busy || flushed==ShutdownFlush::NewPull)return;
+  powerKeyRequested=false;
+  if(flushed==ShutdownFlush::SaveFailed)return; // Stay on; the save error is shown.
+  if(controls.page==Controls::Page::Wipe)cancelWipe();
+  cancelSettingEdit();
+  Serial.printf("POWER_OFF reason=power_key records=%u saved=1\n",practice.size());
+  ++powerLog.sleeps;powerLog.pendingSleep=1;powerRecord(PowerDiagnostics::Sleep);
+  if(!savePowerLog())Serial.println("POWER_LOG_NOTICE sleep_checkpoint_failed");
+  sleepReceipt={PowerDiagnostics::MAGIC,wallUs()};
+  M5.Display.setBrightness(0);M5.Display.sleep();Serial.flush();
+  // PM1 removes battery power. USB can keep the ESP32 powered, so it deep
+  // sleeps until the next click asserts the IRQ line; the IMU is not armed.
+  if(imuAcquisition.lock()){shakeWake.sleep();imuAcquisition.unlock();}
+  sleepReceipt.magic=0;powerLog.pendingSleep=0;savePowerLog();
+  M5.Display.wakeup();M5.Display.setBrightness(backlightValue());dirty=true;
+  Serial.println("POWER_KEY_OFF_FAILED pm1_power_off_refused");
   if(!acquisition.request(Action::CheckpointEnd))acquisition.request(Action::Pin,s.pin);
 }
 
@@ -1321,6 +1411,13 @@ void setup() {
   pm1WakeValid=pm1Idle().read(0x05,&pm1WakeFlags,1);
   if(!pm1Idle().run([](){return M5.Power.M5pm1.clearWakeSource();}))Serial.println("PM1_NOTICE wake_clear_failed");
   if(!shakeWake.clear())Serial.println("SHAKE_WAKE_NOTICE startup_disarm_failed");
+  pinMode(POWER_KEY_IRQ_PIN,INPUT_PULLUP);
+  attachInterrupt(POWER_KEY_IRQ_PIN,onPowerKeyIrq,FALLING);
+  // The value found at boot shows whether PM1 kept SINGLE_RST_DIS through power-off.
+  uint8_t bootKeyConfig=0;
+  const bool bootKeyConfigRead=pm1Idle().read(StickS3PowerKey::BUTTON_CONFIG,&bootKeyConfig,1);
+  const bool keyConfigured=powerKey().configure();
+  Serial.printf("POWER_KEY_BOOT btn_cfg_valid=%d btn_cfg=0x%02x configured=%d\n",bootKeyConfigRead,bootKeyConfig,keyConfigured);
   if(!recoverWipe())return;
   prefs.begin("launchlab-mini",false);
   powerLogReady=powerPrefs.begin("ll-power",false);
@@ -1408,6 +1505,7 @@ void setup() {
   M5.BtnA.setHoldThresh(1000);M5.BtnB.setHoldThresh(1000);
   for(unsigned attempt=0;attempt<3 && !startMotion();++attempt)if(attempt<2)delay(100);
   if(!imuAcquisition.running())Serial.println("MOTION_NOTICE IMU startup failed; automatic idle retry enabled");
+  acquisition.setRequestHook(quietImuForFlash);
   if(!acquisition.begin(pin,rpmEstimator,sensorProfile))Serial.println("ADC_ERROR acquisition_task_allocation");
   pollBattery(millis(),acquisition.snapshot());
   powerRecord(wakingFromStandby?PowerDiagnostics::Wake:PowerDiagnostics::Boot,loggedWake);
@@ -1530,6 +1628,10 @@ LOOP_HELPER static void pollCommands(const Snapshot &s) {
       inactivity.touch(millis()-inactivity.timeout());
       Serial.println("POWER_SLEEP_TEST requested=1 normal_save_and_sleep_path=1");
     }
+    else if(c=='O'){
+      powerKeyRequested=true;powerKeyRequestedAt=millis();
+      Serial.println("POWER_KEY_TEST requested=1 normal_save_and_power_off_path=1");
+    }
     else if(c=='i') {
       if(acquisition.request(Action::IdleCheckpointBegin,s.launches)) {
         if(imuAcquisition.lock()) {
@@ -1548,6 +1650,7 @@ LOOP_HELPER static void pollCommands(const Snapshot &s) {
     else if(c=='h')toggleHistory();
     else if(c=='c')nextView();
     else if(c=='e')exportMotion();
+    else if(c=='Q'){imuAcquisition.quiet(300);Serial.println("IMU_QUIET_TEST ms=300 flash_write=0");}
     else if(c=='E')effectPreview=true;
     else if(c=='q') {
       if(tournamentMode){Serial.println("RECAP_DEMO_ERROR leave_tournament_first");continue;}
@@ -1628,6 +1731,7 @@ void loop() {
   }
   if(wipeBlocked)return;
   pollCommands(s);
+  pollPowerKey(millis());
   Snapshot event;
   while(acquisition.takeEvent(event)) {
     if(event.revision!=lastRevision) {
@@ -1668,6 +1772,7 @@ void loop() {
   tickSensorIdle(millis(),s);
 #endif
   if(restorePreview)previewSetting();
+  powerKeyOff(now,s);
   autoPowerOff(now,s);
   tickDisplayPower(millis(),acquisition.snapshot());
   if(newSessionAt && now-newSessionAt>=1500){newSessionAt=0;dirty=true;}

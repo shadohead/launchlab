@@ -19,9 +19,21 @@ def function(name):
         depth += (source[cursor] == "{") - (source[cursor] == "}")
         cursor += 1
     return source[start:cursor]
+
+def shutdown_flush():
+    # Shared save-before-power-down helper with its result type.
+    start = source.index("static ShutdownFlush flushForShutdown(")
+    cursor = source.index("{", start) + 1
+    depth = 1
+    while depth:
+        depth += (source[cursor] == "{") - (source[cursor] == "}")
+        cursor += 1
+    enum = source.index("enum class ShutdownFlush")
+    return source[enum:source.index("};", enum) + 2] + "\n" + source[start:cursor]
 prefix = r'''
 #include "history_checkpoint.h"
 #include "controls.h"
+#include "accel_range.h"
 #include "sensor_profile.h"
 #include "practice_store.h"
 #include "appearance_store.h"
@@ -205,7 +217,7 @@ constants='\n'.join(re.search(r'static constexpr uint32_t '+name+r'=\d+;',source
 prefix=prefix.replace('static constexpr uint32_t HISTORY_COALESCE_MS=10000,HISTORY_SAVE_RETRY_MS=5000;',constants)
 with tempfile.TemporaryDirectory() as tmp:
     cpp=pathlib.Path(tmp)/"test.cpp"
-    cpp.write_text(prefix+'\n'.join(function(name) for name in ['prepareMotion','finishMotion','saveHistory','autoPowerOff'])+tests)
+    cpp.write_text(prefix+'\n'.join(function(name) for name in ['prepareMotion','finishMotion','saveHistory'])+'\n'+shutdown_flush()+'\n'+function('autoPowerOff')+tests)
     exe=pathlib.Path(tmp)/"test"
     subprocess.run(['c++','-std=c++17','-O1','-g','-DVQF_SINGLE_PRECISION','-fsanitize=address,undefined','-fno-omit-frame-pointer',
       '-I'+str(pathlib.Path(__file__).resolve().parent/'fakes'),'-I'+str(args.sketch.parent),'-I'+str(args.sketch.parent.parent/'LaunchLabRpm'),str(cpp),

@@ -1,38 +1,38 @@
 {
-  "version": "0.13.5",
-  "runtime": "0.13.5-sticks3-idle-adc-pm",
+  "version": "0.13.7",
+  "runtime": "0.13.7-sticks3-accel-16g-pm",
   "board": "M5StickS3 K150",
   "chip": "ESP32-S3",
   "flashBytes": 8388608,
   "applicationOffset": 65536,
   "files": [
     {
-      "path": "firmware/0.13.5/bootloader.bin",
+      "path": "firmware/0.13.7/bootloader.bin",
       "offset": 0,
       "size": 20256,
       "sha256": "8581a3fb98309f261482327b5ff51a2fabca0ec513f9ba38595ed04479794e58"
     },
     {
-      "path": "firmware/0.13.5/partitions.bin",
+      "path": "firmware/0.13.7/partitions.bin",
       "offset": 32768,
       "size": 3072,
       "sha256": "1d9cca96de0fe07ad7fc0648b9878ddecd9ce565e38b589ad20fea698ed4c80c"
     },
     {
-      "path": "firmware/0.13.5/boot_app0.bin",
+      "path": "firmware/0.13.7/boot_app0.bin",
       "offset": 57344,
       "size": 8192,
       "sha256": "f94c5d786a7a8fab06ac5d10e33bf37711a6697636dc037559ea19cc410a17f0"
     },
     {
-      "path": "firmware/0.13.5/application.bin",
+      "path": "firmware/0.13.7/application.bin",
       "offset": 65536,
-      "size": 827952,
-      "sha256": "0203763a133de42bf09dd3c5a93a6cbe074c974e815d8d5aff6d2541f6a88edf"
+      "size": 838800,
+      "sha256": "83aa6b7610241e45ae5ed2957b958576886967eacdef19e72c7ad5e836f96e52"
     }
   ],
-  "validation": "Exact shipping application installed and read back; software checks and pinned target compilation passed.",
-  "release": "0.13.5-sticks3-idle-adc-pm",
+  "validation": "Exact shipping application installed and read back; software checks, pinned target compilation and 13 consecutive physical tilt captures passed.",
+  "release": "0.13.7-sticks3-accel-16g-pm",
   "profiles": [
     "qre1113",
     "tcrt5000"
@@ -471,6 +471,15 @@
       "sha256": "d179ca5320ac56a399e729b5bba60b328a297c1696c7e730c114ef510f53695b",
       "md5": "7ff2cc3246a3d67d52f3e1e79a65dfe3",
       "elfSha256": "8ae3448af70f3251e42adf7f2f7d88734d8c1c0b61f9ae3b62494203cdf01bd8",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.13.7",
+      "runtime": "0.13.7-sticks3-accel-16g-pm",
+      "size": 838800,
+      "sha256": "83aa6b7610241e45ae5ed2957b958576886967eacdef19e72c7ad5e836f96e52",
+      "md5": "5c10e7c3567ab2faccd20867a89ca298",
+      "elfSha256": "6aa656f3af9063861422d8e55493f26ea9a808386b23bed10f5e8c2d92b999fc",
       "sensor": "qre1113"
     }
   ]

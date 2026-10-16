@@ -1,5 +1,7 @@
 # Firmware 0.13.5 build context
 
+Superseded by [0.13.7](FIRMWARE_0.13.7.md); this document describes the preserved 0.13.5 release.
+
 The shipping runtime is `0.13.5-sticks3-idle-adc-pm`, application SHA-256 `0203763a133de42bf09dd3c5a93a6cbe074c974e815d8d5aff6d2541f6a88edf`. The compiled source snapshot is frozen in the [release directory](../firmware/releases/0.13.5-sticks3-idle-adc-pm/). Use the [USB updater](https://launchlab.beywatch.gg/update) for the shipping image.
 
 ## Build from source

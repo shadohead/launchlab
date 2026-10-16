@@ -1,6 +1,6 @@
 {
   "name": "launchlab-firmware-validation",
-  "version": "0.13.5",
+  "version": "0.13.7",
   "private": true,
   "type": "module",
   "scripts": {

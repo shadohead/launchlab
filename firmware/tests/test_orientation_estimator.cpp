@@ -41,6 +41,17 @@ int main() {
   assert(filter.resets()==1 && !last.settled);
   Sample bad=measurement(now+10000,truth,zero);bad.a[0]=NAN;
   filter.feed(bad,[&](const Sample &s){assert(s.clipped && !s.fused);});assert(filter.resets()==2);
+  // A finite full-scale reading keeps fusion continuous and only marks the
+  // grid samples it touches as approximate; it never resets or warms up.
+  LauncherOrientation steady;Quaternion level;uint64_t at=1000000;unsigned marked=0,after=0;bool settledThrough=true;
+  for(unsigned i=0;i<400;++i,at+=10000) {
+    Sample m=measurement(at,level,zero);m.saturated=i==300;
+    steady.feed(m,[&](const Sample &s){
+      assert(!s.clipped && s.fused);if(i>=200)settledThrough&=s.settled;
+      marked+=s.saturated;if(i>301)after+=s.saturated;
+    });
+  }
+  assert(steady.resets()==0 && settledThrough && marked==2 && after==0);
   // A brief translational acceleration pulse may perturb inclination, but
   // cannot create displayed travel because replay has no position state.
   LauncherOrientation pulse;Quaternion neutral;float pulseError=0;

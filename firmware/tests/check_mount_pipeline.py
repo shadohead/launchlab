@@ -93,6 +93,10 @@ struct FakeImu {
   FakeData getImuData()const{return data;}
 };
 inline struct {FakeImu Imu;} M5;
+// The owner reads the BMI270 FIFO; the fake builds one header-mode frame per
+// read from the fake IMU (gyro+accel, gyro-only, accel-only or nothing).
+#include <cstddef>
+namespace Bmi270Fifo {bool readRegisters(uint8_t reg,uint8_t *data,size_t n);bool writeRegister(uint8_t reg,uint8_t value);}
 '''
 
 
@@ -103,6 +107,34 @@ TESTS = r'''
 #include <thread>
 #include "motion_owner_test.h"
 using Mode=MountOrientation::Mode;
+namespace FakeFifo {inline std::vector<uint8_t> pending;inline unsigned flushes=0,forcedLength=0;inline uint64_t stallUs=0;}
+bool Bmi270Fifo::readRegisters(uint8_t reg,uint8_t *data,size_t n) {
+  if(reg==FIFO_LENGTH_0 && n==2) {
+    auto &p=FakeFifo::pending;p.clear();
+    if(FakeFifo::forcedLength){p.assign(FakeFifo::forcedLength,0x8C);data[0]=uint8_t(p.size());data[1]=uint8_t(p.size()>>8);return true;}
+    const unsigned fresh=M5.Imu.update();const auto d=M5.Imu.getImuData();
+    // Inverse of boardAxes: raw X=-board Y, raw Y=board X, raw Z=board Z.
+    auto put=[&](const FakeVector &v,float scale) {
+      const float raw[3]={-v.y/scale,v.x/scale,v.z/scale};
+      for(float r:raw){const auto x=int16_t(std::lround(std::max(-32768.0f,std::min(32767.0f,r))));p.push_back(uint8_t(x));p.push_back(uint8_t(uint16_t(x)>>8));}
+    };
+    const bool gyro=fresh&2,accel=fresh&1;
+    if(gyro || accel)p.push_back(gyro && accel?ACC_GYR:gyro?GYR:ACC);
+    if(gyro)put(d.gyro,StickS3AccelRange::GYRO_FULL_SCALE_DPS/32768);
+    if(accel)put(d.accel,accelRange().fullScaleG()/32768);
+    data[0]=uint8_t(p.size());data[1]=uint8_t(p.size()>>8);return true;
+  }
+  if(reg==FIFO_DATA && n<=FakeFifo::pending.size()) {
+    Fake::now+=FakeFifo::stallUs;
+    std::copy(FakeFifo::pending.begin(),FakeFifo::pending.begin()+n,data);
+    FakeFifo::pending.erase(FakeFifo::pending.begin(),FakeFifo::pending.begin()+n);return true;
+  }
+  return false;
+}
+bool Bmi270Fifo::writeRegister(uint8_t reg,uint8_t value) {
+  if(reg==CMD && value==FLUSH){++FakeFifo::flushes;FakeFifo::pending.clear();}
+  return true;
+}
 static bool near(float a,float b,float tolerance=1e-5f){return std::fabs(a-b)<=tolerance;}
 static void vectorIs(const float *v,float x,float y,float z) {
   if(!near(v[0],x) || !near(v[1],y) || !near(v[2],z))
@@ -211,7 +243,7 @@ static void continuousOwnerWarmup() {
 }
 static void currentModeAtFusion() {
   cleanRuntime();auto owner=std::make_unique<StickS3MotionAcquisition>();assert(owner->begin());
-  M5.Imu.data.accel={1,2,3};M5.Imu.data.gyro={4,5,6};bool changed=false;
+  M5.Imu.data.accel={1,2,3};M5.Imu.data.gyro={4.8828125f,6.103515625f,7.32421875f};bool changed=false;
   // IMU acquisition has finished, but fusion has not yet taken the frame gate.
   Fake::released=[&](FakeMutex *gate) {
     if(gate==owner->gate_ && !changed){changed=true;assert(owner->setMount(Mode::Sidecar));}
@@ -220,8 +252,8 @@ static void currentModeAtFusion() {
   vectorIs(owner->ring_.at(0).a,-3,2,1);
   const auto s=owner->snapshot();assert(s.mount==Mode::Sidecar && s.fusedUs==1000000);
   // Ring rates are canonical AND bias-corrected by the actual VQF owner.
-  vectorIs(owner->ring_.at(0).g,-6-s.bias[0],5-s.bias[1],4-s.bias[2]);
-  vectorIs(s.a,1,2,3);vectorIs(s.g,4,5,6);
+  vectorIs(owner->ring_.at(0).g,-7.32421875f-s.bias[0],6.103515625f-s.bias[1],4.8828125f-s.bias[2]);
+  vectorIs(s.a,1,2,3);vectorIs(s.g,4.8828125f,6.103515625f,7.32421875f);
 }
 static void stalePublication(bool returnToTop) {
   cleanRuntime();auto owner=std::make_unique<StickS3MotionAcquisition>();assert(owner->begin());
@@ -236,15 +268,41 @@ static void stalePublication(bool returnToTop) {
     if(iteration<=3) {
       const auto s=owner->snapshot();assert(s.mount==target && !s.fusedUs && !s.pairedUs);
       assert(!s.orientationReady && !owner->ring_.size());
-      // No paired sample, then an accel-only sample, cannot republish old pose.
+      // An empty read, then an accel-only frame, cannot republish old pose.
       M5.Imu.fresh=iteration==1?0:iteration==2?1:3;
       if(returnToTop)M5.Imu.data.accel={0,0,1};
     }
   });
   assert(changed && owner->frame_==(returnToTop?2u:1u));
-  const auto s=owner->snapshot();assert(s.mount==target && s.fusedUs==1015000 && !s.orientationReady);
-  assert(owner->ring_.size()==1 && owner->ring_.at(0).us==1015000);
+  // Frames are stamped on the sensor timeline, which follows read time gradually.
+  const auto s=owner->snapshot();assert(s.mount==target && s.fusedUs>1000000 && s.fusedUs<=1015000 && !s.orientationReady);
+  assert(owner->ring_.size()==1 && owner->ring_.at(0).us==s.fusedUs);
   vectorIs(owner->ring_.at(0).a,0,0,1);
+}
+static void flashQuiet() {
+  // No FIFO transfer starts inside a flash-write window; reads resume at its
+  // end or, if no end arrives, after the bounded maximum.
+  cleanRuntime();auto owner=std::make_unique<StickS3MotionAcquisition>();assert(owner->begin());
+  runFor(*owner,20);const unsigned before=M5.Imu.updates,samples=owner->ring_.size();
+  // Each runFor re-enters run(), whose diagnostics counters are per run.
+  owner->quiet();runFor(*owner,10);
+  assert(M5.Imu.updates==before && owner->snapshot_.quietPolls==10 && owner->ring_.size()==samples);
+  owner->endQuiet();runFor(*owner,3);assert(M5.Imu.updates==before+3 && owner->ring_.size()>samples);
+  owner->quiet(40);runFor(*owner,20);
+  assert(owner->snapshot_.quietPolls==8 && M5.Imu.updates==before+3+12);
+  owner->quiet(60000);runFor(*owner,2020);
+  assert(owner->snapshot_.quietPolls==2000 && M5.Imu.updates==before+3+12+20);
+  // A (nearly) full FIFO may begin inside a payload: flushed, never parsed.
+  const unsigned flushes=FakeFifo::flushes,size=owner->ring_.size();
+  FakeFifo::forcedLength=Bmi270Fifo::CAPACITY-8;runFor(*owner,1);FakeFifo::forcedLength=0;
+  assert(FakeFifo::flushes==flushes+1 && owner->snapshot_.fifoOverflows==1 && owner->snapshot_.fifoErrors==0);
+  assert(owner->ring_.size()==size);
+  // A transfer stalled 8 ms past its bus time is suspect even though it reported success.
+  FakeFifo::stallUs=Bmi270Fifo::transferBudgetUs(13)+1;runFor(*owner,1);FakeFifo::stallUs=0;
+  assert(FakeFifo::flushes==flushes+2 && owner->snapshot_.fifoStalls==1 && owner->snapshot_.lastStallUs==Bmi270Fifo::transferBudgetUs(13)+1);
+  assert(owner->ring_.size()==size && owner->snapshot_.fifoErrors==0);
+  FakeFifo::stallUs=Bmi270Fifo::transferBudgetUs(13)-1;runFor(*owner,1);FakeFifo::stallUs=0;
+  assert(owner->snapshot_.fifoStalls==0 && owner->ring_.size()>size);
 }
 static StickS3MotionAcquisition imuAcquisition;
 static StickS3Level level;
@@ -317,10 +375,10 @@ static void fallbackLevel() {
 int main() {
   ownerActivity();
   validationAndSerialization();continuousOwnerWarmup();currentModeAtFusion();
-  stalePublication(false);stalePublication(true);fallbackLevel();
+  stalePublication(false);stalePublication(true);flashQuiet();fallbackLevel();
   std::cout<<"PASS: actual mount owner; mutex exclusion, invalid/failure/noop preservation, "
               "frame invalidation, fresh fusion warmup, canonical capture, late/current mapping, "
-              "stale/ABA publication guards, actual level fallback and dot dropouts without timer renewal\n";
+              "stale/ABA publication guards, bounded flash-write quiet window, actual level fallback and dot dropouts without timer renewal\n";
 }
 '''
 

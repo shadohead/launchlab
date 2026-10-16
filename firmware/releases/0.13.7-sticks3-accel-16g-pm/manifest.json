@@ -1,0 +1,157 @@
+{
+  "release": "0.13.7-sticks3-accel-16g-pm",
+  "runtime_version": "0.13.7-sticks3-accel-16g-pm",
+  "board": "M5StickS3 K150",
+  "chip": "ESP32-S3",
+  "kind": "public-firmware-release",
+  "date": "2026-10-16",
+  "published": true,
+  "binary": "LaunchLabMini.ino.bin",
+  "application_offset": "0x10000",
+  "binary_bytes": 838800,
+  "sha256": "83aa6b7610241e45ae5ed2957b958576886967eacdef19e72c7ad5e836f96e52",
+  "md5": "5c10e7c3567ab2faccd20867a89ca298",
+  "elf_sha256": "6aa656f3af9063861422d8e55493f26ea9a808386b23bed10f5e8c2d92b999fc",
+  "profiles": [
+    "qre1113",
+    "tcrt5000"
+  ],
+  "build": {
+    "core": "esp32 3.3.0",
+    "libraries": [
+      "M5Unified 0.2.23",
+      "M5GFX 0.2.30"
+    ],
+    "fqbn": "esp32:esp32:esp32s3:CDCOnBoot=cdc,USBMode=hwcdc,FlashSize=8M,PartitionScheme=default_8MB,PSRAM=opi",
+    "cpp_extra_flags": "-DVQF_SINGLE_PRECISION -fstack-usage -DLAUNCHLAB_MOTION_ADC_GATE=1 -DLAUNCHLAB_CPU_PM=1",
+    "sdk": {
+      "source_revisions": {
+        "lib-builder": "afa5cdd0d41d7e465d2e39867b24aef48b1c7b84",
+        "esp-idf": "b66b5448e0dfac6be135e6f0ac21010aba231180",
+        "arduino": "554de56f40e68d591b945bd1a8c931798e8a9167",
+        "tinyusb": "8a78804ff91271fb32008288777fad9fe73f5735"
+      },
+      "memory_type": "qio_opi",
+      "header_differences": {
+        "CONFIG_PM_ENABLE": {
+          "stock": null,
+          "rebuilt": "1"
+        },
+        "CONFIG_PM_LIGHTSLEEP_RTC_OSC_CAL_INTERVAL": {
+          "stock": null,
+          "rebuilt": "1"
+        },
+        "CONFIG_PM_PROFILING": {
+          "stock": null,
+          "rebuilt": "1"
+        }
+      },
+      "stock_header_sha256": "5b35ba1d9a982b043d908ca959d24d79f8f87ae4fba104c715dc0dd120d1510b",
+      "rebuilt_header_sha256": "23b3e281493befe7ab72e49ef46e2a5b7fdf0bab46db4029221afc82974fbd83",
+      "dependencies_lock_sha256": "e6d44258405a151e9790f2e124768b87bd12dbfb83a02ebd6b0e37a9ff7b56ea",
+      "pm_enable": true,
+      "pm_profiling": true,
+      "pm_dfs_init_auto": false,
+      "stock_bootloader_and_speech_bytes_preserved": true
+    },
+    "sdk_asset": {
+      "file": "launchlab-esp32s3-pm-sdk.tar.gz",
+      "sha256": "5d322bcc98a71beba048d34e87fe5821b758d05ef204eb1771c0a736254b6865",
+      "bytes": 52200302
+    }
+  },
+  "source_provenance": {
+    "production": "Exact compiled source snapshot for the installed shipping application",
+    "documentation": "Public README is not compiled",
+    "public_base": "0dbcb5fb51965a96b691ad9dfa48d5c8ce5fb9df",
+    "tests": "Synthetic native suites and production-code host harnesses"
+  },
+  "source_sha256": {
+    "LaunchLabMini.ino": "79bbda3aabf1519e03d794e3139db02822d2f7bc3b0834f9ed172997d215182b",
+    "README.md": "5bc9d106d009994972b94a5328b5570b3273cf3d4165b3fe7a9d72a2a1855fb9",
+    "accel_range.h": "8cde97aeb6bdf3c850cf878ca4208891e34623b80ded24d7e662f47efc3efcaf",
+    "acquisition.h": "76d05fc29b0c07ebebfc9cb660d24a4656c39209cc2569d1d0929eb404170b66",
+    "analog_tachometer.h": "0b1ec1f4ffee3f7d782f25aca1b89d2ff75338f822440662accec736cebfe653",
+    "appearance.h": "d7fcd52d56bf0ad20c805776bcd85f67dced1734b385cbdcd9bc1079bf4d258a",
+    "appearance_store.h": "2e9678c358e07ef38df56adab9510e06a0bfa9494bade512a577bba5c344b757",
+    "best_effect_sound.h": "865e0c56643ddf23e452c5ad8ce6e41c6dd4e0856fc1bafdf42f4be2af68c5c0",
+    "best_effect_speaker.h": "a9736f9800a09b077f9fd825136cea773f6a3f9cb5e767f186201ca7fa75499b",
+    "best_effect_ui.h": "2863aeb88392bba75f4508c9ae6aa92747fc044e818db5ff799ba3daecbb8399",
+    "bmi270_fifo.h": "a37035c60190638d319a8e5aefad14d89c8afd8ceecf84874a701f2e420ae9c4",
+    "controls.h": "0b336a0da12ec35c6e20f9791f97e67d7f2307eda4ffa78b10f1e88d5ddf5305",
+    "controls_ui.h": "3772eec2528e421f677079886fcdf9d4f76a6ece5e33f9c43622417e05d361de",
+    "cpu_power.h": "daf4ad9f13b9bbd8cad86cd101fb309a40b483aa699b45766f7b6622b5ea0300",
+    "device_backup.h": "ded5336f4a7afb17a927fd91cf48b61c211e537cdfeb421e3ea62ccb293f423b",
+    "device_wipe.h": "df6a43f1255b54351da719f4bc7f0991ca5d5e4f88c8a75377f1251088b00e12",
+    "device_wipe_nvs.h": "1d1c9c322fd7a0549d9d74bb67bf786d30ccdc7e584b2a97dcb679400471eb4a",
+    "display_flip_setting.h": "a4f5c803d595216afbb94e155ecf9eb78d6e23bb3fe8c9fca0622f6aa0077dc5",
+    "display_orientation.h": "1bb2d946396534085dba2796cf697f79c5ecf4741688246c9daa38d8e3d87abe",
+    "history_checkpoint.h": "c20c8de4e182b367211c85419ba567858ca610ee3d2f012c9292cb224aba9310",
+    "launch_feedback.h": "33721aac3a4c89af067f305249858b1efc4b72fdf176600754f72455ad76d2fd",
+    "launch_motion.h": "2e2282c205f6a3b704e4c5bc4ea502caa7945ef8181db31b663b6f87af4f3661",
+    "level_indicator.h": "711c56d9da48bb0a08265f852fc73203e494ade54645862d56e5f39ab851020d",
+    "motion_acquisition.h": "3dbc3d25ab9437b4449851363c6c9056ffdb9ab4c6c12c3fb9e8860d20e309e5",
+    "motion_activity.h": "4449fa913208e316c8a9496bc11749b92953e90799f6e32b4dc5a1d6fca8b8c9",
+    "motion_replay.h": "92b00f205ad22365e4638dbf7090f5336fc69787d075bf17b98996d4f91eadec",
+    "motion_store.h": "96720370a6dc945aacddc0ce7ca08bdf8e64f8edb948ccbf866fffdf48fd762d",
+    "motion_ui.h": "42f85713c141040e16bb32de6f8751d3bde0ea80a47c2e43208508d1f0179a34",
+    "mount_orientation.h": "bf7bd8cf71bcd6ac7692f1f4228bcee1a0980eb74f08f58af835bc5cc6fb5b9e",
+    "mount_orientation_setting.h": "fdda8a8d1f63bead42f9cb71db5e8efbb475ba52c1561e4b459300d2e8ad8f75",
+    "nvs_budget.h": "7404ec274c4ca1adc7a533827cdd3e7c0220c54709a470a492ba031c41362691",
+    "orientation_estimator.h": "86ffa6e6fe6e9b4120ec685515b0d1458e296ba998493d3e29224def0e78b866",
+    "pm1_idle.h": "6424f7e7edea4a7859845db15e524d28cfa3d7434e48fcd4b802e59e1f7de72e",
+    "power_diagnostics.h": "ce8a64ba59e0fbc5e6b964d7a86b9cba1a72bc3618cba007f930094f399238fc",
+    "power_key.h": "216831e979444f3899aa46296bd93dc6bfa4a7a7ecb525f33cdded95d9cd9f3b",
+    "power_status.h": "baff9038a8d8a1553fdc13fd7d18d956b092c81398f971d6e3de5dbfe8d1c98f",
+    "practice_history.h": "a73aa1a94eeac752ebdcd6d4b58ab58b83bda248ed51f65b644e3481e7cff9b1",
+    "practice_store.h": "2a4f5e240f6e489191625ca978505785a8d22ccdd12904a64dccfc2e43da1247",
+    "practice_ui.h": "8c069ee159902c29203d96d67955c118e2a3edf097b3ea96c497ce50f0ce0b81",
+    "practice_views.h": "9b0d0dbe2266653166fb1fddddbad713af83fb4cf317d0daa8de8e9325c8662a",
+    "raw_transfer.h": "daf2bfe4b9615a6e7a0fa9c184d5fdbedbd04aebab43fb4616a321989deb15aa",
+    "rpm_estimator.h": "45ee94c66d0d233d8659e6699fe5a3775712efea65e400e1369259bf0e4600fd",
+    "rpm_estimator_setting.h": "93248b9cee95c4719d318b99deb7466fd020c441a6f1b98c68a26958eb2f5905",
+    "sample_ring.h": "fa6ebc0253d56d0fd54a38ad2ec1060d79b74d84561dfb6f999d82a11b4162f7",
+    "sensor_idle.h": "86994cf2990c853450c0a653d5de208af4cd49554d7f6f255975cb82c6d5f61e",
+    "sensor_profile.h": "0db60408d3f0aeec40c65140ae33a9133e34447f3ec39ae571812a7ef4104925",
+    "sensor_profile_setting.h": "8dc6c6e3a5f69fd090cd47b7f7dbf3e45c23c365255e4758df8b5567f04aef04",
+    "shake_wake.h": "b1e87a24d05567c565fffa3bd6a31709f722b0b2c0ffdacf1b558d5ae0f3d3cb",
+    "src/bmi270/LICENSE": "56df116398e0b72a12ae353d93002d29175583590283ced2c2510e3d8075546f",
+    "src/bmi270/README.md": "f538c4ef8ba12dbb5963ebc9aa4c95ca3fde01a5b99e318c3d2f51bf6031bbe0",
+    "src/bmi270/bmi2.c": "0157971d614d8fbaaac1af04e9affedde1221e8c41520d4599129ef5c681794c",
+    "src/bmi270/bmi2.h": "40ae64349408c104d4dc0cce5dfc3900bdfb2afa8e3d37b152584867a8188914",
+    "src/bmi270/bmi270.c": "69ef54827569de27ac76ca2f0cf532ee658f4da3d91eaa9546a96c233da330d8",
+    "src/bmi270/bmi270.h": "661464189003823bb3061b7a3de56903ad4c4f1aabee0a407712b9b2f3cdd5a1",
+    "src/bmi270/bmi2_defs.h": "60d9047a47f9c638e7cc13890e85380a9cc544ae3b1ee215f793da03463712b9",
+    "src/vqf/LICENSE": "0c22d71ab6599696c5dabbdc3cc11ad68016d00a01efa2980538e42c9ccf73f3",
+    "src/vqf/UPSTREAM.md": "dd70483df93c5b4ccb600cd8940b504a7571825aca0650d1db2e9624c23e2862",
+    "src/vqf/vqf.cpp": "fb035248ebeccc16897476c7afca5e912f3ad77f0faebd16ff4d5f94b44c614b",
+    "src/vqf/vqf.hpp": "ef15c074bce16adb76e7f191970ea589bc6d7ce01027130e5233041c0e11eb24",
+    "usb_awake.h": "bb4c9ac29282c61f6b9c1b5c0ddbf81398b9c9501d9d6943698915319e907094",
+    "wake_ui_state.h": "0563e89d8ede5cc7eddcfc7aa7eb4f06054842d0ea9278ddc639acac45fb38cc",
+    "wipe_confirmation.h": "23be9bd67ff60bbab5e89155c0481c1e4aed6970d3b760919b882bc786a3998d"
+  },
+  "artifact_sha256": {
+    "LaunchLabMini-0.13.7-compiled-source.zip": "9a935787b15d4ec28ca543de629dfe5be34c8dc73e9bc15b8603a6e78314492c",
+    "LaunchLabMini.ino.bin": "83aa6b7610241e45ae5ed2957b958576886967eacdef19e72c7ad5e836f96e52",
+    "LaunchLabMini.ino.bootloader.bin": "8581a3fb98309f261482327b5ff51a2fabca0ec513f9ba38595ed04479794e58",
+    "LaunchLabMini.ino.partitions.bin": "1d9cca96de0fe07ad7fc0648b9878ddecd9ce565e38b589ad20fea698ed4c80c",
+    "README.md": "c0b423f54ef7c6b16e17a51db9eabcfd3f6823b08128cf12736f96635df1324e",
+    "boot_app0.bin": "f94c5d786a7a8fab06ac5d10e33bf37711a6697636dc037559ea19cc410a17f0",
+    "build-firmware.sh": "0ea36f8ad776388cb2c3b2ac10848417770887f3a65e893cb06be60d3aaf0c38",
+    "test-firmware.sh": "0d4bc8a6a81b51df90c56d225a373ad8d7d9eb5b3b440a88759e45ec528ec2bc"
+  },
+  "validation": {
+    "native_suites": 42,
+    "production_harnesses": 16,
+    "sanitizers": "ASan/UBSan",
+    "exact_application_readback": true,
+    "target_build": "passed",
+    "loop_stack_bytes": 816,
+    "loop_stack_budget": 1536,
+    "other_frame_budget": 2560,
+    "device_pulls": "13 consecutive valid tilt captures on a Sidecar unit, peaks to 11.5 g",
+    "device_idle": "33 minutes, 394,172 gyro samples, zero IMU FIFO errors through six power-log saves",
+    "updater_tests": 78,
+    "artifact_checksums": 1296
+  }
+}

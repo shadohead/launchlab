@@ -4,14 +4,14 @@
 #include <memory>
 using namespace LaunchMotion;
 static bool near(float a,float b,float tolerance){return std::fabs(a-b)<tolerance;}
-static Trace capture(float speed=90,float heading=0,int skip=0,bool clipped=false,bool settled=true) {
+static Trace capture(float speed=90,float heading=0,int skip=0,bool clipped=false,bool settled=true,bool saturated=false) {
   auto ring=std::make_unique<Ring>();Quaternion world;const float yaw[3]={0,0,heading};world.integrate(yaw,1);
   for(uint64_t us=1000000;us<=2800000;us+=10000) {
     if(skip && us>=2050000 && us<2050000+uint64_t(skip))continue;
     Quaternion body;const float rate[3]={0,speed,0};body.integrate(rate,std::max(0.0f,std::min(.65f,(int64_t(us)-1750000)*1e-6f)));
     Sample s;s.us=us;s.q=multiply(world,body);const float up[3]={0,0,1};inverse(s.q).rotate(up,s.a);
     s.g[1]=us>=1750000 && us<2400000?speed:0;s.fused=true;s.settled=settled;s.stationary=us<1750000;
-    s.clipped=clipped && us==2150000;ring->feed(s);
+    s.clipped=clipped && us==2150000;s.saturated=saturated && us==2150000;ring->feed(s);
   }
   return ring->build(2000000,2400000,6000,7);
 }
@@ -22,6 +22,8 @@ int main() {
   assert(!captureReady(2499999,2000000,0));
   assert(captureReady(2500000,2000000,0)); // bounded unavailable-sensor timeout
   const auto t=capture();assert(t.valid() && t.fused && t.count==48 && t.durationMs==400);
+  assert(near(t.peakGyroDps,90,.01f) && t.peakAccelG>.9f && t.peakAccelG<=1.0001f);
+  assert(capture(90,0,0,true).peakGyroDps>=90);
   assert(t.points[0].ms==-500 && t.points[47].ms==550);
   unsigned onset=0,end=0;for(const auto &p:t.points){onset+=p.ms==0;end+=p.ms==400;assert(p.magnitude(false)<.003f);}
   assert(onset==1 && end==1 && t.startLevel.valid() && t.endLevel.valid());
@@ -33,7 +35,14 @@ int main() {
   assert(compare(t,heading).valid && compare(t,heading).turnDegrees<.05f);
   assert(compare(t,changed).valid && compare(t,changed).turnDegrees>5);
   assert(capture(90,0,50000).quality==Quality::Gap);
-  assert(capture(90,0,0,true).quality==Quality::Clipped);
+  assert(capture(90,0,0,true).quality==Quality::Clipped && capture(90,0,0,true).issueMs==150);
+  assert(t.issueMs==Trace::NO_ISSUE && !t.saturated);
+  // Full-scale readings keep the replay, marked approximate, and survive storage.
+  const auto approximate=capture(90,0,0,false,true,true);
+  assert(approximate.valid() && approximate.saturated && approximate.issueMs==Trace::NO_ISSUE);
+  {Image image;encode(approximate,3,image);Trace back;uint32_t generation=0;
+   assert(decode(image,back,generation) && back.saturated && generation==3);
+   encode(t,4,image);assert(decode(image,back,generation) && !back.saturated);}
   assert(capture(90,0,0,false,false).quality==Quality::Warming);
   // Only lead-in context can be shortened. Settled onset/end are mandatory,
   // and neither missing nor warming data in the measured pull is disguised.

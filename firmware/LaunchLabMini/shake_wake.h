@@ -2,7 +2,9 @@
 #include <M5Unified.h>
 #include "esp_sleep.h"
 #include "src/bmi270/bmi270.h"
+#include "bmi270_fifo.h"
 #include "pm1_idle.h"
+#include "power_key.h"
 
 // Bosch BMI270 API from SparkFun's official M5 wake example driver, commit
 // 21ea234de321da07c552f7a43cb36f7df4f73a27. Uses M5's existing I2C bus;
@@ -75,11 +77,14 @@ public:
   }
   bool restore() {
     const bool cleared=clear();
+    // arm() routes the IMU instead of the side key to the PM1 IRQ line.
+    const bool key=powerKey().configure();
     // arm uploads a separate feature configuration. Always restore M5's
     // measurement configuration before letting its IMU owner poll again.
     const bool imu=M5.Imu.begin(&M5.In_I2C,m5::board_t::board_M5StickS3);
     M5.Imu.setCalibration(0,0,0);
-    return cleared && imu;
+    const bool range=imu && configureMotionSensor(false);
+    return cleared && imu && range && key;
   }
   bool sleep() {
     // Battery removes CPU/sensor L2 power; USB may retain it, so keep ext0 fallback.
