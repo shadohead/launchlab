@@ -43,6 +43,7 @@ struct FakeMutex {
 };
 using SemaphoreHandle_t = FakeMutex *;
 static constexpr int pdTRUE=1,pdFALSE=0,pdPASS=1;
+static constexpr TickType_t portMAX_DELAY=UINT32_MAX;
 #define pdMS_TO_TICKS(ms) (ms)
 namespace Fake {
 inline uint64_t now=1000000;
@@ -62,7 +63,8 @@ inline SemaphoreHandle_t xSemaphoreCreateMutex() {
 inline int xSemaphoreTake(SemaphoreHandle_t gate,TickType_t wait) {
   if(!gate)return pdFALSE;
   ++gate->attempts;
-  if(!gate->mutex.try_lock_for(std::chrono::milliseconds(wait)))return pdFALSE;
+  if(wait==portMAX_DELAY)gate->mutex.lock();
+  else if(!gate->mutex.try_lock_for(std::chrono::milliseconds(wait)))return pdFALSE;
   Fake::hook(Fake::locked,gate);return pdTRUE;
 }
 inline void xSemaphoreGive(SemaphoreHandle_t gate) {

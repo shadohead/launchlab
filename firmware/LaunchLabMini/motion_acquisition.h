@@ -61,9 +61,13 @@ public:
   // a missing checkpoint end, which would also leave the optical ADC stopped.
   static constexpr uint32_t QUIET_MAX_MS=10000;
   void quiet(uint32_t ms=QUIET_MAX_MS) {
-    quietBeganMs_=uint32_t(esp_timer_get_time()/1000);
-    quietUntil_=esp_timer_get_time()+int64_t(std::min(ms,QUIET_MAX_MS))*1000;
-    if(lock())unlock();
+    // A catch-up burst can outlast lock()'s ordinary 20 ms UI timeout.
+    // Establish quiescence before returning to a caller that may write flash.
+    if(gate_)while(xSemaphoreTake(gate_,portMAX_DELAY)!=pdTRUE){}
+    const int64_t now=esp_timer_get_time();
+    quietBeganMs_=uint32_t(now/1000);
+    quietUntil_=now+int64_t(std::min(ms,QUIET_MAX_MS))*1000;
+    unlock();
   }
   void endQuiet(){quietUntil_=0;quietEndedMs_=uint32_t(esp_timer_get_time()/1000);}
   uint32_t quietBeganMs()const{return quietBeganMs_;}
@@ -105,13 +109,14 @@ private:
       const uint64_t wake=esp_timer_get_time();
       if(previousWake)span.periodUs=std::max(span.periodUs,uint32_t(wake-previousWake));
       previousWake=wake;++span.polls;
-      // Checked while holding the gate: quiet() sets the window, then waits on the gate.
+      // quiet() publishes the window while holding this same gate.
       const bool locked=lock();
       if(locked && esp_timer_get_time()<quietUntil_.load()){unlock();++s.quietPolls;}
       else if(locked) {
         CpuPower::Guard clock(CpuPower::Imu);
         const int64_t started=esp_timer_get_time();span.lockUs=std::max(span.lockUs,uint32_t(started-wake));
-        const unsigned bytes=readFifo(s);unlock();
+        uint64_t sampledUs=0;
+        const unsigned bytes=readFifo(s,sampledUs);unlock();
         const uint64_t now=esp_timer_get_time();s.maxPollUs=std::max(s.maxPollUs,uint32_t(now-started));
         span.pollUs=std::max(span.pollUs,uint32_t(now-started));
         unsigned gyroFrames=0,skipped=0;
@@ -124,11 +129,11 @@ private:
         if(parsed && !gyroFrames) {
           // Accelerometer-only frames update the held value; nothing is fused or published.
           Bmi270Fifo::parse(fifo_,bytes,[&](const Bmi270Fifo::Frame &f) {
-            if(f.accel){Bmi270Fifo::boardAxes(f.a,accelScale,s.a);s.accelUs=now;++s.accelSamples;haveAccel=true;}
+            if(f.accel){Bmi270Fifo::boardAxes(f.a,accelScale,s.a);s.accelUs=sampledUs;++s.accelSamples;haveAccel=true;}
           },[](unsigned){});
         }
         if(parsed && gyroFrames) {
-          timeline_.begin(now,gyroFrames);
+          timeline_.begin(sampledUs,gyroFrames);
           const uint64_t fusionStart=esp_timer_get_time();
           if(xSemaphoreTake(ringGate_,pdMS_TO_TICKS(20))==pdTRUE) {
             if(activeFrame!=frame_) {
@@ -138,7 +143,7 @@ private:
             }
             s.mount=mode_;
             Bmi270Fifo::parse(fifo_,bytes,[&](const Bmi270Fifo::Frame &f) {
-              if(f.accel){Bmi270Fifo::boardAxes(f.a,accelScale,s.a);s.accelUs=now;++s.accelSamples;haveAccel=true;}
+              if(f.accel){Bmi270Fifo::boardAxes(f.a,accelScale,s.a);s.accelUs=sampledUs;++s.accelSamples;haveAccel=true;}
               if(!f.gyro)return;
               const uint64_t at=timeline_.next();
               if(!haveAccel)return;
@@ -168,7 +173,10 @@ private:
   }
   // Reads every complete FIFO byte. Returns 0 when empty or on a failed
   // length read, which consumes nothing and is retried on the next poll.
-  unsigned readFifo(Snapshot &s) {
+  unsigned readFifo(Snapshot &s,uint64_t &sampledUs) {
+    // This batch contains only bytes counted here. Frames appended during
+    // the burst belong to a later batch; transfer time is not sample time.
+    sampledUs=esp_timer_get_time();
     uint8_t length[2];
     if(!Bmi270Fifo::readRegisters(Bmi270Fifo::FIFO_LENGTH_0,length,2)){++s.fifoErrors;++s.fifoLengthErrors;return 0;}
     const unsigned bytes=unsigned(length[0])|(unsigned(length[1]&0x3F)<<8);
