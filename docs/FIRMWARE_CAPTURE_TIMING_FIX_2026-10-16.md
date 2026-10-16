@@ -1,8 +1,10 @@
 # FIFO capture timing fixes — 2026-10-16
 
-These are confirmed code defects with deterministic host reproduction. Their
-frequency and user-visible consequences on the physical M5 have not been
-reproduced by this work. No device was flashed or reset during host verification. Settings and recordings were unchanged. The user subsequently attached a device and authorized preservation-first test firmware installation; results will be recorded in the PR.
+Both defects have deterministic host reproduction. Read-only probes on the
+attached physical StickS3 also reproduced the early-return race and measured the
+burst-dependent difference in timestamp anchoring. No unsafe flash/read overlap,
+corruption, or optical-launch impact was induced. The clean fix is installed as
+a local development build; this does not change any release recommendation.
 
 ## Source and scope
 
@@ -114,14 +116,14 @@ compile this test with `motion_acquisition.h` and `bmi270_fifo.h` extracted from
   `loop()` 816 bytes against 1536 budget; other frames within budget.
 - Local candidate binary SHA-256:
   `3ccbd4cb84cc07c60eb21ad71053bad71769b90476c1d2d0af720628513f2c2a`.
-  This is an uninstalled development build, not a new release or recommendation.
+  This is the clean development build installed for this validation, not a new release or recommendation.
 - Independent reviewer found no blocking defects, independently ran the timing
   regressions, bounded wait/veto, busy retry and updated fixtures with sanitizers, and checked all checkpoint callers and lock ordering.
 
 `python3 scripts/verify-artifacts.py` intentionally fails at its working-source
 comparison: candidate source differs from frozen 0.13.7. This is a strict release
 gate, not a checksum failure. It is left intact; the PR workflow will also stop
-there. The original [CI run on `bab9306`](https://github.com/shadohead/launchlab/actions/runs/38954515529) completed with updater and firmware tests passing, artifact verification failing at line 74 on `motion_acquisition.h`, later build/upload steps skipped and deploy skipped. Updated-head terminal results are recorded in the PR. Separately, the unchanged verifier passed 1296 checksum checks in a
+there. The original [CI run on `bab9306`](https://github.com/shadohead/launchlab/actions/runs/38954515529) completed with updater and firmware tests passing, artifact verification failing at line 74 on `motion_acquisition.h`, later build/upload steps skipped and deploy skipped. The [bounded-wait head `adbd6c7` CI run](https://github.com/shadohead/launchlab/actions/runs/38956207045) also completed: updater tests and the full firmware suite passed; artifact verification failed at line 74 on `LaunchLabMini.ino`; later build/upload and deploy were skipped. Separately, the unchanged verifier passed 1296 checksum checks in a
 temporary validation view using frozen 0.13.7 source and the preserved release,
 site and hardware artifacts. The direct candidate run had already checked 3MF
 archive integrity before reaching the source assertion. No published source,
@@ -130,33 +132,91 @@ binary, catalog, version, workflow or recommendation was edited.
 The review also noted a preexisting limitation outside these two findings:
 parse-error recovery calls `discardFifo()` / `FLUSH` after releasing the gate.
 This patch guarantees gated FIFO-read quiescence, not exclusion of every IMU
-bus operation. The virtual RTOS tests do not prove FreeRTOS scheduling behavior.
+bus operation. The host tests use a virtual RTOS; the device probes below separately exercise actual FreeRTOS waits and I2C transfers.
 
-## Remaining physical validation
+## Physical validation on the attached StickS3
 
-The attached Mac exposed only `/dev/cu.Bluetooth-Incoming-Port` and
-`/dev/cu.debug-console`; USB inventory returned no entries during initial verification. The user attached an M5 at 19:35 UTC and authorized preservation-first test firmware installation. Device validation is in progress; current results and remaining gates are recorded in the PR. The following is the validation checklist:
+The user attached the M5 at 19:35 UTC and explicitly authorized necessary test
+firmware installation while preserving settings and recordings. No serial owner
+was active. The original runtime was a private `0.13.6-sticks3-power-key-pm`
+build, which predates this FIFO path; it was not a suitable physical baseline.
 
-1. Reconnect the dedicated M5StickS3 K150 and confirm no active device owner.
-   Start with read-only `p` status and inspect installed firmware identity,
-   FIFO diagnostics, settings and recording/reference inventory. Preserve a
-   verified backup before any authorized firmware change; keep it private.
-2. On existing firmware, the explicit `Q` command requests a 300 ms quiet period
-   with `flash_write=0`. With device-owner agreement, collect before/after `p`
-   diagnostics to observe catch-up burst sizes, stalls/parse errors and gaps.
-   This alone does not test the candidate fix or reproduce checkpoint overlap.
-3. The user authorized necessary test firmware flashing at 19:35 UTC. Candidate installation still requires a verified preservation/restore plan. Do not erase storage or replace user data to manufacture a test. Preserve a verified backup before any app-only test installation; keep diagnostic recordings distinct from existing user recordings.
-4. After authorized installation, instrument FIFO read start/end, quiet return,
-   length-capture time and actual checkpoint write boundaries. Accumulate a
-   safe backlog and verify checkpoint writes begin after any in-flight read,
-   no gated read starts in the window, reads resume, and returned sample times
-   exclude burst duration. Check normal and long reads plus failed checkpoints.
-   Use a dedicated backed-up test device for flash/checkpoint stress; never
-   exhaust its flash or alter personal practice history for reproduction.
-5. Correlate a controlled optical/motion event with the FIFO timeline across
-   normal and backlog reads, then check tilt quality, gaps, capture pre/post-roll
-   and both runtime sensor profiles. Code and host tests establish the defects;
-   only these device observations can establish real-world frequency and impact.
+Before writing, two identical 3936-byte portable backups passed the production
+decoder and exact re-encoding check. A digest-verified 1 MiB raw recovery snapshot
+covers every sector affected by the app-only installs, plus boot, partition,
+NVS/OTA prefix and a suffix margin. The installed original app also matched its
+prior private install receipt. A full 8 MiB read at 460800 baud failed; default
+115200 baud reliably read and verified the required recovery span. There was no
+write during that failed read. Backups, device identity and personal logs stay
+private. No erase-all, bootloader/partition install or restore of user data was
+performed.
+
+The clean candidate and a private diagnostic variant were installed at app0
+`0x10000` only. Each installation had digest verification of the app and protected
+prefix/suffix. The diagnostic variant added temporary serial probes; its test
+commands performed no flash write. It used actual sensor backlog, I2C transfers,
+FreeRTOS tasks and the fixed production acquisition path. Diagnostic instrumentation
+was independently reviewed before use and is not part of the PR or release.
+
+For each trial, a 700 ms quiet window accumulated a real backlog below FIFO
+capacity. A helper ran the exact old quiet body during the selected read, recorded
+its return, then ran the fixed quiet barrier. No checkpoint write followed the
+unsafe old return. All timestamps below are software-delimited measurements,
+not logic-analyzer observations.
+
+| Trial | FIFO bytes / gyro frames | Actual burst | Old wait / read still active | Fixed wait / return after burst |
+| --- | --- | --- | --- | --- |
+| 1 | 1413 / 141 | 48.789 ms | 19.612 ms / yes | 29.189 ms / 72 us |
+| 2 | 1413 / 141 | 50.180 ms | 19.970 ms / yes | 30.206 ms / 71 us |
+| 3 | 1407 / 141 | 47.926 ms | 19.938 ms / yes | 28.001 ms / 71 us |
+
+All three batches parsed and added all 141 paired samples. The fixed timeline's
+newest sample was within 1.821 ms of the pre-length anchor. A counterfactual old
+timeline processing those same real batches with completion-time anchors placed
+the newest samples 45.628–51.090 ms later than the fixed timeline. Drift smoothing
+means that difference need not equal each burst duration exactly. This confirms
+the anchor behavior on physical data; it does not establish absolute event-time
+accuracy against an external reference.
+
+An intentional self-held gate exercised the actual checkpoint preflight:
+`accepted=0`, wait `249749 us`, ADC Ready before/after, not suspended, and 12288
+additional ADC samples. This confirms bounded rejection and continued ADC
+sampling on this FreeRTOS device. After the three races, FIFO errors, parse
+errors, stalls, overflows, anchors and sample gaps were all zero; ADC errors and
+overflows were zero. Ordinary sampling resumed.
+
+A separate smoke check captured a real stationary IMU window into a valid
+48-point/200 ms trace and displayed it. Playback reported `started=1`, with
+presented frame time advancing from 130 to 280 ms; the exported LCD frame showed
+the tilt replay. This used a synthetic capture window and synthetic 6000 RPM
+metadata, with no optical trigger or stored recording. The prior volatile trace
+was restored. It is not an end-to-end launch measurement.
+
+Portable backups after the clean install and again after diagnostics retained
+all five user-data sections byte-for-byte: practice, appearance, bests, saved
+motion/reference, and settings. Inventory remained 128 records / 24 sessions,
+with the same latest recording and reference. GPIO and external-power state
+were also unchanged. The final app-only reinstall restored the clean candidate
+(SHA-256 above), verified its app/prefix/suffix digests, and booted successfully.
+Two final backups were byte-identical to the first clean-build backups and all
+five user-data sections still exactly matched the original device. Final status:
+ADC Ready at 50007 samples/s, no ADC overflow/read errors, no FIFO errors, stalls,
+overflows or sample gaps, no gate misses; demo and feedback off. The temporary
+diagnostic executable is no longer installed.
+
+## Remaining hardware limits
+
+- The deliberately constructed backlog proves the physical timing condition;
+  natural occurrence rate and user-visible corruption/tilt impact remain unknown.
+- No unsafe flash/read collision was induced. Actual flash checkpoint-boundary
+  stress, fault injection and flash-wear tests were not performed on personal data.
+- A controlled optical launch synchronized to an external reference is still
+  needed for absolute timestamp accuracy, real capture pre/post-roll and tilt
+  quality under normal and backlog reads. Both runtime sensor profiles need that
+  end-to-end coverage; this device was tested on its saved standard profile.
+- Power-loss persistence, prolonged load and near-capacity physical FIFO cases
+  remain separate validation work. Host regressions cover the near-capacity
+  1980-byte/90 ms case and failure paths.
 
 No release, deployment, merge, rollback or monitor-calibration change is part
 of this fix.
