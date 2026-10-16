@@ -71,7 +71,8 @@
     "documentation": "README is not compiled",
     "code_base": "adbd6c7d266713160f6e353f0a672395961f3836",
     "candidate_delta": "Runtime identity and documentation only; acquisition logic unchanged",
-    "tests": "Synthetic native suites and production-code host harnesses"
+    "tests": "Synthetic native suites and production-code host harnesses",
+    "archive_tools": "Require matching full checkout for test harnesses, historical fixtures and stack checker; production inputs are frozen source."
   },
   "source_sha256": {
     "LaunchLabMini.ino": "250d00cbf4aade392555003dd0e7db250eaf072739a9b2df6d60b4c545e58a65",
@@ -142,10 +143,10 @@
     "LaunchLabMini.ino.bin": "16a5ea42ace33b70c613cb4a22613cc605910dbd530e56132e02d836ef537274",
     "LaunchLabMini.ino.bootloader.bin": "8581a3fb98309f261482327b5ff51a2fabca0ec513f9ba38595ed04479794e58",
     "LaunchLabMini.ino.partitions.bin": "1d9cca96de0fe07ad7fc0648b9878ddecd9ce565e38b589ad20fea698ed4c80c",
-    "README.md": "a7e5a5450f5892c173bf4d2ae31182e9976250dd7e5951e0e83aa9a3a33c22db",
+    "README.md": "150df7c3e766d41300edf5139e5deea17afa781b5dba28c1fa1f65756a782acd",
     "boot_app0.bin": "f94c5d786a7a8fab06ac5d10e33bf37711a6697636dc037559ea19cc410a17f0",
-    "build-firmware.sh": "0ea36f8ad776388cb2c3b2ac10848417770887f3a65e893cb06be60d3aaf0c38",
-    "test-firmware.sh": "ec939d15ec5b5b95229f2c100688e9dc70c49c4025f356c36727c6224757f96c"
+    "build-firmware.sh": "b8b49851a1a54020ac82d7c4d48a4f48648160789439b4fae315c13b1b039ba4",
+    "test-firmware.sh": "fd13834b066eeae5a4f8b65e51562708ad508f7ad224b656f9368760b9107198"
   },
   "validation": {
     "native_suites": 43,
@@ -158,6 +159,7 @@
     "other_frame_budget": 2560,
     "updater_tests": 78,
     "related_physical_application_sha256": "3ccbd4cb84cc07c60eb21ad71053bad71769b90476c1d2d0af720628513f2c2a",
-    "physical_evidence": "Same acquisition logic; real FIFO race and safe barrier measured on prior development identity. Exact candidate not installed. See README for limits."
+    "physical_evidence": "Same acquisition logic; real FIFO race and safe barrier measured on prior development identity. Exact candidate not installed. See README for limits.",
+    "archive_entrypoints": "Actual scripts pass offline routing/frozen-source/cleanup regression from unrelated cwd with spaces; baseline91767c1 fails. Real archived build and all43sanitizerbinaries+17productionharnesses pass separately."
   }
 }

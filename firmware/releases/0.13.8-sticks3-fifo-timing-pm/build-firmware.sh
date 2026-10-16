@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")/../firmware"
+ARCHIVE_ROOT="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$ARCHIVE_ROOT/../../.." && pwd)"
+if [[ ! -f "$REPO_ROOT/firmware/tools/check_stack_usage.py" || ! -f "$ARCHIVE_ROOT/source/LaunchLabMini.ino" ]]; then
+  echo 'Run this archived build inside its matching full LaunchLab checkout.' >&2
+  exit 1
+fi
+cd "$REPO_ROOT/firmware"
 CLI="${ARDUINO_CLI:-arduino-cli}"
 CACHE="${LAUNCHLAB_ARDUINO_CACHE:-$PWD/.arduino}"
 mkdir -p "$CACHE"
@@ -46,8 +52,8 @@ CHECK
 # Fresh source staging prevents stale files from previous revisions.
 rm -rf build-source/LaunchLabMini
 mkdir -p build-source/LaunchLabMini
-cp LaunchLabMini/*.ino LaunchLabMini/*.h build-source/LaunchLabMini/
-cp -R LaunchLabMini/src build-source/LaunchLabMini/
+cp "$ARCHIVE_ROOT"/source/*.ino "$ARCHIVE_ROOT"/source/*.h build-source/LaunchLabMini/
+cp -R "$ARCHIVE_ROOT/source/src" build-source/LaunchLabMini/
 "$CLI" compile --config-file "$CACHE/launchlab-config.yaml" \
   --fqbn 'esp32:esp32:esp32s3:CDCOnBoot=cdc,USBMode=hwcdc,FlashSize=8M,PartitionScheme=default_8MB,PSRAM=opi' \
   --build-property "tools.esp32-arduino-libs.path=$LAUNCHLAB_PM_SDK" \

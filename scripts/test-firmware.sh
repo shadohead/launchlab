@@ -26,3 +26,4 @@ python3 firmware/tests/check_idle_power_pipeline.py
 python3 firmware/tests/check_sensor_idle_pipeline.py
 python3 firmware/tests/check_cpu_power_pipeline.py
 python3 firmware/tests/check_main_layout.py
+python3 scripts/check-archived-firmware.py

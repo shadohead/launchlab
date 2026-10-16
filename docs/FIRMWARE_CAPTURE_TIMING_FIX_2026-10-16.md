@@ -254,3 +254,38 @@ publish direct 0.13.8 candidate URLs on Pages even though the candidate is
 unlisted and not recommended. Merge remains held while that decision is pending;
 no workflow suppression or deployment cancellation is used to bypass the gate.
 The hardware limits above remain in force.
+
+
+## Archived script usability follow-up
+
+[Review finding r4299553056](https://github.com/shadohead/launchlab/pull/13#discussion_r4299553056)
+was reproduced against `91767c1`: the archived build exits at its missing
+`firmware/releases/firmware` directory, before invoking Arduino CLI; the archived
+test runs from `firmware/releases` and cannot find `firmware/tests`. These are
+build/test entry-point defects, not evidence of a firmware runtime regression.
+
+The archived build now derives the repository root from its own location and
+stages this candidate's frozen source. The archived test creates a temporary
+tree containing the matching checkout's test/legacy fixtures, preserved
+historical headers, and the frozen production source; it removes that tree on
+exit. Both require the matching full checkout, which is now documented with
+invocation commands. They do not modify frozen source or flash a device.
+
+`python3 scripts/check-archived-firmware.py` executes both actual shell entry
+points in an isolated checkout fixture from an unrelated directory with spaces.
+Recording CLI/compiler adapters verify root routing, frozen rather than working
+source selection, fixture access, untouched working source, and temporary-tree
+cleanup. The same build regression fails against `91767c1`; a separate baseline
+test probe confirms its missing-fixture path. The regression performs no network,
+real compilation or device access; it is additional to the 17 production
+pipeline harnesses and runs in the normal firmware suite.
+
+Separately, the repaired archived build was invoked from `/tmp` using actual
+Arduino CLI/pinned dependencies and the complete verified PM SDK. Compilation
+and stack checks passed (`loop()` 816/1536 bytes). Installed library source
+inventories match the previous pinned build dependencies byte-for-byte. Rebuilt
+bytes are not assumed identical across build environments. The saved candidate
+application, all production source, source ZIP, prior release artifacts and
+recommended catalogs remain unchanged. Only the unlisted candidate's scripts,
+usage notes, manifest and checksum records are amended; no check is weakened.
+The full archived native suite and PR CI outcomes are recorded in the PR.
