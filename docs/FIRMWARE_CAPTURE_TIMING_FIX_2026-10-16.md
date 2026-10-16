@@ -101,7 +101,7 @@ compile this test with `motion_acquisition.h` and `bmi270_fifo.h` extracted from
 `e066fb6` earlier in the include path; invoke the binary with `quiet` and
 `timestamp` separately. Both return 1 on baseline and 0 on the fix.
 
-## Verification and review
+## Verification and review of the physically tested build
 
 - Focused timing regressions: pass with ASan/UBSan.
 - Full firmware sanitizer/pipeline suite: pass, 43 sanitizer binaries and 17 pipeline scripts (`bash scripts/test-firmware.sh`).
@@ -120,10 +120,10 @@ compile this test with `motion_acquisition.h` and `bmi270_fifo.h` extracted from
 - Independent reviewer found no blocking defects, independently ran the timing
   regressions, bounded wait/veto, busy retry and updated fixtures with sanitizers, and checked all checkpoint callers and lock ordering.
 
-`python3 scripts/verify-artifacts.py` intentionally fails at its working-source
-comparison: candidate source differs from frozen 0.13.7. This is a strict release
-gate, not a checksum failure. It is left intact; the PR workflow will also stop
-there. The original [CI run on `bab9306`](https://github.com/shadohead/launchlab/actions/runs/38954515529) completed with updater and firmware tests passing, artifact verification failing at line 74 on `motion_acquisition.h`, later build/upload steps skipped and deploy skipped. The [bounded-wait head `adbd6c7` CI run](https://github.com/shadohead/launchlab/actions/runs/38956207045) also completed: updater tests and the full firmware suite passed; artifact verification failed at line 74 on `LaunchLabMini.ino`; later build/upload and deploy were skipped. Separately, the unchanged verifier passed 1296 checksum checks in a
+During initial validation, `python3 scripts/verify-artifacts.py` failed at its
+working-source comparison because candidate source differed from frozen 0.13.7.
+This was a strict source-identity gate, not a checksum failure. It was left
+intact; the initial PR workflows stopped there. The original [CI run on `bab9306`](https://github.com/shadohead/launchlab/actions/runs/38954515529) completed with updater and firmware tests passing, artifact verification failing at line 74 on `motion_acquisition.h`, later build/upload steps skipped and deploy skipped. The [bounded-wait head `adbd6c7` CI run](https://github.com/shadohead/launchlab/actions/runs/38956207045) also completed: updater tests and the full firmware suite passed; artifact verification failed at line 74 on `LaunchLabMini.ino`; later build/upload and deploy were skipped. Separately, the unchanged verifier passed 1296 checksum checks in a
 temporary validation view using frozen 0.13.7 source and the preserved release,
 site and hardware artifacts. The direct candidate run had already checked 3MF
 archive integrity before reaching the source assertion. No published source,
@@ -218,5 +218,39 @@ diagnostic executable is no longer installed.
   remain separate validation work. Host regressions cover the near-capacity
   1980-byte/90 ms case and failure paths.
 
-No release, deployment, merge, rollback or monitor-calibration change is part
-of this fix.
+The initial validation phase made no release, deployment, merge, rollback or
+monitor-calibration change.
+
+
+## PR finalization: versioned development candidate
+
+The user subsequently authorized committing and merging this PR after checks
+and review, including the versioned artifacts needed by the existing gate.
+A new **0.13.8-sticks3-fifo-timing-pm** development identity prevents replacement
+of the published 0.13.7 binary. Both PM/non-PM runtime strings were updated;
+production acquisition logic is otherwise identical to the physically tested
+`adbd6c7` build. The exact new candidate has not been flashed or read back.
+The attached device stays on the previously verified clean development build.
+
+The new frozen directory contains exact source, application, boot infrastructure,
+source ZIP, build/test scripts, manifest and checksums. Its versioned catalog is
+selected for source verification by `site/package.json` version 0.13.8, including
+matching package-lock metadata. The existing verifier already separates source
+identity from updater recommendation; no verifier, workflow, test or protection
+was weakened or bypassed. The unchanged verifier passes **1301 checksums**.
+
+Candidate application: 838864 bytes, SHA-256
+`16a5ea42ace33b70c613cb4a22613cc605910dbd530e56132e02d836ef537274`.
+Pinned PM compilation and stack checks pass with the same toolchain/SDK as above.
+All earlier frozen artifacts, versioned catalogs, the root recommended catalog,
+and the release-picker index remain byte-identical; **0.13.7 remains recommended**.
+No GitHub Release or tag is created. The new catalog is absent from the picker.
+These are public repository artifacts, not private artifacts.
+
+There is a deployment coupling requiring a separate decision before merge:
+`.github/workflows/pages.yml` runs on every main push, copies all `site/public`
+files, then deploys GitHub Pages after successful checks. A merge would therefore
+publish direct 0.13.8 candidate URLs on Pages even though the candidate is
+unlisted and not recommended. Merge remains held while that decision is pending;
+no workflow suppression or deployment cancellation is used to bypass the gate.
+The hardware limits above remain in force.

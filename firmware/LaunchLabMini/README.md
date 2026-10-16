@@ -1,8 +1,8 @@
 # LaunchLab for M5StickS3
 
-Current revision: **0.13.7-sticks3-accel-16g-pm** for **M5StickS3 K150 (ESP32-S3, 8 MB flash / 8 MB OPI PSRAM)**.
+Current source candidate: **0.13.8-sticks3-fifo-timing-pm** for **M5StickS3 K150 (ESP32-S3, 8 MB flash / 8 MB OPI PSRAM)**.
 One application supports analog QRE1113 and TCRT5000 through the saved Sensor profile setting.
-See [build context](../../docs/FIRMWARE_0.13.7.md) and [release notes](../releases/0.13.7-sticks3-accel-16g-pm/README.md).
+This candidate is unlisted and is not the recommended firmware. The preserved recommendation remains 0.13.7. See [candidate build and validation notes](../releases/0.13.8-sticks3-fifo-timing-pm/README.md) and [timing evidence](../../docs/FIRMWARE_CAPTURE_TIMING_FIX_2026-10-16.md).
 
 Tilt replay is reliable on hard pulls: the accelerometer uses its ±16 g range, and every IMU sample is read from the BMI270 FIFO, so the live level and recordings no longer drop out at rest or during saves. A pull that reaches the gyro's 2000 °/s limit keeps its replay, marked **Tilt approx.**
 A single click of the side power key saves pending pulls and powers off.

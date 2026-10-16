@@ -45,9 +45,9 @@
 // real calls so each one uses stack only while it runs.
 #define LOOP_HELPER __attribute__((noinline))
 #if LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = "0.13.7-sticks3-accel-16g-pm";
+static constexpr char VERSION[] = "0.13.8-sticks3-fifo-timing-pm";
 #else
-static constexpr char VERSION[] = "0.13.7-sticks3-accel-16g";
+static constexpr char VERSION[] = "0.13.8-sticks3-fifo-timing";
 #endif
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ

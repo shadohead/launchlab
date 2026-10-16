@@ -1,0 +1,51 @@
+{
+  "version": "0.13.8",
+  "runtime": "0.13.8-sticks3-fifo-timing-pm",
+  "board": "M5StickS3 K150",
+  "chip": "ESP32-S3",
+  "flashBytes": 8388608,
+  "applicationOffset": 65536,
+  "files": [
+    {
+      "path": "firmware/0.13.8/bootloader.bin",
+      "offset": 0,
+      "size": 20256,
+      "sha256": "8581a3fb98309f261482327b5ff51a2fabca0ec513f9ba38595ed04479794e58"
+    },
+    {
+      "path": "firmware/0.13.8/partitions.bin",
+      "offset": 32768,
+      "size": 3072,
+      "sha256": "1d9cca96de0fe07ad7fc0648b9878ddecd9ce565e38b589ad20fea698ed4c80c"
+    },
+    {
+      "path": "firmware/0.13.8/boot_app0.bin",
+      "offset": 57344,
+      "size": 8192,
+      "sha256": "f94c5d786a7a8fab06ac5d10e33bf37711a6697636dc037559ea19cc410a17f0"
+    },
+    {
+      "path": "firmware/0.13.8/application.bin",
+      "offset": 65536,
+      "size": 838864,
+      "sha256": "16a5ea42ace33b70c613cb4a22613cc605910dbd530e56132e02d836ef537274"
+    }
+  ],
+  "validation": "Unlisted development candidate; pinned build and host regressions. Exact binary not installed. Related physical timing evidence and remaining limits in frozen README.",
+  "release": "0.13.8-sticks3-fifo-timing-pm",
+  "profiles": [
+    "qre1113",
+    "tcrt5000"
+  ],
+  "knownApplications": [
+    {
+      "version": "0.13.8",
+      "runtime": "0.13.8-sticks3-fifo-timing-pm",
+      "size": 838864,
+      "sha256": "16a5ea42ace33b70c613cb4a22613cc605910dbd530e56132e02d836ef537274",
+      "md5": "e714948a71eade14bd639a003e8b91b0",
+      "elfSha256": "46c883b886a6eaa1ffdeb1b856a87d852be031885965d39e2b7f72d3f38a5f88",
+      "sensor": "qre1113"
+    }
+  ]
+}
