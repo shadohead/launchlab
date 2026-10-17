@@ -18,7 +18,7 @@ function installed(digest=diagnostic.md5) {
   };
   return loader;
 }
-test('known diagnostic remains a distinct 0.12.1 identity and is not the 0.13.8 target',()=>{
+test('known diagnostic remains a distinct 0.12.1 identity and is not the 0.13.9 target',()=>{
   validateCatalog(catalog);assert.ok(diagnostic);assert.equal(diagnostic.version,'0.12.1');
   assert.equal(diagnostic.runtime,'0.12.1-sticks3-flip-colors');assert.equal(diagnostic.size,809680);
   assert.equal(diagnostic.md5,'95974ecdbc420a40d1de5a59ca451e5e');
@@ -28,17 +28,17 @@ test('known diagnostic remains a distinct 0.12.1 identity and is not the 0.13.8 
   assert.equal(new Set(prior.map(a=>a.buildId)).size,3);
   assert.equal(prior.find(a=>a.sha256.startsWith('a13d590f')).buildId,'0.12.1-sticks3-pulse-guard-device-verified');
   assert.equal(prior.find(a=>a.sha256.startsWith('25eb22f7')).buildId,'0.12.1-sticks3-flip-colors');
-  const target=catalog.knownApplications.filter(a=>a.version==='0.13.8'&&a.sha256===catalog.files[3].sha256);
+  const target=catalog.knownApplications.filter(a=>a.version==='0.13.9'&&a.sha256===catalog.files[3].sha256);
   assert.equal(target.length,1);assert.notEqual(target[0].elfSha256,diagnostic.elfSha256);
 });
-test('complete installed diagnostic checksum permits an ordinary application-only 0.13.8 update',async()=>{
+test('complete installed diagnostic checksum permits an ordinary application-only 0.13.9 update',async()=>{
   const loader=installed(),found=await inspectInstalledApplication(loader,catalog);
   assert.equal(found.state,'verified');assert.equal(found.application.sha256,diagnostic.sha256);
   assert.deepEqual(loader.digestQueries,[{address:APP_OFFSET,size:809680}]);
   assert.equal((await flashVerified(opts(loader))).status,'verified');
   assert.deepEqual(loader.writes[0].fileArray.map(f=>f.address),[APP_OFFSET]);
   assert.equal(loader.writes[0].eraseAll,false);
-  assert.deepEqual(loader.digestQueries,[{address:APP_OFFSET,size:809680},{address:APP_OFFSET,size:809680},{address:APP_OFFSET,size:839760}]);
+  assert.deepEqual(loader.digestQueries,[{address:APP_OFFSET,size:809680},{address:APP_OFFSET,size:809680},{address:APP_OFFSET,size:844032}]);
   assert.equal((await flashVerified(opts(loader))).status,'up-to-date');assert.equal(loader.writes.length,1);
   assert.deepEqual(loader.app,images[3].data);
 });

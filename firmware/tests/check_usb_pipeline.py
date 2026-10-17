@@ -57,6 +57,9 @@ static uint8_t powerSource=4;
 static unsigned hostReads=0,powerReads=0,locks=0,unlocks=0,flashWrites=0,powerSaves=0;
 struct HWCDC {static bool isPlugged(){++hostReads;return hardwareSof;}};
 struct SerialFake {void println(const char*){}void flush(){}template<class... A>void printf(const char*,A...){}} Serial;
+// USB output is drained (never Serial.flush(), which discards it): usb_tx.h.
+namespace UsbTx {inline unsigned drains=0;inline bool drain(uint32_t){++drains;return true;}}
+
 static UsbHostAwake usbAwake;static bool usbAutoOffInhibited=false;
 static InactivityTimer inactivity;static PracticeHistory practice;static PracticeStore practiceStore;
 static bool motionPending=false,saveError=false,dirty=false,extPower=false,tournamentMode=false,historyPage=false,demo=false,diagnostics=false;
@@ -102,8 +105,11 @@ struct Receipt {uint32_t magic=0;int64_t atUs=0;} sleepReceipt;
 struct ShakeWake {unsigned arms=0,sleeps=0,restores=0;bool arm(){++arms;return true;}bool restore(){++restores;return true;}
   bool sleep(){assert(!practiceStore.pending(practice));++sleeps;return false;}
 } shakeWake;
+static unsigned restoreFailureNotes=0;static void noteMotionRestoreFailure(){++restoreFailureNotes;}
 static void prepareMotion(const Snapshot&){motionPending=true;}
 static void logLaunchMetrics(const Snapshot&){}
+// Settings persistence has its own production harness (check_save_paths.py).
+static void writeSettings(){}
 static void cancelSettingEdit(){}
 static bool saveWakeNavigation(){return true;}
 '''

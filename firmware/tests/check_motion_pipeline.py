@@ -62,7 +62,9 @@ def main():
     coalesced = "HISTORY_COALESCE_MS" in source
     constants = "\n".join(re.search(r"static constexpr uint32_t " + name + r"=\d+;", source)[0]
                             for name in ["HISTORY_COALESCE_MS", "HISTORY_SAVE_RETRY_MS"]) if coalesced else ""
-    header = constants + "\n" + "\n".join(function(source, name) for name in ["prepareMotion", "finishMotion", "toggleFeedback", "saveHistory"])
+    # Sketches that schedule by IMU stillness: the launcher is set down.
+    still = "static HistoryCheckpoint::Stillness imuStill{true,0};\n" if "imuStill" in source else ""
+    header = constants + "\n" + still + "\n".join(function(source, name) for name in ["prepareMotion", "finishMotion", "toggleFeedback", "saveHistory"])
     header += "\nstatic int actualSourceTime(const LaunchMotion::Trace &trial,float progress){using namespace MotionReplay;return " + pose_time + ";}\n"
     header += "static float actualProgress(uint32_t replayFrameElapsed){return " + progress + ";}\n"
     header += "static void draw(const Snapshot &s){" + frame_time + "lgfx::LGFXBase view;if(launchFeedback.shown() && !tournamentMode && !diagnostics && !historyPage){" + call + ";}recordFrame(view,replayFrameElapsed);advance(drawCostUs);" + hook + "}\n"

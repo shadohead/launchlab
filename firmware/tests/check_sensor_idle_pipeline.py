@@ -25,65 +25,6 @@ while depth:
     cursor += 1
 tick = source[start:cursor]
 
-runtime = r'''
-#pragma once
-#include <algorithm>
-#include <array>
-#include <cassert>
-#include <cmath>
-#include <cstdint>
-#include <cstdlib>
-#include <cstring>
-#include <deque>
-#include <iostream>
-#include <vector>
-using esp_err_t=int;
-constexpr int ESP_OK=0,ESP_FAIL=-1,ESP_ERR_INVALID_ARG=1,ESP_ERR_TIMEOUT=2;
-using adc_unit_t=int;using adc_channel_t=int;using gpio_num_t=int;
-constexpr int ADC_UNIT_1=1,ADC_ATTEN_DB_12=12,ADC_CONV_SINGLE_UNIT_1=1,
-  ADC_DIGI_OUTPUT_FORMAT_TYPE2=2,GPIO_MODE_INPUT=1,GPIO_FLOATING=0;
-static int64_t clockUs=1000000;
-static int64_t esp_timer_get_time(){return clockUs;}
-struct FakeAdc {bool active=false;};using adc_continuous_handle_t=FakeAdc*;
-struct adc_continuous_evt_data_t {};
-struct adc_continuous_handle_cfg_t {uint32_t max_store_buf_size=0,conv_frame_size=0;};
-struct adc_digi_pattern_config_t {int atten=0,channel=0,unit=0,bit_width=0;};
-struct adc_continuous_config_t {uint32_t sample_freq_hz=0;int conv_mode=0,format=0,pattern_num=0;adc_digi_pattern_config_t *adc_pattern=nullptr;};
-struct adc_continuous_evt_cbs_t {bool(*on_pool_ovf)(adc_continuous_handle_t,const adc_continuous_evt_data_t*,void*)=nullptr;};
-struct adc_digi_output_data_t {struct {uint16_t data;uint8_t channel,unit;} type2;};
-constexpr unsigned SOC_ADC_DIGI_RESULT_BYTES=sizeof(adc_digi_output_data_t);
-static unsigned stops=0,starts=0,flushes=0,handles=0;
-static bool failStop=false,failStart=false,failFlush=false;
-static esp_err_t adc_continuous_io_to_channel(int pin,adc_unit_t *unit,adc_channel_t *channel){*unit=ADC_UNIT_1;*channel=pin-1;return ESP_OK;}
-static esp_err_t adc_continuous_new_handle(const adc_continuous_handle_cfg_t*,adc_continuous_handle_t *out){*out=new FakeAdc;++handles;return ESP_OK;}
-static esp_err_t adc_continuous_config(adc_continuous_handle_t h,const adc_continuous_config_t *c){assert(h && c->sample_freq_hz==50000 && c->pattern_num==1);return ESP_OK;}
-static esp_err_t adc_continuous_register_event_callbacks(adc_continuous_handle_t h,const adc_continuous_evt_cbs_t*,void*){assert(h);return ESP_OK;}
-static esp_err_t adc_continuous_start(adc_continuous_handle_t h){assert(h && !h->active);++starts;if(failStart){failStart=false;return ESP_FAIL;}h->active=true;return ESP_OK;}
-static esp_err_t adc_continuous_stop(adc_continuous_handle_t h){assert(h && h->active);++stops;if(failStop){failStop=false;return ESP_FAIL;}h->active=false;return ESP_OK;}
-static esp_err_t adc_continuous_flush_pool(adc_continuous_handle_t h){assert(h && !h->active);++flushes;if(failFlush){failFlush=false;return ESP_FAIL;}return ESP_OK;}
-static esp_err_t adc_continuous_deinit(adc_continuous_handle_t h){assert(h && !h->active);delete h;--handles;return ESP_OK;}
-static esp_err_t adc_continuous_read(adc_continuous_handle_t,uint8_t*,size_t,uint32_t *bytes,int){*bytes=0;return ESP_ERR_TIMEOUT;}
-static void gpio_set_direction(gpio_num_t,int){}static void gpio_set_pull_mode(gpio_num_t,int){}
-using TickType_t=uint32_t;using TaskHandle_t=void*;using portMUX_TYPE=int;
-#define IRAM_ATTR
-#define portMUX_INITIALIZER_UNLOCKED 0
-#define portENTER_CRITICAL(x) ((void)(x))
-#define portEXIT_CRITICAL(x) ((void)(x))
-#define portENTER_CRITICAL_ISR(x) ((void)(x))
-#define portEXIT_CRITICAL_ISR(x) ((void)(x))
-constexpr int pdTRUE=1,pdPASS=1;static TickType_t pdMS_TO_TICKS(uint32_t ms){return ms;}
-static TickType_t xTaskGetTickCount(){return uint32_t(clockUs/1000);}
-static void vTaskDelay(uint32_t ms){clockUs+=int64_t(ms)*1000;}
-static unsigned uxTaskGetStackHighWaterMark(void*){return 1024;}
-static int xTaskCreatePinnedToCore(void(*)(void*),const char*,unsigned,void*,unsigned,TaskHandle_t *out,int){*out=reinterpret_cast<void*>(1);return pdPASS;}
-struct FakeQueue {size_t capacity,itemSize;std::deque<std::vector<uint8_t>> items;};using QueueHandle_t=FakeQueue*;
-static QueueHandle_t xQueueCreate(size_t n,size_t size){return new FakeQueue{n,size,{}};}
-static int xQueueSend(QueueHandle_t q,const void *data,TickType_t){assert(q);if(q->items.size()==q->capacity)return 0;const auto p=static_cast<const uint8_t*>(data);q->items.emplace_back(p,p+q->itemSize);return pdTRUE;}
-static int xQueueReceive(QueueHandle_t q,void *out,TickType_t){assert(q);if(q->items.empty())return 0;std::memcpy(out,q->items.front().data(),q->itemSize);q->items.pop_front();return pdTRUE;}
-static void vQueueDelete(QueueHandle_t q){delete q;}
-constexpr int MALLOC_CAP_SPIRAM=1,MALLOC_CAP_8BIT=2;
-static void *heap_caps_malloc(size_t n,int){return std::malloc(n);}
-'''
 
 fixture = r'''
 #include "fake_runtime.h"
@@ -137,11 +78,12 @@ static bool wipeBlocked=false,historyPage=false,diagnostics=false,tournamentMode
 struct Usb {bool blocked=false;bool inhibited(uint32_t)const{return blocked;}} usbAwake;
 struct Feedback {bool visible=false;bool shown()const{return visible;}} launchFeedback;
 struct PendingStore {bool unsaved=false;bool pending(int)const{return unsaved;}} practiceStore,bestStore;
+struct PendingSettings {bool unsaved=false;bool pending()const{return unsaved;}} settingsSave;
 static int practice=0,personalBests=0;
 struct Imu {struct State {MotionActivity::State activity;} state;bool available=true;State snapshot()const{return state;}bool running()const{return available;}} imuAcquisition;
 struct SerialFake {bool input=false;int available()const{return input;}template<class... T>void printf(const char*,T...){}} Serial;
 static void resetPolicy(Fixture &f){acquisition={&f,0,nullptr};sensorIdle={};inactivity={};inactivity.begin(uint32_t(clockUs/1000)-30000);
-  controls={};wipeBlocked=historyPage=diagnostics=tournamentMode=motionPending=dirty=false;usbAwake={};launchFeedback={};practiceStore={};bestStore={};imuAcquisition={};Serial={};}
+  controls={};wipeBlocked=historyPage=diagnostics=tournamentMode=motionPending=dirty=false;usbAwake={};launchFeedback={};practiceStore={};bestStore={};settingsSave={};imuAcquisition={};Serial={};}
 static void freshMotion(float gyro=0,bool moving=false){auto &a=imuAcquisition.state.activity;a={};a.valid=true;a.sampleUs=clockUs;a.gyroDps=gyro;a.moving=moving;}
 '''
 
@@ -190,7 +132,10 @@ int main(){
     assert(!f.cmd(Action::IdleResume));auto failed=f.s();retained(before,failed);
     assert(!failed.ready && !failed.resting && !failed.suspended && !f.o.checkpoint_ && !f.o.adc_->active && failed.error==ESP_FAIL);
     assert(!std::strcmp(failed.stateName(),"ADC ERROR") && failed.ringCount==0 && flushes==flushCount+1 && starts==startCount+unsigned(!flushFailure));
-    assert(!f.cmd(Action::IdleResume));assert(f.o.recover());assert(f.s().phase==D::Phase::Settling && f.s().ready);
+    // Driver recovery is lost samples, not a reset: the result and Ready are
+    // kept, so a pull right after it is measured instead of swallowed.
+    assert(!f.cmd(Action::IdleResume));assert(f.o.recover());
+    assert(f.s().phase==D::Phase::Ready && f.s().ready && f.s().valid && f.s().resultRpm==before.resultRpm);
     f.level(1200000);assert(f.s().phase==D::Phase::Ready);
   }
   std::cout<<"PASS: stop/flush/start failures publish consistent ownership; failed flush cannot start ADC; normal driver recovery rearms\n";
@@ -214,14 +159,14 @@ int main(){
   std::cout<<"PASS: stopped idle owner converts to shutdown without ADC restart; deferred shutdown rollback retains results; valid/failed Pin clears idle/checkpoint flags\n";
   // Exact main-loop helper, with a command-backed owner rather than a policy
   // imitation. Every blocker prevents pause and resumes an existing pause.
-  for(unsigned blocker=0;blocker<12;++blocker){
+  for(unsigned blocker=0;blocker<13;++blocker){
     Fixture f;resetPolicy(f);
     auto block=[&](bool on){switch(blocker){
       case 0:usbAwake.blocked=on;break;case 1:inactivity.begin(uint32_t(clockUs/1000)-30000,on);break;
       case 2:wipeBlocked=on;break;case 3:controls.page=on?Controls::Page::Menu:Controls::Page::Main;break;
       case 4:historyPage=on;break;case 5:diagnostics=on;break;case 6:tournamentMode=on;break;
       case 7:motionPending=on;break;case 8:launchFeedback.visible=on;break;case 9:practiceStore.unsaved=on;break;
-      case 10:bestStore.unsaved=on;break;case 11:Serial.input=on;break;}};
+      case 10:bestStore.unsaved=on;break;case 11:Serial.input=on;break;case 12:settingsSave.unsaved=on;break;}};
     block(true);assert(!tick().resting && !acquisition.requests && !dirty);
     block(false);assert(tick().resting && acquisition.requests==1 && dirty);
     block(true);assert(!tick().resting && acquisition.requests==2 && sensorIdle.resumes()==1);
@@ -244,25 +189,19 @@ int main(){
     assert(!stale.resting && !stale.opticalIdle && acquisition.requests==1 && !sensorIdle.pauses());
     assert(!tick().resting && acquisition.requests==1); // retry bounded.
   }
-  std::cout<<"PASS: exact tickSensorIdle with actual owner covers USB/probation/views/unsaved-data/Serial/IMU blockers, lower-threshold motion/stale wake,30s re-entry and stale-snapshot rejection\n";
+  std::cout<<"PASS: exact tickSensorIdle with actual owner covers USB/probation/views/unsaved-data/unsaved-settings/Serial/IMU blockers, lower-threshold motion/stale wake,30s re-entry and stale-snapshot rejection\n";
   assert(!handles && !failStop && !failStart && !failFlush);
 }
 '''
 
 with tempfile.TemporaryDirectory(prefix='launchlab_sensor_idle_') as tmp:
     root = pathlib.Path(tmp)
-    (root / 'fake_runtime.h').write_text(runtime)
-    for header in ('esp_adc/adc_continuous.h', 'esp_timer.h', 'driver/gpio.h',
-                   'soc/soc_caps.h', 'freertos/FreeRTOS.h', 'freertos/task.h',
-                   'freertos/queue.h'):
-        path = root / header
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text('#pragma once\n#include "fake_runtime.h"\n')
     cpp = root / 'sensor_idle_pipeline.cpp'
     cpp.write_text(fixture + '\n' + tick + '\n' + tests)
     executable = root / 'sensor_idle_pipeline'
     subprocess.run(['c++', '-std=c++17', '-O1', '-g', '-fsanitize=address,undefined',
-                    '-fno-omit-frame-pointer', '-I' + str(root),
+                    '-fno-omit-frame-pointer',
+                    '-I' + str(pathlib.Path(__file__).resolve().parent / 'fakes/acquisition_host'),
                     '-I' + str(args.firmware / 'LaunchLabMini'),
                     '-I' + str(args.firmware / 'LaunchLabRpm'),
                     str(cpp), '-o', str(executable)], check=True)

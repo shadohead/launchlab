@@ -35,9 +35,16 @@ int main() {
   assert(captured.valid() && captured.fused && captured.startLevel.valid() && captured.endLevel.valid());
   assert(compare(captured,captured).valid && compare(captured,captured).turnDegrees<.05f);
   const auto before=filter.updates();filter.feed(measurement(now,truth,rate),[&](const Sample &){assert(false);});assert(filter.updates()==before);
-  // Missing motion is never silently bridged. Recovery can calibrate without
-  // changing the independent optical acceptance path.
-  now+=60000;filter.feed(measurement(now,truth,zero,bias),[&](const Sample &s){last=s;});
+  // A short gap (one stalled FIFO read) is integrated across and marked
+  // bridged: no reset and no warm-up, but never presented as exact.
+  unsigned bridgedSamples=0;
+  now+=60000;filter.feed(measurement(now,truth,zero,bias),[&](const Sample &s){last=s;bridgedSamples+=s.bridged;});
+  assert(filter.resets()==0 && last.settled && last.bridged && bridgedSamples>=5);
+  now+=10000;filter.feed(measurement(now,truth,zero,bias),[&](const Sample &s){last=s;});
+  assert(!last.bridged);
+  // Missing motion beyond the bridge limit is never silently bridged.
+  // Recovery can calibrate without changing the independent optical acceptance path.
+  now+=150000;filter.feed(measurement(now,truth,zero,bias),[&](const Sample &s){last=s;});
   assert(filter.resets()==1 && !last.settled);
   Sample bad=measurement(now+10000,truth,zero);bad.a[0]=NAN;
   filter.feed(bad,[&](const Sample &s){assert(s.clipped && !s.fused);});assert(filter.resets()==2);

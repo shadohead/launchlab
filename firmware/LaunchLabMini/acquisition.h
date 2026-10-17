@@ -10,6 +10,9 @@
 #include "rpm_estimator.h"
 #include "sample_ring.h"
 #include "history_checkpoint.h"
+#if LAUNCHLAB_HIL
+#include "hil_optical.h"
+#endif
 
 // All ADC API calls, detector state and recorder writes have ONE owner on core
 // 0. M5Unified, drawing, USB and Preferences stay on the Arduino/UI core. No
@@ -126,12 +129,37 @@ private:
   uint64_t samples_=0,sum_=0;
   uint64_t burstStartHostUs_=0,burstEndHostUs_=0;
   uint32_t count_=0,minimum_=4095,maximum_=0,last_=0,maxBatchUs_=0,maxReadGapUs_=0;
-  int64_t windowStart_=0,lastRead_=0,lastPublish_=0,retryAt_=0;
+  int64_t windowStart_=0,lastRead_=0,lastPublish_=0,retryAt_=0,checkpointAt_=0;
   uint64_t processingUs_=0;
   float mean_=0,rate_=0,processingPercent_=0;
   uint32_t displayMin_=0,displayMax_=0,previousRevision_=0;
   AnalogTachometer::Phase previousPhase_=AnalogTachometer::Phase::Paused;
   bool previousFault_=false;
+  // Changes the event queue could not take, oldest first. The UI records a
+  // launch only from these events, and a full queue can last past the next
+  // burst's start, when the live snapshot no longer holds the result. When
+  // the buffer is full, a change whose result the next one repeats (same
+  // revision and validity: phase only) gives way first, then one without a
+  // result.
+  static constexpr unsigned HELD_EVENTS=4;
+  Snapshot held_[HELD_EVENTS];unsigned heldCount_=0;
+  void sendHeld() {
+    unsigned sent=0;
+    while(sent<heldCount_ && xQueueSend(events_,&held_[sent],0)==pdTRUE)++sent;
+    if(sent){std::copy(held_+sent,held_+heldCount_,held_);heldCount_-=sent;}
+  }
+  void hold(const Snapshot &s) {
+    ++lostEvents_;
+    if(heldCount_<HELD_EVENTS){held_[heldCount_++]=s;return;}
+    unsigned drop=HELD_EVENTS;
+    for(unsigned i=0;i<HELD_EVENTS && drop==HELD_EVENTS;++i) {
+      const Snapshot &next=i+1<HELD_EVENTS?held_[i+1]:s;
+      if(held_[i].revision==next.revision && held_[i].valid==next.valid)drop=i;
+    }
+    for(unsigned i=0;i<HELD_EVENTS && drop==HELD_EVENTS;++i)if(!held_[i].valid)drop=i;
+    if(drop==HELD_EVENTS)drop=HELD_EVENTS-1;
+    std::copy(held_+drop+1,held_+HELD_EVENTS,held_+drop);held_[HELD_EVENTS-1]=s;
+  }
   static void taskEntry(void *self){static_cast<StickS3Acquisition *>(self)->run();}
   static bool IRAM_ATTR overflow(adc_continuous_handle_t,const adc_continuous_evt_data_t *,void *self) {
     auto &owner=*static_cast<StickS3Acquisition *>(self);
@@ -148,7 +176,15 @@ private:
     count_=0;sum_=0;minimum_=4095;maximum_=0;processingUs_=0;
     windowStart_=esp_timer_get_time();lastRead_=0;
   }
-  void discontinuity() {ring_.discontinuity();detector_.dataLoss();takeMarks();resetWindow();}
+  // Explicit resets (Pin, Reset, Resume) restart the detector. Lost samples
+  // (overflow, read error, malformed frame) keep a completed result and Ready.
+  void discontinuity(bool samplesLost=false) {
+#if LAUNCHLAB_HIL
+    Hil::optical().resync();
+#endif
+    ring_.discontinuity();
+    if(samplesLost)HistoryCheckpoint::sampleGap(detector_);else detector_.dataLoss();
+    takeMarks();resetWindow();}
   void closeAdc() {
     if(adc_) {
       if(ready_)adc_continuous_stop(adc_);
@@ -183,24 +219,34 @@ private:
     seenOverflows_=overflowCount();resetWindow();return ready_;
   }
   bool recover() {
-    discontinuity();closeAdc();
+    discontinuity(true);closeAdc();
     const bool ok=initAdc();retryAt_=esp_timer_get_time()+1000000;return ok;
   }
   void process(const uint8_t *buffer,uint32_t bytes) {
     // Reject malformed/foreign frames as sample loss, rather than silently
     // compressing timestamps by skipping samples and inventing faster RPM.
-    if(!bytes || bytes%SOC_ADC_DIGI_RESULT_BYTES){++invalidFrames_;discontinuity();return;}
+    if(!bytes || bytes%SOC_ADC_DIGI_RESULT_BYTES){++invalidFrames_;discontinuity(true);return;}
     for(uint32_t i=0;i<bytes;i+=SOC_ADC_DIGI_RESULT_BYTES) {
       const auto *sample=reinterpret_cast<const adc_digi_output_data_t *>(buffer+i);
       if(sample->type2.unit!=0 || sample->type2.channel!=channel_) {
-        ++invalidFrames_;discontinuity();return;
+        ++invalidFrames_;discontinuity(true);return;
       }
     }
     const int64_t started=esp_timer_get_time();
     const uint32_t attempts=detector_.attempts,revision=detector_.resultRevision;
     uint16_t marks=takeMarks();
+#if LAUNCHLAB_HIL
+    // Test builds may replace the values of this real DMA frame (cadence kept).
+    uint16_t hilValues[1024/SOC_ADC_DIGI_RESULT_BYTES];
+    const bool hil=bytes<=sizeof(hilValues)/sizeof(hilValues[0])*SOC_ADC_DIGI_RESULT_BYTES &&
+      Hil::optical().fill(hilValues,bytes/SOC_ADC_DIGI_RESULT_BYTES,lastRead_);
+#endif
     for(uint32_t i=0;i<bytes;i+=SOC_ADC_DIGI_RESULT_BYTES) {
-      const uint16_t value=reinterpret_cast<const adc_digi_output_data_t *>(buffer+i)->type2.data;
+      const uint16_t value=
+#if LAUNCHLAB_HIL
+        hil?hilValues[i/SOC_ADC_DIGI_RESULT_BYTES]:
+#endif
+        reinterpret_cast<const adc_digi_output_data_t *>(buffer+i)->type2.data;
       ring_.record(value|marks);marks=0;
       detector_.feed(value);
       last_=value;sum_+=value;++count_;++samples_;
@@ -255,7 +301,7 @@ private:
         if(suspended_ || detector_.phase==AnalogTachometer::Phase::Launch || detector_.launches!=c.value ||
            (detector_.phase==AnalogTachometer::Phase::Ready && !detector_.historyCheckpointIdle())){ok=false;break;}
         if(ready_){error_=adc_continuous_stop(adc_);ok=error_==ESP_OK;}
-        if(ok){checkpointResult_=HistoryCheckpoint(detector_);ready_=false;suspended_=true;checkpoint_=adc_!=nullptr;}
+        if(ok){checkpointResult_=HistoryCheckpoint(detector_);checkpointAt_=esp_timer_get_time();ready_=false;suspended_=true;checkpoint_=adc_!=nullptr;}
         break;
       case Action::IdlePause:
       case Action::HistoryIdleCheckpointBegin:
@@ -264,7 +310,7 @@ private:
         if(!ready_ || suspended_ || !HistoryCheckpoint::allowedIdle(detector_,c.value) ||
            (c.action==Action::IdlePause && detector_.phase!=AnalogTachometer::Phase::Ready)){ok=false;break;}
         error_=adc_continuous_stop(adc_);ok=error_==ESP_OK;
-        if(ok){checkpointResult_=HistoryCheckpoint(detector_);ready_=false;suspended_=checkpoint_=true;
+        if(ok){checkpointResult_=HistoryCheckpoint(detector_);checkpointAt_=esp_timer_get_time();ready_=false;suspended_=checkpoint_=true;
           idlePaused_=c.action==Action::IdlePause;}
         break;
       case Action::Resume:
@@ -277,7 +323,7 @@ private:
       case Action::CheckpointBegin:
         if(!ready_ || suspended_ || !HistoryCheckpoint::allowed(detector_)){ok=false;break;}
         error_=adc_continuous_stop(adc_);ok=error_==ESP_OK;
-        if(ok){checkpointResult_=HistoryCheckpoint(detector_);ready_=false;suspended_=checkpoint_=true;}
+        if(ok){checkpointResult_=HistoryCheckpoint(detector_);checkpointAt_=esp_timer_get_time();ready_=false;suspended_=checkpoint_=true;}
         break;
       case Action::IdleResume:
         if(!idlePaused_){ok=false;break;}
@@ -285,7 +331,11 @@ private:
       case Action::CheckpointEnd:
         if(!checkpoint_ || !suspended_ || !adc_){ok=false;break;}
         checkpoint_=suspended_=idlePaused_=false;
-        ring_.discontinuity();checkpointResult_.restore(detector_);takeMarks();resetWindow();
+#if LAUNCHLAB_HIL
+        Hil::optical().resync();
+#endif
+        ring_.discontinuity();checkpointResult_.restore(detector_,uint64_t(esp_timer_get_time()-checkpointAt_));
+        takeMarks();resetWindow();
         error_=adc_continuous_flush_pool(adc_);
         if(error_==ESP_OK)error_=adc_continuous_start(adc_);
         ready_=error_==ESP_OK;ok=ready_;seenOverflows_=overflowCount();
@@ -296,6 +346,7 @@ private:
     if(xQueueSend(replies_,&reply,0)!=pdTRUE)++lostEvents_;
   }
   void publish(bool force=false) {
+    if(heldCount_)sendHeld();
     const int64_t now=esp_timer_get_time();
     const bool changed=detector_.resultRevision!=previousRevision_ || detector_.phase!=previousPhase_ || detector_.signalFault!=previousFault_;
     if(!force && !changed && now-lastPublish_<10000)return;
@@ -323,7 +374,9 @@ private:
     s.noise=detector_.noiseBand;s.amplitude=RpmEstimator::select(estimator_,detector_.sustainedPeakAmplitude,detector_.singlePeakAmplitude);s.startNoise=detector_.startNoiseBand;
     s.contrast=detector_.signalContrast;s.hysteresis=detector_.hysteresis;
     portENTER_CRITICAL(&snapshotMux_);snapshot_=s;portEXIT_CRITICAL(&snapshotMux_);
-    if(changed && xQueueSend(events_,&s,0)!=pdTRUE)++lostEvents_;
+    // A change the queue cannot take is held and sent in order on the next
+    // publish (every batch); dropping it lost a counted launch's record.
+    if(changed && (heldCount_ || xQueueSend(events_,&s,0)!=pdTRUE))hold(s);
     previousRevision_=s.revision;previousPhase_=s.phase;previousFault_=s.signalFault;lastPublish_=now;
   }
   void run() {

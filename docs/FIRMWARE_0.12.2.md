@@ -2,7 +2,7 @@
 
 The frozen 0.12.2 source contains the exact 49 compiled inputs for `0.12.2-sticks3-flip-colors`.
 Source-set SHA-256: `4cba14781316dbff76c3314ff3b26420a99a3c7c39be6e70c99f4a3266be61e6`.
-The current updater recommends 0.13.8; this document describes the preserved 0.12.2 release.
+The current updater recommends 0.13.9; this document describes the preserved 0.12.2 release.
 Historical 0.12.1 payloads remain unchanged and withdrawn from the version picker.
 
 ## Build from the source ZIP

@@ -7,7 +7,11 @@
 // observe translation or absolute yaw. No velocity/position state is invented.
 class LauncherOrientation {
 public:
-  static constexpr uint64_t STEP_US=10000,MAX_GAP_US=35000;
+  // A gap up to BRIDGE_US (one stalled or discarded FIFO read, a short task
+  // stall) is integrated across with linearly interpolated rates, keeping the
+  // pose and warm-up, and its samples are marked bridged (approximate). Longer
+  // gaps cannot be bridged honestly and restart inclination as before.
+  static constexpr uint64_t STEP_US=10000,MAX_GAP_US=35000,BRIDGE_US=100000;
   LauncherOrientation():filter_(.01){}
   uint32_t updates()const{return updates_;}
   uint32_t resets()const{return resets_;}
@@ -32,7 +36,7 @@ public:
     if(!usable) {
       auto bad=raw;bad.clipped=true;emit(bad);restart();previous_={};return;
     }
-    if(previous_.us && raw.us-previous_.us>MAX_GAP_US){restart();previous_={};}
+    if(previous_.us && raw.us-previous_.us>BRIDGE_US){restart();previous_={};}
     if(!previous_.us) {
       previous_=raw;next_=raw.us+STEP_US;
       vqf_real_t acceleration[3];for(unsigned j=0;j<3;++j)acceleration[j]=raw.a[j]*9.80665;
@@ -41,6 +45,7 @@ public:
     }
     // A grid sample touching a full-scale reading on either side is approximate.
     const bool saturated=previous_.saturated || raw.saturated;
+    const bool bridged=raw.us-previous_.us>MAX_GAP_US;
     // Integrate each piece of the measured gyro interval onto the fixed grid.
     // This preserves actual elapsed time even when USB/I2C polling jitters.
     uint64_t cursor=previous_.us;
@@ -50,7 +55,7 @@ public:
       const float f1=float(end-previous_.us)/float(raw.us-previous_.us);
       for(unsigned j=0;j<3;++j)integral_[j]+=(previous_.g[j]+(raw.g[j]-previous_.g[j])*(f0+f1)*.5f)*(end-cursor);
       if(end==next_) {
-        LaunchMotion::Sample sample;sample.us=next_;sample.saturated=saturated;vqf_real_t rate[3],acceleration[3];
+        LaunchMotion::Sample sample;sample.us=next_;sample.saturated=saturated;sample.bridged=bridged;vqf_real_t rate[3],acceleration[3];
         for(unsigned j=0;j<3;++j) {
           sample.a[j]=previous_.a[j]+(raw.a[j]-previous_.a[j])*f1;
           sample.g[j]=integral_[j]/STEP_US;integral_[j]=0;

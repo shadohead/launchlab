@@ -62,15 +62,20 @@ static constexpr uint32_t HISTORY_COALESCE_MS=10000,HISTORY_SAVE_RETRY_MS=5000;
 static PracticeHistory practice;static PracticeStore practiceStore;
 static LaunchMotion::Trace latestMotion,demoMotion;
 static bool motionPending=false,saveError=false,dirty=false,tournamentMode=true,historyPage=false,diagnostics=false,motionDemo=false,demo=false;
+static constexpr uint64_t MOTION_CAPTURE_RETRY_US=3000000;static uint32_t motionCaptureRetries=0;
 static uint32_t lastSaveTry=0,maxSaveUs=0,saveCount=0,saveErrors=0,lastAcceptedAt=0,historyPendingSince=0,motionDrops=0,lastDraw=0,lastShutdownTry=0;
+static HistoryCheckpoint::Stillness imuStill{true,0}; // launcher set down unless a case says otherwise
 static uint64_t motionStart=0,motionEnd=0;
 static void cancelSettingEdit(){}
 static bool saveWakeNavigation(){return true;}
 struct Feedback {void show(uint32_t){}bool shown(){return false;}bool replayStarted(){return false;}uint32_t replayElapsed(uint32_t){return 0;}uint32_t lastReplayElapsed(){return 0;}} launchFeedback;
 struct HWCDC {static bool isPlugged(){return false;}};
 struct SerialFake {void println(const char*){};void flush(){};template<class... Args>void printf(const char*,Args...){}} Serial;
+// USB output is drained (never Serial.flush(), which discards it): usb_tx.h.
+namespace UsbTx {inline unsigned drains=0;inline bool drain(uint32_t){++drains;return true;}}
+
 enum class Action {IdleCheckpointBegin,CheckpointBegin,CheckpointEnd,HistoryIdleCheckpointBegin,ShutdownBegin,Pin};
-struct Snapshot {AnalogTachometer::Phase phase;uint32_t launches;bool valid=true;float resultRpm=6000;uint64_t burstStartHostUs=0,burstEndHostUs=0;uint8_t pin=1;StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;RpmEstimator::Mode estimator=RpmEstimator::DEFAULT_MODE;};
+struct Snapshot {AnalogTachometer::Phase phase;uint32_t launches;bool valid=true,signalFault=false;float resultRpm=6000;uint64_t burstStartHostUs=0,burstEndHostUs=0;uint8_t pin=1;StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;RpmEstimator::Mode estimator=RpmEstimator::DEFAULT_MODE;};
 struct Acquisition {
   AnalogTachometer detector;HistoryCheckpoint saved;unsigned begins=0,lagUs=0,deliveryLagUs=0;bool suspended=false;
   Snapshot snapshot(){Snapshot s{detector.phase,detector.launches};s.resultRpm=detector.resultRpm;
@@ -106,7 +111,10 @@ static void powerRecord(uint8_t){}static bool savePowerLog(){return true;}
 struct SleepReceipt{uint32_t magic;int64_t atUs;};static SleepReceipt sleepReceipt;
 struct {bool arm(){return true;}bool restore(){return true;}
   bool sleep(){assert(!practiceStore.pending(practice));reachedSleep=true;return false;}} shakeWake;
+static unsigned restoreFailureNotes=0;static void noteMotionRestoreFailure(){++restoreFailureNotes;}
 static void logLaunchMetrics(const Snapshot&){}
+// Settings persistence has its own production harness (check_save_paths.py).
+static void writeSettings(){}
 static unsigned writeDurationMs=178;static std::vector<uint32_t> writeAt;
 '''
 tests = r'''
@@ -137,15 +145,21 @@ static void waitReady(){unsigned waited=0;while(acquisition.detector.phase!=Anal
 static void pull(){
   assert(acquisition.detector.phase==AnalogTachometer::Phase::Ready);
   for(unsigned i=0;i<12;++i){level(240,5000);level(140,5000);}
-  level(240,2000);level(140,2000);level(240,40000);
+  // Marks stopping near the peak end the burst 50 ms later (no marks resume).
+  level(240,2000);level(140,2000);level(240,60000);
   const auto event=acquisition.snapshot();assert(event.phase==AnalogTachometer::Phase::Hold);
   assert(practice.accept(event.launches,true,event.resultRpm,millis()));prepareMotion(event);
   while(motionPending){level(140,10000);tick();}
 }
 int main(){
   reset(0,1600000);pull();assert(latestMotion.valid() && latestMotion.points[0].ms>-200);
-  reset();clockUs+=65000;spin(1600);pull();assert(latestMotion.valid() && latestMotion.points[0].ms>-200);
+  reset();clockUs+=150000;spin(1600);pull();assert(latestMotion.valid() && latestMotion.points[0].ms>-200);
   std::cout<<"early recovery: settled pull at 1.6s after startup or a real gap uses shorter measured pre-roll\n";
+  // A short gap (<=100 ms, one stalled FIFO read) is bridged: no reset, full
+  // pre-roll, and the gap lies outside the pull so the replay stays exact.
+  reset();clockUs+=65000;spin(1200);pull();
+  assert(latestMotion.valid() && !latestMotion.bridged && latestMotion.points[0].ms<-400 && imuAcquisition.orientation.resets()==0);
+  std::cout<<"short 65ms gap bridged: no warm-up, full pre-roll, exact replay\n";
   reset();pull();assert(latestMotion.valid());
   const uint32_t began=historyPendingSince;
   for(unsigned n=2;n<=4;++n){spin(1050);pull();assert(latestMotion.valid() && writeAt.empty());}
@@ -156,6 +170,21 @@ int main(){
   std::cout<<"rapid bout: 4 valid captures, 1 coalesced Ready checkpoint, 4 records durable\n";
   waitReady();pull();assert(latestMotion.quality==LaunchMotion::Quality::Warming);
   spin(2300);assert(imuAcquisition.orientation.resets()>0);
+  // Handheld (IMU never still): the automatic write waits for a 60 s pause
+  // instead of landing on the usual 10-20 s re-pull time.
+  reset();imuStill={};pull();spin(HISTORY_COALESCE_MS+5000);
+  assert(writeAt.empty() && practiceStore.pending(practice));
+  spin(HistoryCheckpoint::HANDHELD_QUIET_MS-HISTORY_COALESCE_MS);
+  assert(writeAt.size()==1 && !practiceStore.pending(practice) && writeAt[0]-lastAcceptedAt>=HistoryCheckpoint::HANDHELD_QUIET_MS);
+  // A handled bout with a pull every 25 s never gets a 60 s pause; once its
+  // oldest unsaved pull is three minutes old it is written after the next one.
+  reset();imuStill={};pull();const uint32_t bout=historyPendingSince;
+  while(millis()-bout+25000<HistoryCheckpoint::MAX_PENDING_MS){spin(25000);assert(writeAt.empty());pull();}
+  spin(25000);
+  assert(writeAt.size()==1 && !practiceStore.pending(practice));
+  assert(writeAt[0]-bout>=HistoryCheckpoint::MAX_PENDING_MS && writeAt[0]-bout<HistoryCheckpoint::MAX_PENDING_MS+10000);
+  imuStill={true,0};
+  std::cout<<"handheld: coalesced write waits 60 s since the last pull; a 25 s bout is saved within 3 min\n";
   reset();pull();const uint32_t oldest=historyPendingSince;
   for(unsigned n=0;n<20;++n){spin(1050);pull();assert(latestMotion.valid() && writeAt.empty());}
   assert(millis()-oldest>HISTORY_COALESCE_MS && practiceStore.pendingCount(practice)==21);
@@ -185,10 +214,10 @@ int main(){
   unsigned waited=0;while(writeAt.size()==1){spin(10);assert(++waited<1500);}
   assert(writeAt.size()==2 && writeAt[1]-sleepTry>=5000+writeDurationMs);
   std::cout<<"failed sleep: no standby; 5s automatic retry backoff; valid capture before retry\n";
-  reset();clockUs+=65000;spin(1200);pull();
+  reset();clockUs+=150000;spin(1200);pull();
   assert(latestMotion.quality==LaunchMotion::Quality::Warming && imuAcquisition.orientation.resets()>0);
   reset();imuAcquisition.clipped=true;pull();assert(latestMotion.quality==LaunchMotion::Quality::Clipped);
-  std::cout<<"real 65ms gap and clipped paired samples still reject tilt capture\n";
+  std::cout<<"real 150ms gap and clipped paired samples still reject tilt capture\n";
   for(bool single:{false,true}){
     reset();acquisition.detector.singleTurnPeak=single;pull();const float expected=single?15000:6000;
     spin(HISTORY_COALESCE_MS);PracticeHistory saved;PracticeStore reader;assert(reader.begin(saved));

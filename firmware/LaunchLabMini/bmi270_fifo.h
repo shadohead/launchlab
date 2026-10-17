@@ -111,12 +111,23 @@ private:
 
 #ifdef ARDUINO
 #include <M5Unified.h>
+#if LAUNCHLAB_HIL
+#include "hil_imu.h"
+#endif
 namespace Bmi270Fifo {
 inline bool readRegisters(uint8_t reg,uint8_t *data,size_t n) {
+#if LAUNCHLAB_HIL
+  return Hil::imu().read(reg,data,n);
+#else
   return M5.In_I2C.readRegister(StickS3AccelRange::I2C_ADDRESS,reg,data,n,400000);
+#endif
 }
 inline bool writeRegister(uint8_t reg,uint8_t value) {
+#if LAUNCHLAB_HIL
+  return Hil::imu().write(reg,value);
+#else
   return M5.In_I2C.writeRegister(StickS3AccelRange::I2C_ADDRESS,reg,&value,1,400000);
+#endif
 }
 // Program and verify sensor rates, gyro range and FIFO, then flush. Caller
 // owns the IMU bus. Every M5 begin and shake-wake arm soft-resets these.

@@ -37,6 +37,7 @@ def function(source, name, result="void", static=True):
 
 PREFIX = r'''
 #include "controls.h"
+#include "usb_command_guard.h"
 #include "accel_range.h"
 #include "wipe_confirmation.h"
 #include "device_wipe.h"
@@ -67,6 +68,7 @@ static uint32_t millis(){return clockMs;}
 static unsigned normalWrites=0,normalLoads=0,statusReads=0,draws=0,levelPolls=0,restarts=0;
 static void delay(unsigned ms){clockMs+=ms;}
 static void normal(){++normalWrites;}
+static UsbCommandGuard usbCommands;
 struct SerialFake {
   std::deque<char> input;std::vector<std::string> output;
   unsigned available()const{return input.size();}
@@ -76,6 +78,8 @@ struct SerialFake {
   explicit operator bool()const{return true;}
   void feed(const std::string &s){for(char c:s)input.push_back(c);}
 }Serial;
+// USB output is drained (never Serial.flush(), which discards it): usb_tx.h.
+namespace UsbTx {inline unsigned drains=0;inline bool drain(uint32_t){++drains;return true;}}
 struct {void restart(){++restarts;}}ESP;
 struct M5Fake {
   m5::Button_Class BtnA,BtnB;bool rawA=false,rawB=false;unsigned updates=0;
@@ -160,6 +164,7 @@ static bool visibleDisplayFlipped(){return false;}
 struct Prefs {unsigned writes=0;size_t putUChar(const char *,uint8_t){++writes;normal();return 1;}
   bool putBool(const char *,bool){++writes;normal();return true;}}prefs;
 struct {bool arm(){normal();return true;}bool restore(){normal();return true;}}shakeWake;
+static unsigned restoreFailureNotes=0;static void noteMotionRestoreFailure(){++restoreFailureNotes;}
 static void status(){++statusReads;}
 static void draw(const Snapshot &){++draws;}
 static void pollLevel(uint32_t){++levelPolls;}
@@ -176,6 +181,10 @@ static void previewBestEffect(Appearance::Effect){normal();}
 static void prepareMotion(const Snapshot &){normal();}static void logLaunchMetrics(const Snapshot &){normal();}
 static void finishMotion(){normal();}static void retryMotion(uint32_t,const Snapshot &){normal();}
 static void saveHistory(uint32_t,const Snapshot &){normal();}
+// Settings saves and the orphaned-checkpoint release must never run after an
+// erase attempt: one would write old RAM, the other resume the held checkpoint.
+static void saveSettings(uint32_t,const Snapshot &){normal();}static void releaseOrphanCheckpoint(uint32_t,const Snapshot &){normal();}
+struct SettingsSave {enum Item:uint16_t {Pin=128,ExtPower=256};void mark(uint16_t){normal();}bool pending()const{return false;}}settingsSave;
 static void pollBattery(uint32_t,const Snapshot &){normal();}static void tickPowerLog(uint32_t,const Snapshot &){normal();}
 static void pollUsbAwake(uint32_t,const Snapshot &){normal();}static void tickSound(const Snapshot &){normal();}
 // Side-key power-off has its own production harness; its wipe guard is tested there.
@@ -427,7 +436,7 @@ def main():
              "beginWipe", "cancelWipe", "restartAfterWipe", "commitWipe", "pollWipe", "tickDisplayPower"]
     bodies = "\n".join(function(source, name) for name in names)
     bodies += "\n" + function(source, "recoverWipe", result="bool")
-    bodies += "\n" + function(source, "pollCommands")
+    bodies += "\n" + function(source, "runUsbCommand") + "\n" + function(source, "pollCommands")
     # Execute the exact earliest standby exclusion; the remaining existing
     # sleep/save behavior has its own full USB/standby production harness.
     off = function(source, "autoPowerOff")

@@ -81,7 +81,7 @@ inline void editor(lgfx::LGFXBase &g,const Controls::State &state,bool failed,bo
     g.drawString("Align level + replay",g.width()/2,154,1);
     g.drawString("to your mount",g.width()/2,169,1);
   }
-  if(failed){g.setTextColor(TFT_ORANGE,TFT_BLACK);g.drawString("Try again when idle",g.width()/2,196,1);}
+  if(failed){g.setTextColor(TFT_ORANGE,TFT_BLACK);g.drawString("Could not apply",g.width()/2,196,1);}
   footer(g,"A Apply  B Next");
 }
 inline void session(lgfx::LGFXBase &g,bool start) {

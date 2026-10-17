@@ -1,4 +1,5 @@
 #pragma once
+#include "usb_tx.h"
 // Samples may live in a ring: sample k is values[(start+k)%capacity].
 static inline uint8_t rawByte(const uint16_t *values,uint32_t capacity,uint32_t start,size_t j) {
   uint32_t index=start+uint32_t(j/2);if(index>=capacity)index-=capacity;
@@ -25,7 +26,7 @@ static void opticalTransferRaw(const uint16_t *values,uint32_t capacity,uint64_t
     size_t length=prefix+n*2;packet[length++]='\n';
     bool ack=false;
     for(unsigned attempt=0;attempt<5 && !ack;attempt++) {
-      Serial.println();Serial.write((uint8_t*)packet,length);Serial.flush();
+      Serial.println();Serial.write((uint8_t*)packet,length);UsbTx::drain(1000);
       char reply[40];unsigned used=0;int64_t waitUntil=esp_timer_get_time()+2000000;
       while(esp_timer_get_time()<waitUntil && !ack) {
         while(Serial.available()) {

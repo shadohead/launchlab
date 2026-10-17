@@ -779,5 +779,19 @@
       "qre1113",
       "tcrt5000"
     ]
+  },
+  {
+    "release": "0.13.9-sticks3-rpm-guard-pm",
+    "runtime_version": "0.13.9-sticks3-rpm-guard-pm",
+    "board": "M5StickS3 K150",
+    "date": "2026-10-17",
+    "binary": "LaunchLabMini.ino.bin",
+    "binary_bytes": 844032,
+    "sha256": "ec9f09ae41577bf96aefc1b308953480dd2fad5ab746afe2ade53faafd6cae6c",
+    "application_offset": "0x10000",
+    "profiles": [
+      "qre1113",
+      "tcrt5000"
+    ]
   }
 ]

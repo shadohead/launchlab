@@ -57,10 +57,12 @@ int main() {
   assert(d.phase==AnalogTachometer::Phase::Ready && !HistoryCheckpoint::allowed(d));
   pull(d);assert(d.phase==AnalogTachometer::Phase::Launch && !HistoryCheckpoint::allowed(d));
   flat(d,50000);assert(d.phase==AnalogTachometer::Phase::Hold && d.launches==1);
-  const float result=d.resultRpm;const uint32_t revision=d.resultRevision;
+  const float result=d.resultRpm;const uint32_t revision=d.resultRevision;const uint32_t rearm=d.rearmMs();
   HistoryCheckpoint checkpoint(d);checkpoint.restore(d);
   assert(d.resultValid && d.resultRpm==result && d.resultRevision==revision && d.launches==1);
-  assert(d.phase==AnalogTachometer::Phase::Hold && d.rearmMs()==1000);
+  // REARM resumes with the quiet it had served and still expects the rewind
+  // (restarting a full second swallowed the next pull).
+  assert(d.phase==AnalogTachometer::Phase::Hold && d.rearmMs()==rearm && rearm<1000 && d.rewindPending);
   pull(d,15000);assert(d.launches==1 && d.phase==AnalogTachometer::Phase::Hold);
   flat(d,1600000);pull(d,8000);flat(d,60000);
   assert(d.launches==2 && std::fabs(d.resultRpm-7500)<3);

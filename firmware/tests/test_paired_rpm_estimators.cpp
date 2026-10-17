@@ -23,6 +23,11 @@ static Original::AnalogTachometer oldReady(){Original::AnalogTachometer d;d.minM
 // The two reset-recovery fixtures retain samplewise state/publication/rearm
 // equality and use their generated 10-ms timing oracle for recovered RPM,
 // because normalizing the swing-ring index corrects the first-window timing.
+// Since 0.13.9 three boundary rules differ by design (test_rpm_hardening.cpp):
+// marks stopping near the peak end the burst only when the next marks fail to
+// continue it, a flat or re-accelerating pair of slow turns waits for a third
+// (both at the same boundary), and strong turns after a pull extend REARM
+// until its rewind is recognized. All are compared as invariants.
 struct OpticalTrace {
   AnalogTachometer current;
   BeforeGuard::AnalogTachometer before;
@@ -34,6 +39,26 @@ struct OpticalTrace {
     level(1200000,140);
   }
   void boundaries()const {
+    // The earlier detector ended on the plain gap; this one is still waiting
+    // for the marks after it. Results are compared once it ends.
+    if(before.phase==BeforeGuard::AnalogTachometer::Phase::Hold &&
+       (before.ended==BeforeGuard::AnalogTachometer::End::Gap ||
+        before.ended==BeforeGuard::AnalogTachometer::End::Slowdown) &&
+       current.phase==AnalogTachometer::Phase::Launch)return;
+    // REARM after a pull can only be longer, never shorter.
+    if(current.phase==AnalogTachometer::Phase::Hold && current.rewindPending) {
+      assert(before.phase!=BeforeGuard::AnalogTachometer::Phase::Launch);
+      assert(current.launches==before.launches && current.resultRevision==before.resultRevision);
+      assert(current.resultRpm==before.resultRpm && current.burstEndUs==before.burstEndUs);
+      if(before.phase==BeforeGuard::AnalogTachometer::Phase::Hold)assert(current.rearmMs()>=before.rearmMs());
+      return;
+    }
+    // Since 0.13.9 turns after a reset count only once the swing history is
+    // back (a turn spanning the noise-to-mark hysteresis switch is mistimed),
+    // so a recovered burst confirms up to two turns after the old detector.
+    const bool recoveringLater=recoveryOracleRpm>0 &&
+      current.phase==AnalogTachometer::Phase::Ready && before.phase==BeforeGuard::AnalogTachometer::Phase::Launch;
+    if(recoveringLater){assert(current.launches==before.launches);return;}
     assert(int(current.phase)==int(before.phase) && current.resultValid==before.resultValid);
     assert(current.launches==before.launches && current.resultRevision==before.resultRevision);
     if(recoveryOracleRpm>0) {
@@ -52,8 +77,13 @@ struct OpticalTrace {
       assert(current.peakRpm==before.peakRpm && current.resultRpm==before.resultRpm);
       assert(current.sustainedPeakRpm==before.sustainedPeakRpm);
     }
-    assert(current.burstStartUs==before.burstStartUs && current.burstEndUs==before.burstEndUs);
-    assert(current.rearmMs()==before.rearmMs() && current.rearmExtensions==before.rearmExtensions);
+    if(recoveryOracleRpm>0)assert(current.burstStartUs>=before.burstStartUs &&
+      current.burstStartUs<=before.burstStartUs+uint64_t(2*60000000.0f/recoveryOracleRpm)+1000);
+    else assert(current.burstStartUs==before.burstStartUs);
+    assert(current.burstEndUs==before.burstEndUs);
+    assert(current.rearmExtensions>=before.rearmExtensions);
+    if(current.phase==AnalogTachometer::Phase::Hold)assert(current.rearmMs()>=before.rearmMs());
+    else assert(current.rearmMs()==before.rearmMs());
   }
   void level(unsigned us,int value) {
     assert(us%20==0);
@@ -140,12 +170,16 @@ int main() {
   assert(std::fabs(corroboratedHalf.before.singlePeakRpm-30000)<3);
   assert(std::fabs(corroboratedHalf.current.singlePeakRpm-7500)<3);
   // A speed doubling can also have two intervals summing to the old cadence.
-  // At a terminal gap, or when faster motion continues, preserve its maximum.
+  // When faster motion continues, preserve its maximum. Exactly two final
+  // intervals summing to the preceding turn are rejected since 0.13.9: a gear
+  // cannot double its speed and stop dead within one turn, and the same
+  // samples are a notch splitting the final mark. A single final interval has
+  // no split context and stays an arrival-checked surge.
   for(unsigned count:{1u,2u,3u,12u}) {
     OpticalTrace doubling;doubling.turns(10000,12);doubling.turns(5000,count);
     doubling.finish(240);
-    assert(std::fabs(doubling.current.singlePeakRpm-12000)<3);
-    assert(doubling.current.singlePeakRpm==doubling.before.singlePeakRpm);
+    assert(std::fabs(doubling.current.singlePeakRpm-(count==2?6000:12000))<3);
+    if(count!=2)assert(doubling.current.singlePeakRpm==doubling.before.singlePeakRpm);
   }
   OpticalTrace continuing;continuing.turns(10000,12);continuing.turns(6000,1);
   continuing.turns(4000,1);continuing.turns(3000,8);continuing.finish(240);
@@ -195,14 +229,14 @@ int main() {
   assert(terminal.current.resultValid && terminal.current.singlePeakRpm==published);
   // Observably identical genuine 4 ms + 6 ms + 10 ms motion cannot be distinguished
   // from a subdivided 10 ms mark. This near-exact recovery pattern is rejected
-  // conservatively. A terminal subdivision without recovery is unresolved,
-  // preserving the intentional final-turn surge behavior checked above.
+  // conservatively, and since 0.13.9 so is the same subdivision as the final
+  // mark (it read 15,000 1-turn RPM for a 6,000 RPM pull).
   OpticalTrace ambiguous;ambiguous.turns(10000,12);ambiguous.turns(4000,1);
   ambiguous.turns(6000,1);ambiguous.turns(10000,8);ambiguous.finish(240);
   assert(std::fabs(ambiguous.current.singlePeakRpm-6000)<3);
   OpticalTrace terminalSplit;terminalSplit.turns(10000,12);
   terminalSplit.turns(4000,1);terminalSplit.turns(6000,1);terminalSplit.finish(240);
-  assert(std::fabs(terminalSplit.current.singlePeakRpm-15000)<3);
+  assert(std::fabs(terminalSplit.current.singlePeakRpm-6000)<3);
   ramp.dataLoss();assert(!ramp.resultValid && ramp.singlePeakRpm==0 && ramp.sustainedPeakRpm==0);
   std::cout<<"PASS: frozen three-adjacent-turn timing oracle, no nonadjacent peak averaging, period-vs-RPM average, simultaneous final peaks, split/recovery rejection, terminal/sustained acceleration, sample-identical launch/rearm boundaries, confirmed-window retention, malformed arrivals and reset/checkpoint publication\n";
 }

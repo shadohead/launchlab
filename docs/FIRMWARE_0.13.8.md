@@ -1,5 +1,7 @@
 # Firmware 0.13.8 build context
 
+Superseded by [0.13.9](FIRMWARE_0.13.9.md); this document describes the preserved 0.13.8 release.
+
 The shipping runtime is `0.13.8-sticks3-fifo-timing-pm`, application SHA-256 `a1d5c47ef9e46a19ec79e36f65aeee2186a62bfbb1cf59f01af4ae2f83407525`. The compiled source snapshot is frozen in the [release directory](../firmware/releases/0.13.8-sticks3-fifo-timing-pm/). It uses the same PM SDK, toolchain, bootloader and partition table as [0.13.5](FIRMWARE_0.13.5.md). Use the [USB updater](https://launchlab.beywatch.gg/update) for the shipping image.
 
 ## Build from source

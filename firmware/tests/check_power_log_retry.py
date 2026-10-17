@@ -36,7 +36,7 @@ static uint32_t clockMs=0;
 static uint32_t millis(){return clockMs;}
 static bool powerLogReady=true,powerLogDirty=true,motionPending=false;
 static constexpr uint32_t HISTORY_COALESCE_MS=10000;
-static uint32_t lastAcceptedAt=0;
+static uint32_t lastAcceptedAt=0;static HistoryCheckpoint::Stillness imuStill{true,0}; // launcher set down
 struct {bool active=false;bool shown(){return active;}}launchFeedback;
 static PowerDiagnostics::Image powerLog;
 static uint32_t powerLogTick=0,lastPowerSample=0,lastPowerSave=0,lastPowerSaveTry=0;
@@ -126,6 +126,16 @@ int main(){
   tickPowerLog(clockMs,{AnalogTachometer::Phase::Ready,0});assert(powerPrefs.writes==0);
   clockMs+=1000;launchFeedback.active=true;tickPowerLog(clockMs,{AnalogTachometer::Phase::Ready,0});assert(powerPrefs.writes==0);
   launchFeedback.active=false;tickPowerLog(clockMs,{AnalogTachometer::Phase::Ready,0});assert(powerPrefs.writes==1);
+  // Handheld, the power log waits for a 60 s pause after a pull, as history
+  // does; three minutes overdue, it is written soon after a pull.
+  reset(true,false);imuStill={};clockMs=300000;lastAcceptedAt=clockMs-20000;
+  tickPowerLog(clockMs,{AnalogTachometer::Phase::Ready,0});assert(acquisition.begins==0 && powerLogDirty);
+  clockMs=300000+HistoryCheckpoint::MAX_PENDING_MS-1;lastAcceptedAt=clockMs-4000;
+  tickPowerLog(clockMs,{AnalogTachometer::Phase::Ready,0});assert(acquisition.begins==0 && powerLogDirty);
+  clockMs+=1;lastAcceptedAt=clockMs-4000;
+  tickPowerLog(clockMs,{AnalogTachometer::Phase::Ready,0});assert(powerPrefs.writes==1 && !powerLogDirty);
+  imuStill={true,0};
+  std::cout<<"handheld: power log waits 60 s after a pull, aged log written 3 s after one\n";
   std::cout<<"PASS: exact production checkpoint functions; failed/corrupt log, normal save, active burst, practice quiet and visible recap\n";
 }
 '''

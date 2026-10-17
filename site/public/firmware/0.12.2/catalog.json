@@ -490,6 +490,15 @@
       "md5": "a8a23754930b9817e2fe41801a4a2b69",
       "elfSha256": "0914886a94237a010a10976a0a9b46115259a9cda70f806ffa2098b87cb29876",
       "sensor": "qre1113"
+    },
+    {
+      "version": "0.13.9",
+      "runtime": "0.13.9-sticks3-rpm-guard-pm",
+      "size": 844032,
+      "sha256": "ec9f09ae41577bf96aefc1b308953480dd2fad5ab746afe2ade53faafd6cae6c",
+      "md5": "415c2a7862d2fa834927e9e9906bd5c4",
+      "elfSha256": "041275892a0684ecff981750df3e201086a47a8fbdc95d31b9f8c12c1b109ad9",
+      "sensor": "qre1113"
     }
   ]
 }

@@ -122,13 +122,16 @@ private:
         CpuPower::Guard clock(CpuPower::Imu);
         const int64_t started=esp_timer_get_time();span.lockUs=std::max(span.lockUs,uint32_t(started-wake));
         uint64_t sampledUs=0;
-        const unsigned bytes=readFifo(s,sampledUs);unlock();
-        const uint64_t now=esp_timer_get_time();s.maxPollUs=std::max(s.maxPollUs,uint32_t(now-started));
-        span.pollUs=std::max(span.pollUs,uint32_t(now-started));
+        const unsigned bytes=readFifo(s,sampledUs);
+        // Validate, and flush on failure, before releasing the gate: a flush is
+        // an I2C write and must never run inside a flash-quiet window.
         unsigned gyroFrames=0,skipped=0;
         const bool parsed=bytes && Bmi270Fifo::parse(fifo_,bytes,[&](const Bmi270Fifo::Frame &f){gyroFrames+=f.gyro;},
           [&](unsigned n){skipped+=n;});
         if(bytes && !parsed){++s.fifoParseErrors;noteError(s,bytes,0);discardFifo(s);}
+        unlock();
+        const uint64_t now=esp_timer_get_time();s.maxPollUs=std::max(s.maxPollUs,uint32_t(now-started));
+        span.pollUs=std::max(span.pollUs,uint32_t(now-started));
         if(!gyroFrames)++span.emptyPolls;
         const float accelScale=accelRange().fullScaleG()/32768,gyroScale=StickS3AccelRange::GYRO_FULL_SCALE_DPS/32768;
         if(parsed) {timeline_.skip(skipped);s.fifoSkipped+=skipped;}

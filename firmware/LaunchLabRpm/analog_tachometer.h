@@ -58,8 +58,19 @@ public:
   uint32_t launches=0, attempts=0, resultRevision=0, cycles=0, revolutions=0;
   uint32_t opticalEdges=0, rejectedPeriods=0, rejectedShape=0, inconsistentWindows=0, slowWindows=0, weakWindows=0;
   uint32_t rearmExtensions=0;
+  // A pull ended and its ripcord rewind has not been seen yet. The rewind
+  // spins the gear from rest like a pull, and one optical channel cannot tell
+  // its direction, so while this is set every strong turn in REARM extends it.
+  bool rewindPending=false;
   uint64_t nowUs=0, resultUs=0, burstStartUs=0, burstEndUs=0;
   uint32_t quietMs() const {return uint32_t((nowUs-quietSince)/1000);}
+  uint64_t servedQuietUs() const {return nowUs-quietSince;}
+  // Checkpoint restore: continue REARM with the quiet already served. While
+  // the rewind is pending, REARM cannot end before RESUME_SAMPLING_US of
+  // fresh samples: a rewind released while sampling was stopped is otherwise
+  // met in Ready, its edge history lost with the gap.
+  static constexpr uint32_t RESUME_SAMPLING_US=150000;
+  void resumeQuiet(uint64_t servedUs){quietSince=nowUs>=servedUs?nowUs-servedUs:0;resumeUntil=nowUs+RESUME_SAMPLING_US;}
   uint32_t rearmMs() const {return nowUs-quietSince>=QUIET_US?0:uint32_t((QUIET_US-(nowUs-quietSince)+999)/1000);}
   bool historyCheckpointIdle() const {
     if(phase==Phase::Paused)return true;
@@ -81,6 +92,7 @@ public:
     phase=enabled?Phase::Settling:Phase::Paused;quietSince=nowUs;
     clearSequence();rise=fall=0;initialized=false;sum=0;count=index=group=0;
     diffCount=diffIndex=0;clearMotion();railSince=0;signalFault=false;swingCount=swingNext=0;
+    rewindPending=false;lastStrongEdge=0;resumeUntil=0;edgeWarmup=true;
   }
   void feed(uint16_t raw) {
     nowUs+=20;
@@ -126,15 +138,18 @@ public:
         if(extreme-value>=hysteresis) {
           signalHigh=extreme;
           high=false;extreme=value;fall=nowUs-260;
+          if(minMark>0 && signalHigh-signalLow>=minMark)lastStrongEdge=nowUs;
         }
       } else {
         extreme=fminf(extreme,value);
         if(value-extreme>=hysteresis) {
           signalLow=extreme;signalContrast=fmaxf(0,signalHigh-signalLow);
           high=true;extreme=value;
+          if(minMark>0 && signalContrast>=minMark)lastStrongEdge=nowUs;
           const uint64_t stamp=nowUs-260;
-          if(rise && fall>rise)cycle(stamp,uint32_t(fall-rise));
-          rise=stamp;
+          if(rise && fall>rise)cycle(stamp,uint32_t(fall-rise),riseSettled);
+          rise=stamp;riseSettled=!edgeWarmup || pulseSwing()>0;
+          if(pulseSwing()>0)edgeWarmup=false;
         }
       }
     }
@@ -185,7 +200,17 @@ private:
     }
     return top[2];
   }
-  uint64_t rise=0,fall=0,railSince=0,quietSince=0,lastCycle=0,slowStartUs=0,lastStrongCycle=0;
+  uint64_t rise=0,fall=0,railSince=0,quietSince=0,lastCycle=0,slowStartUs=0,lastStrongCycle=0,lastStrongEdge=0,resumeUntil=0;
+  uint32_t rewindRun=0,rewindPeriods[2]={};
+  // The last rise was judged against an established swing history. Right
+  // after a reset or checkpoint restore, possibly mid-pull, the first edges
+  // use the noise band and later ones 70% of the mark, so a turn spanning
+  // that switch is mistimed by up to the mark's 0.5-ms smoothed transition
+  // (read 3.7-7.8% high after a history write). A pull from idle keeps its
+  // first turns: they are slow, and a sharp pull needs them to confirm.
+  bool riseSettled=true,edgeWarmup=false;
+  uint64_t gapBoundary=0;uint32_t gapPeriod=0,slowPeriod=0,strongPeriod=0;uint8_t gapStage=0;
+  uint32_t evictedPeriod=0;float evictedAmplitude=0;
   uint64_t blankFrom=0,blankUntil=0;
   uint32_t periods[3]={},nPeriods=0,lastPeriod=0,slowCount=0,motionPeriod=0,motionPreviousPeriod=0;
   float motionDuty=0,motionAmplitude=0;
@@ -256,20 +281,22 @@ private:
       }
     }
   }
-  void clearSequence(){nPeriods=lastPeriod=slowCount=0;lastCycle=slowStartUs=lastStrongCycle=0;}
+  void clearSequence(){nPeriods=lastPeriod=slowCount=strongPeriod=0;lastCycle=slowStartUs=lastStrongCycle=0;gapStage=0;}
   void finish(End reason,uint64_t boundary=0) {
     // The burst ends at the inferred boundary, not at the later instant that
     // a gap / second slow cycle confirms it.
     // No following full cycle is available at a terminal gap. Keep a clean
-    // arrival-validated final surge, including two genuine faster turns.
-    // A terminal subdivision with identical samples remains indistinguishable.
+    // arrival-validated final surge. Two final intervals that together equal
+    // the preceding turn are a notch splitting the last mark, not a gear that
+    // surged 2.5x and stopped dead within one revolution (2026-10-17 review).
     // Commit before revision/launch publication; never revise a saved result.
+    if(splitPending){singlePeakRejected++;clearSinglePending();}
     commitSinglePending();
     burstEndUs=boundary?boundary:reason==End::Slowdown?slowStartUs:lastCycle;
     ended=reason;phase=Phase::Hold;resultUs=nowUs;
     resultValid=peakRpm>0;resultRpm=peakRpm;resultRevision++;
     if(resultValid)launches++;
-    clearSequence();
+    clearSequence();rewindPending=true;rewindRun=0;
   }
   void tick() {
     if(!enabled || signalFault)return;
@@ -289,8 +316,24 @@ private:
     }
     if(phase==Phase::Launch || (phase==Phase::Ready && nPeriods)) {
       const uint32_t limit=std::min<uint32_t>(900000,std::max<uint32_t>(30000,2*lastPeriod));
-      if(lastCycle && nowUs-lastCycle>limit) {
-        if(phase==Phase::Launch)finish(End::Gap);else clearSequence();
+      if(gapStage) {
+        // Marks lost near the peak: wait for a turn spanning them (stage 1),
+        // then one more turn to tell continuing motion from a rewind.
+        const uint32_t wait=gapStage==1?std::max<uint32_t>(50000,5*gapPeriod):std::max<uint32_t>(30000,2*gapPeriod);
+        if(nowUs-lastCycle>wait)finish(End::Gap,gapBoundary);
+      } else if(lastCycle && nowUs-lastCycle>limit) {
+        // Near the peak, marks can drop below the edge hysteresis for a few
+        // turns while the launcher is yanked (HIL: a 20-25 ms dropout, plus
+        // malformed partial marks at its ends). Ending there published an
+        // early low peak and dropped the faster remainder in REARM. Real
+        // pulls also stop abruptly near peak speed and rewind at once, so
+        // this cannot be decided by time: the end waits for the next marks
+        // and is kept at the last turn before the gap either way. minMark=0
+        // keeps the earlier weak-optics detector unchanged (no strong marks).
+        if(phase==Phase::Launch && minMark>0 && sustainedPeakRpm>0 && strongPeriod &&
+           float(strongPeriod)<=1.25f*60000000.0f/sustainedPeakRpm) {
+          gapStage=1;gapBoundary=lastCycle;gapPeriod=strongPeriod;
+        } else if(phase==Phase::Launch)finish(slowCount>=2?End::Slowdown:End::Gap);else clearSequence();
       }
     }
     // A shape-valid but subthreshold tail is background, not evidence that
@@ -300,9 +343,13 @@ private:
     // minMark=0 keeps the earlier weak-optics detector behavior unchanged.
     if(phase==Phase::Launch && minMark>0 && lastStrongCycle && nowUs-lastStrongCycle>=QUIET_US)
       finish(End::Gap,lastStrongCycle);
-    if((phase==Phase::Hold || phase==Phase::Settling) && nowUs-quietSince>=QUIET_US) {
+    // A rewind can begin in the last moments of REARM, before it completes a
+    // turn: wait for its edges to stop rather than meet it in Ready.
+    const bool rewindStarting=phase==Phase::Hold && rewindPending &&
+      ((lastStrongEdge && nowUs-lastStrongEdge<uint32_t(60000000.0f/MIN_LAUNCH_RPM)) || nowUs<resumeUntil);
+    if((phase==Phase::Hold || phase==Phase::Settling) && nowUs-quietSince>=QUIET_US && !rewindStarting) {
       const bool afterPull=phase==Phase::Hold && resultValid;
-      phase=Phase::Ready;clearSequence();
+      phase=Phase::Ready;clearSequence();rewindPending=false;
       if(afterPull) {
         // Preserve the learned noise floor; discard the completed pull's edge
         // history. Its swings stop counting one second after they occurred.
@@ -312,8 +359,9 @@ private:
       }
     }
   }
-  void cycle(uint64_t stamp,uint32_t highUs) {
+  void cycle(uint64_t stamp,uint32_t highUs,bool settled=true) {
     opticalEdges++;
+    if(!settled && minMark>0){rejectedShape++;nPeriods=0;clearMotion();return;}
     const uint64_t wide=stamp-rise;
     if(wide<MIN_PERIOD_US || wide>MAX_PERIOD_US) {rejectedPeriods++;nPeriods=0;clearMotion();return;}
     const uint32_t period=uint32_t(wide);
@@ -349,26 +397,60 @@ private:
       if(phase==Phase::Hold){quietSince=nowUs;rearmExtensions++;}
       else if(phase==Phase::Launch)quietSince=nowUs;
     }
+    if(phase==Phase::Hold && rewindPending && minMark>0 && signalContrast>=minMark) {
+      // The burst after a pull is its rewind, however irregular its turns
+      // are while it speeds up from rest: two adjacent strong turns absorb
+      // it in full (a lone turn after rejected edges is a stray). It is
+      // recognized by three adjacent strong turns gaining at least 15% in
+      // speed (a pull's own spin-down only slows). Afterwards only matching
+      // turns extend REARM, so the next real pull is not delayed by it.
+      if(adjacent && previousAmplitude>=minMark){quietSince=nowUs;rearmExtensions++;}
+      if(!adjacent)rewindRun=0;
+      if(rewindRun>=2 && uint64_t(period)*20<=uint64_t(rewindPeriods[1])*17)rewindPending=false;
+      rewindPeriods[1]=rewindPeriods[0];rewindPeriods[0]=period;rewindRun++;
+    } else if(phase==Phase::Hold)rewindRun=0;
     motionPreviousPeriod=previousPeriod;
     motionPeriod=period;motionDuty=duty;motionAmplitude=signalContrast;motionStamp=stamp;
+    if(phase==Phase::Launch && gapStage) {
+      // Subthreshold edges (a rewind's subsidiary reflections) say nothing
+      // about the lost marks; wait for strong ones.
+      if(signalContrast<minMark)return;
+      if(gapStage==1) {
+        // This turn spans the lost marks. It is no speed sample: restart the
+        // three-turn window and slowdown count after it.
+        gapStage=2;lastCycle=stamp;nPeriods=0;slowCount=0;slowStartUs=0;return;
+      }
+      // Continuing motion keeps at least 75% of the speed before the gap. A
+      // rewind restarts from rest with much longer turns: the pull ended at
+      // the gap and this turn belongs to REARM.
+      gapStage=0;
+      if((stamp-lastCycle)*3>uint64_t(gapPeriod)*4){finish(End::Gap,gapBoundary);return;}
+    }
     if(lastCycle && stamp-lastCycle>uint64_t(period)*3/2) {
       const uint64_t strongCycle=lastStrongCycle;
       clearSequence();
       if(phase==Phase::Launch)lastStrongCycle=strongCycle;
     }
     lastCycle=stamp;
-    if(phase==Phase::Launch && signalContrast>=minMark)lastStrongCycle=stamp;
+    if(phase==Phase::Launch && signalContrast>=minMark){lastStrongCycle=stamp;strongPeriod=period;}
     if(phase==Phase::Launch && sustainedPeakRpm>0) {
       // A one-turn surge must not make ordinary following turns look like
       // rewind. End detection still uses the established three-turn speed.
       const float peakPeriod=60000000.0f/sustainedPeakRpm;
       // Subthreshold marks cannot establish slowdown any more than they can
-      // establish a peak. Otherwise two weak turns discard a later valid peak.
-      if(signalContrast>=minMark && period>peakPeriod*1.45f) {
-        if(!slowCount)slowStartUs=stamp-period;
-        slowCount++;
-      } else {slowCount=0;slowStartUs=0;}
-      if(slowCount>=2){finish(End::Slowdown);return;}
+      // establish a peak (two weak turns discarded a later valid peak), nor
+      // interrupt one. Two strong slow turns end it while the gear keeps
+      // slowing. A flat or re-accelerating pair is a hesitation (cord slip,
+      // re-grip) that used to end the burst before the harder second half:
+      // it needs a third.
+      if(signalContrast>=minMark) {
+        if(period>peakPeriod*1.45f) {
+          const bool slowing=minMark<=0 || !slowCount || uint64_t(period)*100>uint64_t(slowPeriod)*103;
+          if(!slowCount)slowStartUs=stamp-period;
+          slowCount++;slowPeriod=period;
+          if(slowCount>=3 || (slowCount==2 && slowing)){finish(End::Slowdown);return;}
+        } else {slowCount=0;slowStartUs=0;}
+      }
     }
     if((singleTurnPeak || trackSingleTurnPeak) && phase==Phase::Launch && candidateRpm>singlePeakRpm) {
       // Timing, full-cycle shape and neighboring optics passed above. Defer
@@ -378,6 +460,7 @@ private:
       else singlePeakRejected++;
     }
     lastPeriod=period;
+    evictedPeriod=nPeriods>=3?periods[nPeriods%3]:0;evictedAmplitude=nPeriods>=3?amplitudes[nPeriods%3]:0;
     periods[nPeriods%3]=period;duties[nPeriods%3]=duty;
     amplitudes[nPeriods%3]=signalContrast;nPeriods++;
     if(phase==Phase::Launch)revolutions++;
@@ -385,7 +468,23 @@ private:
     const auto bounds=std::minmax_element(periods,periods+3);
     const auto dutyBounds=std::minmax_element(duties,duties+3);
     const auto ampBounds=std::minmax_element(amplitudes,amplitudes+3);
-    if(uint64_t(*bounds.second)*4>uint64_t(*bounds.first)*5 ||
+    // Three turns within 25% are consistent. A sharp pull can change speed
+    // faster than that through its peak and still be a smooth, valid
+    // three-turn time average. Inside a confirmed burst accept strictly
+    // monotonic turns that each differ by at most 35% and together by at most
+    // 60%. Starting a launch that way needs four strong turns, each faster
+    // than the last by at most 1.5x: handling makes isolated monotonic
+    // triples, and permissive three-turn starts admitted phantoms in the
+    // recorded corpus. Neither applies to minMark=0 weak optics.
+    const uint32_t oldest=periods[nPeriods%3],middle=periods[(nPeriods+1)%3],newest=periods[(nPeriods+2)%3];
+    const auto within=[](uint32_t a,uint32_t b,uint32_t num,uint32_t den){
+      return uint64_t(std::max(a,b))*den<=uint64_t(std::min(a,b))*num;};
+    const bool sharp=minMark<=0?false:phase==Phase::Launch?
+      ((oldest>middle && middle>newest) || (oldest<middle && middle<newest)) &&
+        within(oldest,middle,27,20) && within(middle,newest,27,20) && within(oldest,newest,8,5):
+      evictedAmplitude>=minMark && evictedPeriod>oldest && oldest>middle && middle>newest &&
+        within(evictedPeriod,oldest,3,2) && within(oldest,middle,3,2) && within(middle,newest,3,2);
+    if((uint64_t(*bounds.second)*4>uint64_t(*bounds.first)*5 && !sharp) ||
         *dutyBounds.second-*dutyBounds.first>0.20f ||
         *ampBounds.first<=0 || *ampBounds.second>*ampBounds.first*2.5f) {
       inconsistentWindows++;return;
@@ -405,10 +504,17 @@ private:
       lastStrongCycle=stamp;
       resultValid=false;resultRpm=0;ended=End::None;
     }
-    if(!strong){weakWindows++;return;} // Weak windows never set the peak.
+    // Weak windows never set the peak. Inside a confirmed burst the window is
+    // judged by its middle mark (the weakest still at least half the floor):
+    // real marks sit close to the floor, and one slightly weak mark per
+    // window must not lose the peak. Starts keep the weakest-mark rule.
+    const float medianAmplitude=amplitudes[0]+amplitudes[1]+amplitudes[2]-*ampBounds.first-*ampBounds.second;
+    if(!strong && !(phase==Phase::Launch && minMark>0 && medianAmplitude>=minMark && *ampBounds.first*2>=minMark)) {
+      weakWindows++;return;
+    }
     if(rpm>sustainedPeakRpm){sustainedPeakRpm=rpm;sustainedPeakAmplitude=*ampBounds.first;}
     validatedDuty=(duties[0]+duties[1]+duties[2])/3;
-    validatedAmplitude=amplitudes[0]+amplitudes[1]+amplitudes[2]-*ampBounds.first-*ampBounds.second;
+    validatedAmplitude=medianAmplitude;
     if(singleTurnPeak || trackSingleTurnPeak) {
       if(starting) {
         const unsigned fastest=unsigned(bounds.first-periods);

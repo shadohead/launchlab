@@ -1,0 +1,504 @@
+{
+  "version": "0.13.9",
+  "runtime": "0.13.9-sticks3-rpm-guard-pm",
+  "board": "M5StickS3 K150",
+  "chip": "ESP32-S3",
+  "flashBytes": 8388608,
+  "applicationOffset": 65536,
+  "files": [
+    {
+      "path": "firmware/0.13.9/bootloader.bin",
+      "offset": 0,
+      "size": 20256,
+      "sha256": "8581a3fb98309f261482327b5ff51a2fabca0ec513f9ba38595ed04479794e58"
+    },
+    {
+      "path": "firmware/0.13.9/partitions.bin",
+      "offset": 32768,
+      "size": 3072,
+      "sha256": "1d9cca96de0fe07ad7fc0648b9878ddecd9ce565e38b589ad20fea698ed4c80c"
+    },
+    {
+      "path": "firmware/0.13.9/boot_app0.bin",
+      "offset": 57344,
+      "size": 8192,
+      "sha256": "f94c5d786a7a8fab06ac5d10e33bf37711a6697636dc037559ea19cc410a17f0"
+    },
+    {
+      "path": "firmware/0.13.9/application.bin",
+      "offset": 65536,
+      "size": 844032,
+      "sha256": "ec9f09ae41577bf96aefc1b308953480dd2fad5ab746afe2ade53faafd6cae6c"
+    }
+  ],
+  "validation": "Exact shipping application installed and read back on two units; software checks, pinned target compilation and a hardware-in-the-loop suite on the exact source passed.",
+  "release": "0.13.9-sticks3-rpm-guard-pm",
+  "profiles": [
+    "qre1113",
+    "tcrt5000"
+  ],
+  "knownApplications": [
+    {
+      "version": "0.10.0",
+      "runtime": "0.10.0-sticks3-estimators",
+      "size": 730512,
+      "sha256": "367a14999a560b5886212faa6fefcc22099ab1d1493968c8d27303aae035c1b6",
+      "md5": "89af4034e50456e7714ed5d00f89f7d9",
+      "elfSha256": "5ac5c5d2d4057d664aaf71dee77b268f36e5ed3b9bc8323ece25812657ce1287",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.10.1",
+      "runtime": "0.10.1-sticks3-tiltreplay",
+      "size": 731728,
+      "sha256": "bf3b6607729de89fccae3ddb15b4724216abfe2ce56bba5e8918b287d629fc66",
+      "md5": "b65d0b0fce6927c74a3bd64b181ac8e8",
+      "elfSha256": "e67d048fc31bf9e5c0ce4d6f8865225a22d006893618f69f7a32efccb1c8a711",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.10.2",
+      "runtime": "0.10.2-sticks3-powerdiag",
+      "size": 735120,
+      "sha256": "7a30402e9dcf848de48f4d89b7f9e364992aa774ad6a5515774b42790fa9ab71",
+      "md5": "98d3181f2a5d9ac786bff982f2ff6b69",
+      "elfSha256": "21208dae872d8118600a8e8342d16d4ae9f849fabcbb34412b6b103681451a32",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.10.3",
+      "runtime": "0.10.3-sticks3-brightness",
+      "size": 735680,
+      "sha256": "aa1017fc6c8d03570390e3d8e0185d7205112fe7971746e88a0abc135bf54ec4",
+      "md5": "b9141c92558021248bb19e31f8b38b7d",
+      "elfSha256": "3a4e47961029352c8790ba396b5e288028a393b2570b1be63b610286efcfa47c",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.10.5",
+      "runtime": "0.10.5-sticks3-battery",
+      "size": 735440,
+      "sha256": "dd06a64e2b137d1c660fb5609f3d4ceba4cfc4605343fb18e3ab78dbb5ea93ec",
+      "md5": "f8089d598b448961a0e10464379cedd7",
+      "elfSha256": "d6c256258f73e18dda90daeb3f7caa76151142a0c0af633d10812183d321d028",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.10.6",
+      "runtime": "0.10.6-sticks3-footer",
+      "size": 735456,
+      "sha256": "39beb834601a284fb20484b880ee982e386202215938e14a38f0b5d65818f35f",
+      "md5": "2d00526a4714e358e2ee0643d170dddf",
+      "elfSha256": "f036ae386d3c37a2e7c58e97b981bffa9313d21449fb7aeface0b48e77feb8dd",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.10.7",
+      "runtime": "0.10.7-sticks3-navigation",
+      "size": 735456,
+      "sha256": "54fe847cc82ac11b8f50669c424498267e079dfe967020271763e24ba5c808d2",
+      "md5": "e1b7a400d172a0be73da9534544f5ab6",
+      "elfSha256": "d34e802cbfe43a497281c5da82b043f33af728a1a87688de075f5342bc553634",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.3.0",
+      "runtime": "0.3.0-sticks3-practice",
+      "size": 646000,
+      "sha256": "5871bedad295a1f309a397f2b5a0ceffe3606294702d1b6389089a000697d7da",
+      "md5": "b0d2c1f3abb1cd0c1afc2c88f7708d7d",
+      "elfSha256": "76b651f079ccd2e0c3c06175d19b33f8fae551ed4ce95dd5f287e7d600ba3bbd",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.3.1",
+      "runtime": "0.3.1-sticks3-power",
+      "size": 658672,
+      "sha256": "259e0fe643aff48c9a022ed4d2a62a5e554578e642e51be08b144cd7b6ba849a",
+      "md5": "58e6112fcbd70c0edf6c157258c97315",
+      "elfSha256": "fc1136ac735e3660998f6170c249fe837f2dc50c8899a89db0a0010910c807c9",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.4.2",
+      "runtime": "0.4.2-sticks3-feedback",
+      "size": 685632,
+      "sha256": "1768aa22453304e2a749de181a2e148a3db1144c5d6b3c1a8fd5df7485bdfce6",
+      "md5": "f3a636580435c9fc07e3501f1d596684",
+      "elfSha256": "0999cc0d5c2ce373530443415535bb7a13bb47ce30f7302c62d8b188587e3fa2",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.4.3",
+      "runtime": "0.4.3-sticks3-recap",
+      "size": 685920,
+      "sha256": "ecc47fc2e52a3a446709bc895bb11e747297b85f18b2ddaeb48c3e1fd1f1063e",
+      "md5": "af997c61b5c61e590d5a515fe6dcb632",
+      "elfSha256": "dc0e8bd30e0034912b3db030c3cc0b6df9656cc48684ac1f561391cdc3a06795",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.5.0",
+      "runtime": "0.5.0-sticks3-cube",
+      "size": 693632,
+      "sha256": "3a303e7999362984fbee0377fa301c30c066c9c5d3edb4732967b92647863ca3",
+      "md5": "382034d4383444fbbbec353bdf385ccf",
+      "elfSha256": "71d2d4b01d27d0935a54ca3cee901cf973a2cb7a472f583bec732fd1119b1cd0",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.5.1",
+      "runtime": "0.5.1-sticks3-front",
+      "size": 693760,
+      "sha256": "647581f686209cac53eb6fd95b9eec1cb98c7a68013ef1e6af2936b73fa048d4",
+      "md5": "92118c66af1658d21b0e958c63b3ca7f",
+      "elfSha256": "7c86b2656587d60b3ca51b5478bc080796fbfc59b4c5a690d53eef8bb7be43e6",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.6.1",
+      "runtime": "0.6.1-sticks3-rotation",
+      "size": 708416,
+      "sha256": "bc43661f7799aa029fc3f85168b4886c38a25f3eecddd2829cf367d4992c8234",
+      "md5": "acabd7c0206980cf4f0c97b7a6ba2a9e",
+      "elfSha256": "ea1761f3d5a14899845568e238c582c50f2cba3dcc64dfeb458db0d1b3c87fb8",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.6.2",
+      "runtime": "0.6.2-sticks3-rotation",
+      "size": 708432,
+      "sha256": "8a8b9c6c215213f9250ce6c0846856f198827f32578632a40ad0e35431510ae0",
+      "md5": "a8e8304fe2999a15d02b520312b09155",
+      "elfSha256": "104e2f502b4e65d44b368cb29ca49b69f3926cfa3ed833e57d4bcff7b29b58d2",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.7.0",
+      "runtime": "0.7.0-sticks3-singlepeak",
+      "size": 709712,
+      "sha256": "6f3ad29aca0d8a97f7e23f8d4c71399c128768e729d6568520bdc138408557eb",
+      "md5": "19edc0d2b900d42ec4327ce6f9c0f0d3",
+      "elfSha256": "c84b07ec1e831b5af165e43e5c38df338a04452ace4f238bc026e42880b3dffe",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.7.1",
+      "runtime": "0.7.1-sticks3-tournament",
+      "size": 710208,
+      "sha256": "036d90696f18e41ab8ce33f78038bd868dbf2630abd8df5fdeaec646fe241984",
+      "md5": "7f381b3a1223921661cdf2d29cd56501",
+      "elfSha256": "7d8f604553c1b4d5a1fce1e73bed3ba62f70d706ee1b698e2099bbf76c4edde9",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.7.2",
+      "runtime": "0.7.2-sticks3-tournamentviews",
+      "size": 710816,
+      "sha256": "9f9c54963c3ddba3be6899c7976bf9d487da40633e9eb2a124ba2d042f6a1352",
+      "md5": "b703badaabbed816ee07580a94c59576",
+      "elfSha256": "d40c5e5132068c0387203af20f32d3655b3719058a388882cf8887cd39f01a75",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.8.0",
+      "runtime": "0.8.0-sticks3-shakewake",
+      "size": 727376,
+      "sha256": "09bf9d612998e2d7a498d7a8d225a9375268a3165cd76a3ea6f4741e9c5381dd",
+      "md5": "ba5af5f136d824f93592830379b685c5",
+      "elfSha256": "1b6684c48d50fda0fd70ccb658c5dfd77080acbea6e0e42e9549794028342a13",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.8.1",
+      "runtime": "0.8.1-sticks3-shakewake",
+      "size": 727376,
+      "sha256": "cd0862b7fe065e1c0e9c455abf17533657fcd1dfbb68dfd4bc0333e05e6ca735",
+      "md5": "a3f5bbc5745473b0134939442b59355f",
+      "elfSha256": "1b62992803964d2cc2cc9b0e8ee9ccf691e9a27489481b0528b6836cd06062d5",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.8.2",
+      "runtime": "0.8.2-sticks3-shakewake",
+      "size": 727408,
+      "sha256": "3ed1259bd44246e67ebea07d40f6e20350d6950e234038b824cdbf3a68e185c8",
+      "md5": "e2d61147c729b4bd4470c34d8ed54b75",
+      "elfSha256": "291396a3e32231a49647ce732c1bfa0e53da7e7b1037ba0cf5fac8f72864a9ac",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.9.0",
+      "runtime": "0.9.0-sticks3-settings",
+      "size": 728368,
+      "sha256": "de3ddc58d216ad336a51358f5c0c3b6ca282b32690dadc0f7b0790f22ffb6f72",
+      "md5": "32587f6dd6f98113c89432d6a96c2074",
+      "elfSha256": "e73498d63fa697eae125eac0b51e19b716510bc2823de7f032e0a510ea6926f7",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.9.1",
+      "runtime": "0.9.1-sticks3-settings",
+      "size": 728320,
+      "sha256": "e6783c76760153459dd5a7ee379665a8d46178d263d4d39854e5744f5d18d290",
+      "md5": "72dc2ffea8b465c255dab14eaf802710",
+      "elfSha256": "5d81f901ba0717d9298a4297f55b9cd2f50ad377f49e4700780d1a3e14f6726c",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.9.2",
+      "runtime": "0.9.2-sticks3-wakeresume",
+      "size": 728848,
+      "sha256": "3248e2329b1cebd49572f7a09e855de6de709a323025a6d47df2a75108bf088c",
+      "md5": "32dd0d33d63cd4af305284415caba80e",
+      "elfSha256": "8f8b73f88d74a2e70fbaaa443fed5959d8898a9d657193c4394a94ba24c4570c",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.10.10",
+      "runtime": "0.10.10-sticks3-usbawake",
+      "size": 729104,
+      "sha256": "9d665b703a1af9456bf2c96c03681df4a248565af7a95271c913de8360d6209f",
+      "md5": "d68c02c1c561bada9533f66362db23a9",
+      "elfSha256": "7ebba0346a9613abdd53e99e3fe9fbe1bbbb435eebe670c25a66162c3b53393d",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.10.11",
+      "runtime": "0.10.11-sticks3-lowcpu",
+      "size": 729264,
+      "sha256": "4a49e2fc663efd89dca3ed527d1ba493c2cd5c39e03717fed2be263906751aaf",
+      "md5": "2b0d5cbbec81b2122563f1f4c4196606",
+      "elfSha256": "93a1af41c5300c87c39a485a15ddff84ee8a938d78490ed6785ea554a0eb1f95",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.10.12",
+      "runtime": "0.10.12-sticks3-boutrecap",
+      "size": 729696,
+      "sha256": "b461fcade85f52dbff196a54df363d8b60b64c6d07b04f959468be7012369bba",
+      "md5": "1f5e79367e917b42c75373b383bafd2a",
+      "elfSha256": "b0a409472225af029313178d057eb87efc403fb46b17d1c72e697d0ca16fafa4",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.10.13",
+      "runtime": "0.10.13-sticks3-imurecover",
+      "size": 730368,
+      "sha256": "80c513738516a346eb4ccda93da41e0b1ea868cad016ece23f091772e6db81f3",
+      "md5": "1d3aa5cb5cb97ff5a4cecd24674c14e3",
+      "elfSha256": "666a890c314e51cb19769a87335896fdf6732428a20457138349dc847c868c11",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.10.14",
+      "runtime": "0.10.14-sticks3-cleanui",
+      "size": 730144,
+      "sha256": "428543c2a012f5ee865999e62494e1608b77a9091a62b253fae9fb1e87ad2b25",
+      "md5": "afbc1197bd7c6bb8054058673444e7c7",
+      "elfSha256": "6b459a52370d191e71a366f95bde6e0e2f064e5168ff59f9bc9f7476d7e693fb",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.10.15",
+      "runtime": "0.10.15-sticks3-displayflip",
+      "size": 731072,
+      "sha256": "42a40cd837525a547d4e661feddf70a791d51f9324377c3bdd9660bccf05f3aa",
+      "md5": "8bf9068ddea589ec46c4e4d6e4e86a5c",
+      "elfSha256": "43a090f6b5f2f06c16d17308ebdee20b2fb58c7d8fc668403d4e13d0388d53ea",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.10.16",
+      "runtime": "0.10.16-sticks3-controls",
+      "size": 733552,
+      "sha256": "bfa40786cb4a5bde33ce43dc59c1a06843e1a60475d738dd807c92f788ee10b2",
+      "md5": "631d366d46df6939ed5c5bee6d27c436",
+      "elfSha256": "f569360d4e0bb96cd853ae253674dd16d61427c624e140d3913e01a39eb09c91",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.10.17",
+      "runtime": "0.10.17-sticks3-tcrt-sensitivity",
+      "size": 733600,
+      "sha256": "91cf4aa52fd9eb71c04af55b0bc132972a3292176f3c6945382a23a28b6ee991",
+      "md5": "7a235bf1bc634b38767d8bd2eaa464ce",
+      "elfSha256": "92f70a633ed69bd3c719610ea2ef9e3f652be8de66d24ade7a11caddff699f3c",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.10.18",
+      "runtime": "0.10.18-sticks3-sensorprofiles",
+      "size": 734560,
+      "sha256": "ff7807721b34a124e4ebfe59f13b75f1f496c570176d23167bac257ab52fccd0",
+      "md5": "cbe42de084390b401d4a6c2e28861d31",
+      "elfSha256": "b9fd729c91e55d850d159bd727cbe7ccdb75fcd5e9f26fd9cd746672f0d663b2",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.10.19",
+      "runtime": "0.10.19-sticks3-tiltflip",
+      "size": 734640,
+      "sha256": "325204d9b9c49b1f75f4bc77e3443199f3226abb3c43fad624aae17187a906d8",
+      "md5": "c43b7e9de40f4af6c33834cea0793cd2",
+      "elfSha256": "0fa4ff24997bf5d828a0eb1eeb28232f6e1472986a1096d9eee290d0f31df434",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.10.20",
+      "runtime": "0.10.20-sticks3-cyclehint",
+      "size": 734848,
+      "sha256": "60982db8fa7e1db5d2717858c188baa485bc68805bf790bf42ffc6e7a3b341fd",
+      "md5": "563a14c1dd26398674da10dfd55faac6",
+      "elfSha256": "8ed361ce992c6cfb7a5d5717d4174f0346bb4feff1cf9d10d86fe5d4edce9d15",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.10.21",
+      "runtime": "0.10.21-sticks3-quiethint",
+      "size": 734784,
+      "sha256": "dbf3c6e510564c9ae7a4d504737077491146d8501a0a6d1e7b25dca41a25cbea",
+      "md5": "15465f651d74dce68ea9a498774be3d7",
+      "elfSha256": "f2bb2d522b22c140b5cfde33ffd2d3b9eb6db0a78d9e5151489dccd64d1c7161",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.10.22",
+      "runtime": "0.10.22-sticks3-saverearm",
+      "size": 734896,
+      "sha256": "8ff2005fcee9d10456312b6e5e1837938e81054e9669c63bbede12e7763ed8a9",
+      "md5": "1cb66f7801249327c20c8213ad402cc0",
+      "elfSha256": "4e1bde3a738404ed736d87ab73f34fd14f24f377d88ae5e71716dd03f86877a7",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.11.0",
+      "runtime": "0.11.0-sticks3-themes-backup",
+      "size": 751888,
+      "sha256": "5af1d8aed6680a51938d1150f1e14564e3ff3cbe8236a3a017f26d7c28c5e7f8",
+      "md5": "cfbd2e3550a4a0d1fff759f479e7c9b8",
+      "elfSha256": "a3841d5eeae8e0507945f0930506e05e618fab28262ce357048ccebf8cec6bd4",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.11.1",
+      "runtime": "0.11.1-sticks3-themes-backup",
+      "size": 751056,
+      "sha256": "acba34e40d0832d8b46469443a824c3254a48af538004b0711c4d0a1bc5a4d5e",
+      "md5": "4cd825d0fa8c3c09fa350998da82ae5f",
+      "elfSha256": "9efa3ed7824598789ae8e9c38d209a8a0669e62cef2333546a7e6af24aff23a0",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.11.2",
+      "runtime": "0.11.2-sticks3-score-preview",
+      "size": 754688,
+      "sha256": "edaec5c245b8bc0e9e543e53896885e00d4c78df3eca17de57175beeff99c01e",
+      "md5": "674703b8f462c2ddbd61948b8f792d9c",
+      "elfSha256": "f114565debffdb5173c5f7adef0a5fae799d12f4f17a072e5d709593c1f55231",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.11.1",
+      "runtime": "0.11.1-sticks3-effectpreview-dev",
+      "sensor": "qre1113",
+      "size": 754688,
+      "sha256": "6ba3dfd7ce04824133ee770be77df66a40aadf2be1e1bde1f70dd06a1f078bd6",
+      "md5": "f94ef55fdb2832870a9a940d0460eab9",
+      "elfSha256": "b4acc7dc5abf71b1de675ee5e4fe72e9b0606374ca6ce91a1ec499bbbc93e39c"
+    },
+    {
+      "version": "0.12.0",
+      "runtime": "0.12.0-sticks3-effects-sound",
+      "size": 807472,
+      "sha256": "62937e5fbe70ffb330e35b4e2fac97db8a7a3b036b2219fa51258b443a9522a0",
+      "md5": "a8f9e49f2123285bd53ed9027b8bbdb5",
+      "elfSha256": "13c9e336a12cb9d33d3213e5618d9c0367fbae4fb50eae77ad6cf2357d9687c3",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.12.1",
+      "runtime": "0.12.1-sticks3-flip-colors",
+      "size": 807712,
+      "sha256": "25eb22f75833dc4ce353a3c69aca1bfd3330ed0209396b4c9020d29cf831e7e5",
+      "md5": "191ed143aaddd916727891ca9ec621f4",
+      "elfSha256": "9c15e49a7f7e5c91f804afad994652fb20d4f32471dbfba5e1919605fb3a47e5",
+      "sensor": "qre1113",
+      "buildId": "0.12.1-sticks3-flip-colors"
+    },
+    {
+      "version": "0.12.1",
+      "runtime": "0.12.1-sticks3-flip-colors",
+      "size": 808064,
+      "sha256": "a13d590f11c3c8e8f8ab84a0b8ebd8d69761cf1046e2a0f9fd1d9c162d01ad41",
+      "md5": "6a586850ae02062177ff82b7c7fba911",
+      "elfSha256": "d924656403b9883250de5d0a95463a2c72df9781f9084f5af76831e416943c2e",
+      "sensor": "qre1113",
+      "buildId": "0.12.1-sticks3-pulse-guard-device-verified"
+    },
+    {
+      "version": "0.12.2",
+      "runtime": "0.12.2-sticks3-flip-colors",
+      "size": 808144,
+      "sha256": "9548c322ae1f7383641e62ec5b81f7a2f54777c05034f8c5aac47a40b4f25b49",
+      "md5": "cabacde020367d91298de0b81ed2070e",
+      "elfSha256": "a536f2451554abd682a7f841880d5f24f333b310008a0e988785cead39557e51",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.12.1",
+      "runtime": "0.12.1-sticks3-flip-colors",
+      "size": 809680,
+      "sha256": "80c9bb99f6c5ce22313f38f75b3ed64bd37d95abe1a7ec39a9e679cf1448f3b6",
+      "md5": "95974ecdbc420a40d1de5a59ca451e5e",
+      "elfSha256": "990a1e38f05037cf9f1bd826cbec63a948e15cbefc58ab8778c9ba71df34ab54",
+      "sensor": "qre1113",
+      "buildId": "0.12.1-sticks3-private-recovery-diagnostic"
+    },
+    {
+      "version": "0.13.5",
+      "runtime": "0.13.5-sticks3-idle-adc-pm",
+      "size": 827952,
+      "sha256": "0203763a133de42bf09dd3c5a93a6cbe074c974e815d8d5aff6d2541f6a88edf",
+      "md5": "b57281968e4c6a7480154dddb9f61f13",
+      "elfSha256": "13aa904b7b46d0e37a2509e274ccd99ebf0d269651e00d70df262fce9ac81d54",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.13.4",
+      "runtime": "0.13.4-sticks3-stillness",
+      "size": 818512,
+      "sha256": "d179ca5320ac56a399e729b5bba60b328a297c1696c7e730c114ef510f53695b",
+      "md5": "7ff2cc3246a3d67d52f3e1e79a65dfe3",
+      "elfSha256": "8ae3448af70f3251e42adf7f2f7d88734d8c1c0b61f9ae3b62494203cdf01bd8",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.13.7",
+      "runtime": "0.13.7-sticks3-accel-16g-pm",
+      "size": 838800,
+      "sha256": "83aa6b7610241e45ae5ed2957b958576886967eacdef19e72c7ad5e836f96e52",
+      "md5": "5c10e7c3567ab2faccd20867a89ca298",
+      "elfSha256": "6aa656f3af9063861422d8e55493f26ea9a808386b23bed10f5e8c2d92b999fc",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.13.8",
+      "runtime": "0.13.8-sticks3-fifo-timing-pm",
+      "size": 839760,
+      "sha256": "a1d5c47ef9e46a19ec79e36f65aeee2186a62bfbb1cf59f01af4ae2f83407525",
+      "md5": "a8a23754930b9817e2fe41801a4a2b69",
+      "elfSha256": "0914886a94237a010a10976a0a9b46115259a9cda70f806ffa2098b87cb29876",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.13.9",
+      "runtime": "0.13.9-sticks3-rpm-guard-pm",
+      "size": 844032,
+      "sha256": "ec9f09ae41577bf96aefc1b308953480dd2fad5ab746afe2ade53faafd6cae6c",
+      "md5": "415c2a7862d2fa834927e9e9906bd5c4",
+      "elfSha256": "041275892a0684ecff981750df3e201086a47a8fbdc95d31b9f8c12c1b109ad9",
+      "sensor": "qre1113"
+    }
+  ]
+}

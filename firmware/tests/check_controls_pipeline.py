@@ -33,6 +33,7 @@ prefix=r'''
 #include "practice_ui.h"
 #include "launch_feedback.h"
 #include "wipe_confirmation.h"
+#include "settings_save.h"
 #include <cassert>
 #include <iostream>
 '''
@@ -44,7 +45,7 @@ prefix+=practice_ui[practice_ui.index('namespace PracticeUI {'):practice_ui.inde
 prefix+=r'''
 static Appearance::Config appearance;static Appearance::Bests personalBests;
 static AppearanceStore<Appearance::Bests> bestStore;static AppearanceStore<Appearance::Config> appearanceStore;static Appearance::Celebration bestEffect;
-static uint32_t millis(){return 10000;}
+static uint32_t clockMs=10000;static uint32_t millis(){return clockMs;}
 static unsigned soundPreviews=0,effectPreviews=0;static void previewSound(){++soundPreviews;}static void previewEffect(){++effectPreviews;}
 using Controls::Page;
 static Controls::State controls;
@@ -66,7 +67,8 @@ static LaunchFeedback launchFeedback;
 static InactivityTimer inactivity;
 static RpmEstimator::Mode rpmEstimator=RpmEstimator::DEFAULT_MODE;
 static StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;
-static MountOrientation::Mode mountMode=MountOrientation::Mode::Top;
+static MountOrientation::Mode mountMode=MountOrientation::Mode::Top,liveMount=MountOrientation::Mode::Top;
+static SettingsSave settingsSave;static bool extPower=false,directWrites=false;
 static StickS3Level level;static StickS3Level::Reading drawnLevel;static uint64_t lastLevelSampleUs=0;
 struct MotionAcquisition {
   MountOrientation::Mode mode=MountOrientation::Mode::Top;unsigned changes=0;bool fail=false;
@@ -75,22 +77,37 @@ struct MotionAcquisition {
 struct Prefs:Preferences {
   unsigned writes=0;
   size_t putUChar(const char *key,uint8_t value){++writes;return putBytes(key,&value,1);}
+  size_t putBool(const char *key,bool value){const uint8_t byte=value;return putUChar(key,byte);}
   size_t putBytes(const char *key,const void *data,size_t size){++writes;return Preferences::putBytes(key,data,size);}
 }prefs;
 static uint8_t backlightValue(){return (unsigned(brightnessPercent)*255+50)/100;}
-struct Snapshot{AnalogTachometer::Phase phase=AnalogTachometer::Phase::Ready;uint32_t launches=0;};
+struct Snapshot{AnalogTachometer::Phase phase=AnalogTachometer::Phase::Ready;uint32_t launches=0;
+  bool ready=true,suspended=false,opticalIdle=true,signalFault=false;uint8_t pin=1;
+  RpmEstimator::Mode estimator=RpmEstimator::DEFAULT_MODE;StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;};
 enum class Action{IdleCheckpointBegin,CheckpointEnd,Estimator,SensorProfile};
+// Refuses Begin exactly when the production owner would. refuseNext models a
+// mark that reaches the owner after the UI read an idle snapshot.
 struct Acquisition {
-  Snapshot state;unsigned begins=0,ends=0,estimatorChanges=0,profileChanges=0;bool failEstimator=false,failProfile=false;
-  Snapshot snapshot(){return state;}
+  Snapshot state;bool quietSignal=true,refuseNext=false,held=false;
+  unsigned begins=0,ends=0,refusals=0,estimatorChanges=0,profileChanges=0;bool failEstimator=false,failProfile=false;
+  Snapshot snapshot(){Snapshot s=state;s.suspended=held;
+    s.opticalIdle=quietSignal && (s.phase==AnalogTachometer::Phase::Ready || s.phase==AnalogTachometer::Phase::Paused);return s;}
   bool request(Action action,uint32_t expected=0){
-    if(action==Action::IdleCheckpointBegin){if(state.phase==AnalogTachometer::Phase::Launch || expected!=state.launches)return false;++begins;}
-    if(action==Action::CheckpointEnd)++ends;
-    if(action==Action::Estimator){++estimatorChanges;return !failEstimator;}
-    if(action==Action::SensorProfile){++profileChanges;return !failProfile;}
+    if(action==Action::IdleCheckpointBegin) {
+      if(held || refuseNext || state.phase==AnalogTachometer::Phase::Launch || expected!=state.launches ||
+         (state.phase==AnalogTachometer::Phase::Ready && !quietSignal)){refuseNext=false;++refusals;return false;}
+      ++begins;held=true;return true;
+    }
+    if(action==Action::CheckpointEnd){if(!held)return false;++ends;held=false;return true;}
+    // The detector's metric and profile can change only inside a checkpoint.
+    assert(held);
+    if(action==Action::Estimator){++estimatorChanges;if(failEstimator)return false;state.estimator=RpmEstimator::Mode(expected);return true;}
+    if(action==Action::SensorProfile){++profileChanges;if(failProfile)return false;state.sensorProfile=StickS3SensorProfile::Mode(expected);return true;}
     return true;
   }
 }acquisition;
+// Every NVS write happens inside a checkpoint, except the boot-load fixtures.
+static void writeGuard(){assert(acquisition.held || directWrites);}
 struct {struct {unsigned brightness=102,rotation=0;void setBrightness(unsigned value){brightness=value;}void setRotation(unsigned value){rotation=value;}uint8_t getRotation()const{return rotation;}}Display;}M5;
 struct {template<class... T>void printf(const char*,T...){}void println(const char*){}}Serial;
 '''
@@ -101,8 +118,8 @@ load_statement=source[load_start:source.index(';',load_start)+1]
 boot_rotation=re.findall(r'M5.Display.setRotation\([^;]+;',source)[-1]
 prefix+='\nstatic void restoreDisplayAtBoot(){'+load_statement+boot_rotation+'}\n'
 mount_load_start=source.index('  if(!MountOrientationSetting::load(')
-mount_load=source[mount_load_start:source.index(';',mount_load_start)+1]
-prefix+='\nstatic void restoreMountAtBoot(){'+mount_load+'assert(imuAcquisition.setMount(mountMode));}\n'
+mount_load=source[mount_load_start:source.index('liveMount=mountMode;',mount_load_start)+len('liveMount=mountMode;')]
+prefix+='\nstatic void restoreMountAtBoot(){'+mount_load+'assert(liveMount==mountMode && imuAcquisition.setMount(mountMode));}\n'
 visible_start=source.index('static bool visibleDisplayFlipped()')
 prefix+='\n'+source[visible_start:source.index('}',visible_start)+1]+'\n'
 tests=r'''
@@ -112,21 +129,24 @@ static void reset(){
   historyOffset=newSessionAt=tournamentHintUntil=0;historyView=PracticeUI::View::Recent;tournamentView=TournamentView::RecordingOnly;
   practice={};demoPractice={};latestMotion={};launchFeedback={};inactivity={};brightnessPercent=40;rpmEstimator=RpmEstimator::DEFAULT_MODE;sensorProfile=StickS3SensorProfile::DEFAULT_MODE;
   acquisition={};prefs={};M5.Display.brightness=102;M5.Display.rotation=2;
-  mountMode=MountOrientation::Mode::Top;imuAcquisition={};level={};drawnLevel={};lastLevelSampleUs=0;
-  Preferences::data.clear();Preferences::zeroLengthKeys.clear();Preferences::failWrite=Preferences::shortRead=false;
+  mountMode=liveMount=MountOrientation::Mode::Top;imuAcquisition={};level={};drawnLevel={};lastLevelSampleUs=0;
+  clockMs=10000;settingsSave={};extPower=directWrites=false;
+  Preferences::data.clear();Preferences::zeroLengthKeys.clear();Preferences::failWrite=Preferences::shortRead=false;Preferences::beforeWrite=writeGuard;
   assert(prefs.begin("controls-test",false));assert(appearanceStore.begin(appearance,"controls-appearance","cfg0","cfg1"));
 }
+static void retry(uint32_t ms){clockMs+=ms;saveSettings(millis(),acquisition.snapshot());}
+static uint8_t stored(const char *key){uint8_t value=0;assert(prefs.getBytes(key,&value,1)==1);return value;}
 static void edit(unsigned row){controls.page=Page::Settings;controls.setting=row;syncNavigation();buttonA();assert(controls.page==Page::Edit);}
 int main(){
   reset();restoreMountAtBoot();assert(mountMode==MountOrientation::Mode::Top && !prefs.writes);
   for(auto selected:{MountOrientation::Mode::Sidecar,MountOrientation::Mode::Top}) {
-    assert(MountOrientationSetting::save(prefs,selected));const auto stored=Preferences::data;
+    directWrites=true;assert(MountOrientationSetting::save(prefs,selected));directWrites=false;const auto stored=Preferences::data;
     mountMode=MountOrientation::Mode(99);restoreMountAtBoot();
     assert(mountMode==selected && imuAcquisition.mode==selected && Preferences::data==stored);
   }
   reset();restoreDisplayAtBoot();assert(!displayFlipped && M5.Display.rotation==2 && !prefs.writes);
   for(bool saved:{true,false}) {
-    assert(DisplayFlipSetting::save(prefs,saved));const auto stored=Preferences::data;
+    directWrites=true;assert(DisplayFlipSetting::save(prefs,saved));directWrites=false;const auto stored=Preferences::data;
     displayFlipped=!saved;M5.Display.rotation=99;restoreDisplayAtBoot();
     assert(displayFlipped==saved && M5.Display.rotation==(saved?0u:2u) && Preferences::data==stored);
   }
@@ -142,11 +162,33 @@ int main(){
   reset();edit(2);buttonB();assert(controls.draft==50 && brightnessPercent==40 && M5.Display.brightness==128 && !prefs.writes);
   holdB();assert(controls.page==Page::Settings && brightnessPercent==40 && M5.Display.brightness==102 && !prefs.writes);
   edit(2);buttonB();buttonA();assert(controls.page==Page::Settings && brightnessPercent==50 && M5.Display.brightness==128 && prefs.writes && !settingsSaveError);
-  assert(acquisition.begins==acquisition.ends);
+  assert(!settingsSave.pending() && stored("bright_pct")==50 && acquisition.begins==1 && acquisition.begins==acquisition.ends && !acquisition.held);
+  // Applying the unchanged value closes the editor without a checkpoint.
+  edit(2);buttonA();assert(controls.page==Page::Settings && acquisition.begins==1 && !settingsSave.pending());
+  // The reported failure: pressing A jiggles the launcher, so the owner sees a
+  // fresh strong mark at that instant. Apply still takes the value, and the
+  // record follows once the signal is quiet, without another press.
+  edit(2);buttonB();acquisition.quietSignal=false;buttonA();
+  assert(controls.page==Page::Settings && !settingsSaveError && brightnessPercent==60 && M5.Display.brightness==153);
+  assert(settingsSave.pending()==SettingsSave::Brightness && !acquisition.refusals && stored("bright_pct")==50);
+  retry(20);assert(!acquisition.refusals && settingsSave.pending()); // No request while the owner would refuse.
+  acquisition.quietSignal=true;retry(20);assert(!settingsSave.pending() && stored("bright_pct")==60);
+  // A mark that reaches the owner after the idle snapshot: one refusal, then
+  // a bounded retry (no IMU quiet wait on every UI tick).
+  edit(2);buttonB();acquisition.refuseNext=true;buttonA();
+  assert(controls.page==Page::Settings && brightnessPercent==70 && acquisition.refusals==1 && settingsSave.refusals()==1 && settingsSave.pending());
+  retry(SettingsSave::RETRY_MS-1);assert(settingsSave.pending() && acquisition.refusals==1);
+  retry(1);assert(!settingsSave.pending() && stored("bright_pct")==70 && acquisition.begins==acquisition.ends);
   reset();edit(3);assert(!visibleDisplayFlipped());buttonB();assert(!displayFlipped && visibleDisplayFlipped() && M5.Display.rotation==0 && !prefs.writes);
   holdB();assert(!visibleDisplayFlipped() && M5.Display.rotation==2 && !prefs.writes);
-  edit(3);buttonB();Preferences::failWrite=true;buttonA();assert(controls.page==Page::Edit && settingsSaveError && !displayFlipped);
-  Preferences::failWrite=false;buttonA();assert(controls.page==Page::Settings && displayFlipped && visibleDisplayFlipped() && M5.Display.rotation==0);
+  // A failed write keeps the applied choice and its record pending, retried
+  // after the longer failure backoff and shown as Not saved meanwhile.
+  edit(3);buttonB();Preferences::failWrite=true;buttonA();
+  assert(controls.page==Page::Settings && !settingsSaveError && displayFlipped && visibleDisplayFlipped() && M5.Display.rotation==0);
+  assert(settingsSave.failed() && settingsSave.pending()==SettingsSave::Flip && settingsSave.errors()==1 && acquisition.begins==acquisition.ends);
+  Preferences::failWrite=false;retry(SettingsSave::RETRY_MS);assert(settingsSave.pending() && acquisition.begins==1);
+  retry(SettingsSave::FAILED_RETRY_MS-SettingsSave::RETRY_MS);assert(!settingsSave.pending() && !settingsSave.failed());
+  {bool flipped=false;assert(DisplayFlipSetting::load(prefs,flipped) && flipped);}
   const auto flipStored=Preferences::data;edit(3);buttonB();assert(!visibleDisplayFlipped() && displayFlipped && M5.Display.rotation==2);
   holdB();assert(visibleDisplayFlipped() && M5.Display.rotation==0 && Preferences::data==flipStored);
   // During a pull the display changes are deferred; cancel returns to the
@@ -155,40 +197,55 @@ int main(){
   assert(visibleDisplayFlipped() && M5.Display.rotation==0 && restorePreview);
   holdB();assert(visibleDisplayFlipped() && M5.Display.rotation==0 && restorePreview && Preferences::data==flipStored);
   acquisition.state.phase=AnalogTachometer::Phase::Ready;previewSetting();assert(!restorePreview && M5.Display.rotation==0);
+  // Apply during a pull or capture: the choice is taken, its record waits.
   reset();edit(0);for(unsigned i=0;i<7;++i)buttonB();assert(controls.draft==10 && inactivity.minutes()==3 && !prefs.writes);
-  acquisition.state.phase=AnalogTachometer::Phase::Launch;buttonA();assert(controls.page==Page::Edit && !prefs.writes && settingsSaveError);
-  acquisition.state.phase=AnalogTachometer::Phase::Ready;buttonA();assert(inactivity.minutes()==10 && controls.page==Page::Settings);
+  acquisition.state.phase=AnalogTachometer::Phase::Launch;buttonA();
+  assert(controls.page==Page::Settings && !settingsSaveError && inactivity.minutes()==10 && !prefs.writes && settingsSave.pending()==SettingsSave::Sleep);
+  acquisition.state.phase=AnalogTachometer::Phase::Ready;motionPending=true;retry(20);assert(!prefs.writes && !acquisition.refusals);
+  motionPending=false;retry(20);assert(!settingsSave.pending() && stored("sleep_min")==10 && !acquisition.refusals);
   reset();assert(practice.accept(1,true,6000,millis()));const auto session=practice.session()->number;
   edit(1);buttonB();assert(rpmEstimator==RpmEstimator::Mode::ThreeTurn && practice.session()->number==session);
   holdB();assert(practice.accept(2,true,6100,millis()) && practice.session()->number==session);
-  edit(1);buttonB();buttonA();assert(rpmEstimator==RpmEstimator::Mode::SingleTurn && acquisition.estimatorChanges==1);
+  edit(1);buttonB();buttonA();assert(rpmEstimator==RpmEstimator::Mode::SingleTurn && acquisition.estimatorChanges==1 && acquisition.state.estimator==rpmEstimator);
   assert(practice.accept(3,true,6200,millis()) && practice.session()->number==session+1 && practice.size()==3);
-  reset();edit(1);buttonB();acquisition.failEstimator=true;buttonA();assert(controls.page==Page::Edit && rpmEstimator==RpmEstimator::Mode::ThreeTurn && settingsSaveError);
-  RpmEstimator::Mode saved;assert(RpmEstimatorSetting::load(prefs,saved) && saved==rpmEstimator);
+  // A metric switch the owner refuses keeps the old live metric, record and
+  // session until it succeeds; the choice itself is kept and retried.
+  reset();assert(practice.accept(1,true,6000,millis()));const auto metricSession=practice.session()->number;
+  edit(1);buttonB();acquisition.failEstimator=true;buttonA();
+  assert(controls.page==Page::Settings && rpmEstimator==RpmEstimator::Mode::SingleTurn && acquisition.state.estimator==RpmEstimator::Mode::ThreeTurn && settingsSave.failed());
+  RpmEstimator::Mode saved;assert(RpmEstimatorSetting::load(prefs,saved) && saved==RpmEstimator::Mode::ThreeTurn);
+  assert(practice.accept(2,true,6100,millis()) && practice.session()->number==metricSession);
+  acquisition.failEstimator=false;retry(SettingsSave::FAILED_RETRY_MS);
+  assert(acquisition.state.estimator==rpmEstimator && !settingsSave.pending() && RpmEstimatorSetting::load(prefs,saved) && saved==rpmEstimator);
+  assert(practice.accept(3,true,6200,millis()) && practice.session()->number==metricSession+1);
   reset();assert(practice.accept(1,true,6000,millis()));const auto profileSession=practice.session()->number;
   edit(4);buttonB();assert(controls.draft==1 && sensorProfile==StickS3SensorProfile::Mode::Standard && !prefs.writes);
   holdB();assert(sensorProfile==StickS3SensorProfile::Mode::Standard && !prefs.writes && !acquisition.profileChanges);
   edit(4);buttonB();acquisition.state.phase=AnalogTachometer::Phase::Launch;buttonA();
-  assert(controls.page==Page::Edit && settingsSaveError && !prefs.writes && !acquisition.profileChanges);
-  acquisition.state.phase=AnalogTachometer::Phase::Ready;buttonA();
-  assert(controls.page==Page::Settings && sensorProfile==StickS3SensorProfile::Mode::Tcrt && acquisition.profileChanges==1);
+  assert(controls.page==Page::Settings && !settingsSaveError && sensorProfile==StickS3SensorProfile::Mode::Tcrt && !prefs.writes && !acquisition.profileChanges);
+  assert(acquisition.state.sensorProfile==StickS3SensorProfile::Mode::Standard);
+  acquisition.state.phase=AnalogTachometer::Phase::Ready;retry(20);
+  assert(acquisition.profileChanges==1 && acquisition.state.sensorProfile==sensorProfile && !settingsSave.pending());
   StickS3SensorProfile::Mode profileSaved;
   assert(SensorProfileSetting::load(prefs,profileSaved) && profileSaved==sensorProfile);
   assert(practice.accept(2,true,6100,millis()) && practice.session()->number==profileSession+1);
   const auto writes=prefs.writes;edit(4);buttonA();assert(acquisition.profileChanges==1 && prefs.writes==writes);
   reset();edit(4);buttonB();acquisition.failProfile=true;buttonA();
-  assert(controls.page==Page::Edit && settingsSaveError && sensorProfile==StickS3SensorProfile::Mode::Standard);
-  assert(SensorProfileSetting::load(prefs,profileSaved) && profileSaved==sensorProfile);
+  assert(controls.page==Page::Settings && sensorProfile==StickS3SensorProfile::Mode::Tcrt && acquisition.state.sensorProfile==StickS3SensorProfile::Mode::Standard && settingsSave.failed());
+  assert(SensorProfileSetting::load(prefs,profileSaved) && profileSaved==StickS3SensorProfile::Mode::Standard);
+  // The profile switch itself succeeds; only its record waits for the retry.
   reset();edit(4);buttonB();Preferences::failWrite=true;buttonA();
-  assert(controls.page==Page::Edit && settingsSaveError && !acquisition.profileChanges && sensorProfile==StickS3SensorProfile::Mode::Standard);
-  Preferences::failWrite=false;buttonA();assert(sensorProfile==StickS3SensorProfile::Mode::Tcrt && !settingsSaveError);
+  assert(controls.page==Page::Settings && acquisition.profileChanges==1 && acquisition.state.sensorProfile==StickS3SensorProfile::Mode::Tcrt);
+  assert(settingsSave.failed() && settingsSave.pending()==SettingsSave::Sensor);
+  Preferences::failWrite=false;retry(SettingsSave::FAILED_RETRY_MS);
+  assert(acquisition.profileChanges==1 && !settingsSave.pending() && SensorProfileSetting::load(prefs,profileSaved) && profileSaved==sensorProfile);
   assert(acquisition.begins==acquisition.ends);
   reset();const auto untouched=practice.generation();edit(5);buttonB();assert(controls.draft==1 && appearance.theme==Appearance::Theme::Classic);holdB();assert(appearance.theme==Appearance::Theme::Classic);
-  edit(5);buttonB();buttonA();assert(appearance.theme==Appearance::Theme::Mint && practice.generation()==untouched && !acquisition.estimatorChanges && !acquisition.profileChanges);
+  edit(5);buttonB();buttonA();assert(appearance.theme==Appearance::Theme::Mint && practice.generation()==untouched && !acquisition.estimatorChanges && !acquisition.profileChanges && !settingsSave.pending());
   // Random is the default and comes first; B steps to Orbit and previews it.
   edit(6);assert(controls.draft==uint8_t(Appearance::Effect::Random));const unsigned shown=effectPreviews;buttonB();assert(effectPreviews==shown+1);
-  Preferences::failWrite=true;buttonA();assert(settingsSaveError && appearance.effect==Appearance::Effect::Random && controls.page==Page::Edit);
-  Preferences::failWrite=false;buttonA();assert(appearance.effect==Appearance::Effect::Orbit && controls.page==Page::Settings);
+  Preferences::failWrite=true;buttonA();assert(!settingsSaveError && appearance.effect==Appearance::Effect::Orbit && controls.page==Page::Settings && settingsSave.failed());
+  Preferences::failWrite=false;retry(SettingsSave::FAILED_RETRY_MS);assert(!settingsSave.pending());
   Appearance::Config restored;AppearanceStore<Appearance::Config> reader;assert(reader.begin(restored,"controls-appearance","cfg0","cfg1") && restored.theme==appearance.theme && restored.effect==appearance.effect);
   // Sound: each B previews the draft level; only Apply saves it, with the theme and effect intact.
   edit(7);assert(controls.draft==0);const unsigned previews=soundPreviews;buttonB();buttonB();
@@ -197,31 +254,41 @@ int main(){
   edit(7);buttonB();buttonA();assert(appearance.sound==Appearance::Sound::Low && controls.page==Page::Settings);
   {Appearance::Config again;AppearanceStore<Appearance::Config> reread;assert(reread.begin(again,"controls-appearance","cfg0","cfg1") &&
     again.sound==Appearance::Sound::Low && again.theme==Appearance::Theme::Mint && again.effect==Appearance::Effect::Orbit);}
-  // Mount drafts never change live axes or flash. Apply waits until optical
-  // idle, resets live level, and preserves scalar history/session and Flip.
+  // An unreadable stored look cannot be replaced: Apply says so and keeps the
+  // look shown, rather than one that would revert at the next boot.
+  reset();Preferences::data["controls-appearancecfg0"]={1,2,3};appearanceStore={};
+  assert(!appearanceStore.begin(appearance,"controls-appearance","cfg0","cfg1"));
+  edit(5);buttonB();buttonA();assert(controls.page==Page::Edit && settingsSaveError && appearance.theme==Appearance::Theme::Classic && !settingsSave.pending());
+  // Mount drafts never change live axes or flash. The new frame is switched to
+  // inside the save checkpoint, never during a pull or its capture (switching
+  // clears the IMU ring), and resets live level; scalar history/session and
+  // Flip are preserved.
   reset();assert(practice.accept(1,true,6000,millis()));const auto mountSession=practice.session()->number;
   level.feed(.1f,0,1,millis());drawnLevel=level.reading(millis());lastLevelSampleUs=12345;
   edit(8);assert(controls.draft==0);buttonB();
   assert(controls.draft==1 && mountMode==MountOrientation::Mode::Top && !prefs.writes && !imuAcquisition.changes);
   holdB();assert(mountMode==MountOrientation::Mode::Top && !prefs.writes && !imuAcquisition.changes);
   edit(8);buttonB();acquisition.state.phase=AnalogTachometer::Phase::Launch;buttonA();
-  assert(controls.page==Page::Edit && settingsSaveError && !prefs.writes && !imuAcquisition.changes);
-  acquisition.state.phase=AnalogTachometer::Phase::Ready;motionPending=true;buttonA();
-  assert(controls.page==Page::Edit && settingsSaveError && !prefs.writes && !imuAcquisition.changes);
-  motionPending=false;buttonA();
-  assert(mountMode==MountOrientation::Mode::Sidecar && imuAcquisition.mode==mountMode && imuAcquisition.changes==1);
+  assert(controls.page==Page::Settings && !settingsSaveError && mountMode==MountOrientation::Mode::Sidecar);
+  assert(liveMount==MountOrientation::Mode::Top && !prefs.writes && !imuAcquisition.changes && lastLevelSampleUs==12345);
+  acquisition.state.phase=AnalogTachometer::Phase::Ready;motionPending=true;retry(20);
+  assert(liveMount==MountOrientation::Mode::Top && !prefs.writes && !imuAcquisition.changes && lastLevelSampleUs==12345);
+  motionPending=false;retry(20);
+  assert(liveMount==MountOrientation::Mode::Sidecar && imuAcquisition.mode==mountMode && imuAcquisition.changes==1 && !settingsSave.pending());
   assert(controls.page==Page::Settings && !settingsSaveError && !displayFlipped && M5.Display.rotation==2);
   assert(!level.reading(millis()).valid() && !drawnLevel.valid() && lastLevelSampleUs==0);
   assert(practice.accept(2,true,6100,millis()) && practice.session()->number==mountSession && practice.size()==2);
   MountOrientation::Mode mountSaved;assert(MountOrientationSetting::load(prefs,mountSaved) && mountSaved==mountMode);
   const auto mountBytes=Preferences::data;const auto mountChanges=imuAcquisition.changes;
   edit(8);buttonA();assert(Preferences::data==mountBytes && imuAcquisition.changes==mountChanges);
+  // A busy IMU owner keeps the old frame and record until it can switch.
   edit(8);buttonB();imuAcquisition.fail=true;buttonA();
-  assert(controls.page==Page::Edit && settingsSaveError && mountMode==MountOrientation::Mode::Sidecar);
-  assert(MountOrientationSetting::load(prefs,mountSaved) && mountSaved==mountMode);
-  imuAcquisition.fail=false;Preferences::failWrite=true;buttonA();
-  assert(controls.page==Page::Edit && settingsSaveError && imuAcquisition.changes==mountChanges);
-  Preferences::failWrite=false;buttonA();assert(mountMode==MountOrientation::Mode::Top && !settingsSaveError);
+  assert(controls.page==Page::Settings && mountMode==MountOrientation::Mode::Top && liveMount==MountOrientation::Mode::Sidecar && settingsSave.failed());
+  assert(MountOrientationSetting::load(prefs,mountSaved) && mountSaved==MountOrientation::Mode::Sidecar);
+  imuAcquisition.fail=false;Preferences::failWrite=true;retry(SettingsSave::FAILED_RETRY_MS);
+  assert(liveMount==MountOrientation::Mode::Top && imuAcquisition.changes==mountChanges+1 && settingsSave.failed());
+  Preferences::failWrite=false;retry(SettingsSave::FAILED_RETRY_MS);
+  assert(!settingsSave.pending() && MountOrientationSetting::load(prefs,mountSaved) && mountSaved==mountMode && imuAcquisition.changes==mountChanges+1);
   assert(acquisition.begins==acquisition.ends);
   reset();holdA();assert(tournamentMode && tournamentView==TournamentView::RecordingOnly);
   buttonA();holdB();assert(tournamentMode && !launchFeedback.shown());buttonB();assert(tournamentView==TournamentView::Rpm);
@@ -236,10 +303,10 @@ int main(){
   assert(wipeConfirmation.stage()==WipeConfirmation::Stage::Confirm);
   buttonB();assert(controls.page==Page::Settings && !wipeConfirmation.active() && !prefs.writes);
   buttonA();wipeBlocked=true;holdB();assert(controls.page==Page::Wipe && !wipeConfirmation.active());
-  std::cout<<"PASS: actual control handlers; menu/back, recap, preview rollback, persistence retry, active-pull guard, metric/session boundary, rollback, sound preview/apply and tournament lock\n";
+  std::cout<<"PASS: actual control handlers; menu/back, recap, preview rollback, Apply never refused by a busy signal, queued checkpoint-only writes with bounded retry, active-pull/capture guard, metric/session boundary at the switch, sound preview/apply and tournament lock\n";
 }
 '''
-names=['syncNavigation','toggleFeedback','previewSetting','beginWipe','cancelWipe','cancelSettingEdit','commitSetting','newSession','browseOlder','navigate','buttonA','buttonB','holdA','holdB']
+names=['syncNavigation','toggleFeedback','previewSetting','beginWipe','cancelWipe','cancelSettingEdit','writeSettings','saveSettings','commitSetting','newSession','browseOlder','navigate','buttonA','buttonB','holdA','holdB']
 with tempfile.TemporaryDirectory(prefix='launchlab-controls-') as directory:
     directory=Path(directory);cpp=directory/'test.cpp';exe=directory/'test'
     cpp.write_text(prefix+'\n'.join(function(name) for name in names)+tests)

@@ -51,10 +51,10 @@ static void advance(uint64_t us){hostUs+=us;}
 struct Snapshot {
   AnalogTachometer::Phase phase=HAS_HISTORY_COALESCING?AnalogTachometer::Phase::Ready:AnalogTachometer::Phase::Hold;
   uint64_t burstStartHostUs=0,burstEndHostUs=0;
-  bool valid=true;StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;RpmEstimator::Mode estimator=RpmEstimator::DEFAULT_MODE;
+  bool valid=true,signalFault=false;StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;RpmEstimator::Mode estimator=RpmEstimator::DEFAULT_MODE;
   float resultRpm=6122.449f;uint32_t launches=1;
 };
-enum class Action {CheckpointBegin,CheckpointEnd,HistoryIdleCheckpointBegin};
+enum class Action {CheckpointBegin,CheckpointEnd,HistoryIdleCheckpointBegin,IdleCheckpointBegin};
 struct SerialFake {
   template<typename... T>void printf(const char*,T...){}void println(const char*){}
 }Serial;
@@ -71,7 +71,10 @@ static LaunchMotion::Trace completedTrace,latestMotion,referenceMotion,demoMotio
 struct ImuFake {
   struct State {uint64_t fusedUs;};
   State snapshot(){return {hostUs};}
-  bool capture(uint64_t,uint64_t,float rpm,uint32_t number,LaunchMotion::Trace &out){out=completedTrace;out.rpm=rpm;out.number=number;return true;}
+  unsigned failCaptures=0;
+  bool capture(uint64_t,uint64_t,float rpm,uint32_t number,LaunchMotion::Trace &out){
+    if(failCaptures){--failCaptures;return false;}
+    out=completedTrace;out.rpm=rpm;out.number=number;return true;}
 }imuAcquisition;
 struct AcquisitionFake {Snapshot state;Snapshot snapshot(){return state;}bool request(Action,uint32_t=0){return true;}}acquisition;
 struct InactivityFake {void touch(uint32_t){}}inactivity;
@@ -86,6 +89,7 @@ static StickS3Level level;static StickS3Level::Reading drawnLevel;
 static uint64_t motionStart=0,motionEnd=0;
 static uint32_t motionDrops=0,lastAcceptedAt=0,historyPendingSince=0,lastSaveTry=0,maxSaveUs=0,saveCount=0,saveErrors=0,lastDraw=0,newSessionAt=0;
 static bool motionPending=false,motionDemo=false,historyPage=false,diagnostics=false,demo=false,tournamentMode=false,dirty=false,stress=false,saveError=false,screenReady=true;
+static constexpr uint64_t MOTION_CAPTURE_RETRY_US=3000000;static uint32_t motionCaptureRetries=0;
 static bool displayFlipped=false;
 static bool visibleDisplayFlipped(){return displayFlipped;}
 static bool restorePreview=false;static uint32_t tournamentHintUntil=0;
@@ -102,6 +106,9 @@ static void powerKeyOff(uint32_t,const Snapshot&){}
 static void tickDisplayPower(uint32_t,const Snapshot&){}
 // Sound playback is device-only; its scheduling has no effect on capture or drawing here.
 static void tickSound(const Snapshot&){}
+// Settings saves and orphaned-checkpoint release have their own production
+// harness with the actual ADC owner (check_save_paths.py).
+static void saveSettings(uint32_t,const Snapshot&){}static void releaseOrphanCheckpoint(uint32_t,const Snapshot&){}
 static int actualSourceTime(const LaunchMotion::Trace&,float);
 static float actualProgress(uint32_t);
 struct Frame {uint64_t drawnUs,presentedUs;int sourceMs;bool replay,pending,unavailable;std::string reason;std::vector<int> body;};
@@ -156,6 +163,16 @@ int main() {
     std::cout<<"CASE pending_ms="<<pendingMs<<" history_write="<<historyDirty<<" completed_replay_frames="<<shown.size()<<" distinct_body_pixel_geometry="<<distinct.size()<<" first_source_ms="<<shown.front().sourceMs<<" save_attempts="<<practiceStore.attempts<<'\n';++cases;
   }
   // A write becoming due on the next frame must not wipe out the replay.
+  // A transient capture failure (ring copy allocation or busy ring gate) is
+  // retried while the samples are buffered; past the deadline it gives up.
+  reset();{auto e=event();prepareMotion(e);hostUs=e.burstEndHostUs+300000;imuAcquisition.failCaptures=2;
+    productionStep();require(motionPending,"first failed capture stays pending");
+    productionStep();require(motionPending,"second failed capture stays pending");
+    productionStep();require(!motionPending && latestMotion.valid() && imuAcquisition.failCaptures==0,"retried capture completes the valid trace");}
+  reset();{auto e=event();prepareMotion(e);hostUs=e.burstEndHostUs+300000;imuAcquisition.failCaptures=1000;
+    productionStep();require(motionPending,"failing capture retried inside the retention window");
+    hostUs=e.burstEndHostUs+MOTION_CAPTURE_RETRY_US+1;productionStep();
+    require(!motionPending && !latestMotion.valid(),"capture abandoned only after the retention deadline");imuAcquisition.failCaptures=0;}
   reset();readyAfter(300,false);makeSaveDue();advance(50000);productionStep();
   require(practiceStore.attempts==0,"next-frame history write must be deferred through active replay");completeReplay();checkTimeline();require(practiceStore.attempts==1,"next-frame deferred write eventually completes");++cases;
   // External scheduling stalls skip ahead at 1x, rather than slowing playback.

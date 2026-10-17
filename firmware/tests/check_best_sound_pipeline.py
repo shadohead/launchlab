@@ -98,6 +98,7 @@ static PracticeHistory practice;
 static LaunchMotion::Trace latestMotion;
 static LaunchFeedback launchFeedback;
 static bool dirty=false,motionPending=false,celebrationSound=false,soundPreview=false;
+static constexpr uint64_t MOTION_CAPTURE_RETRY_US=3000000;static uint32_t motionCaptureRetries=0;
 static bool tournamentMode=false,historyPage=false,diagnostics=false,motionDemo=false,demo=false;
 static uint32_t lastAcceptedAt=0,historyPendingSince=0,motionDrops=0,maxEffectUs=0,maxDrawUs=0;
 static uint64_t motionStart=0,motionEnd=0;

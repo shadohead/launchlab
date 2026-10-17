@@ -13,6 +13,8 @@
 #endif
 #include "usb_awake.h"
 #include <HWCDC.h>
+#include "usb_tx.h"
+#include "usb_command_guard.h"
 #include "power_diagnostics.h"
 #include <sys/time.h>
 #include <esp32-hal-cpu.h>
@@ -39,16 +41,20 @@
 #include "nvs_budget.h"
 #include "device_wipe_nvs.h"
 #include "wipe_confirmation.h"
+#include "settings_save.h"
 
 // loop() runs on an 8 KB task. GCC inlines static helpers called once, and the
 // frames of inlined bodies add up: 0.11.0's loop frame reached 6.9 KB and
 // overflowed on the first status print. Keep heavy or rarely used helpers as
 // real calls so each one uses stack only while it runs.
 #define LOOP_HELPER __attribute__((noinline))
-#if LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = "0.13.8-sticks3-fifo-timing-pm";
+#if LAUNCHLAB_HIL
+// Test-only hardware-in-the-loop build; never a release. See tools/hil.
+static constexpr char VERSION[] = "0.13.9-sticks3-rpm-guard-hil-pm";
+#elif LAUNCHLAB_CPU_PM
+static constexpr char VERSION[] = "0.13.9-sticks3-rpm-guard-pm";
 #else
-static constexpr char VERSION[] = "0.13.8-sticks3-fifo-timing";
+static constexpr char VERSION[] = "0.13.9-sticks3-rpm-guard";
 #endif
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ
@@ -101,6 +107,10 @@ static uint32_t lastImuPoll=0,maxImuPollUs=0;
 static StickS3Level::Reading drawnLevel;
 static InactivityTimer inactivity;
 static uint64_t lastActivityMotionUs=0;
+// USB letters a stray byte stream sent outside a standalone command.
+static UsbCommandGuard usbCommands;
+// Automatic checkpoints prefer a launcher the IMU shows set down.
+static HistoryCheckpoint::Stillness imuStill;
 static SensorIdle sensorIdle;
 static UsbHostAwake usbAwake;
 static bool usbAutoOffInhibited=false;
@@ -111,11 +121,19 @@ static bool powerKeyRequested=false;
 static uint32_t powerKeyRequestedAt=0,lastPowerKeyRead=0;
 static constexpr uint32_t POWER_KEY_WAIT_MS=10000;
 static bool settingsSaveError=false;
+static SettingsSave settingsSave;
+// A stopped, non-resting ADC owner outlasting this is a lost checkpoint reply.
+static constexpr uint32_t ORPHAN_CHECKPOINT_MS=1000;
+static bool orphanSeen=false;static uint32_t orphanSince=0;
 static uint8_t brightnessPercent=40;
 static bool displayFlipped=false;
 static RpmEstimator::Mode rpmEstimator=RpmEstimator::DEFAULT_MODE;
 static StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;
 static MountOrientation::Mode mountMode=MountOrientation::Mode::Top;
+// The frame level data and the IMU owner actually use. A new mount choice is
+// switched to inside its save checkpoint: switching clears the IMU ring, which
+// must never happen during a pull or its capture.
+static MountOrientation::Mode liveMount=MountOrientation::Mode::Top;
 static StickS3Battery battery;
 static uint32_t lastBatteryPoll=0,maxBatteryPollUs=0,lastShutdownTry=0;
 static bool batteryPolled=false;
@@ -140,7 +158,12 @@ static struct {bool active=false,celebration=false;Appearance::Effect effect=App
 static constexpr uint32_t SOUND_LATE_MS=300;
 static void requestSound(Appearance::Effect effect,Appearance::Sound level,bool celebration);
 static Appearance::Effect celebrationEffect();static Appearance::Effect soundTarget();
+static constexpr size_t USB_TX_BUFFER_BYTES=8192;
 static constexpr uint32_t MOTION_INIT_RETRY_MS=5000,MOTION_DATA_TIMEOUT_MS=250;
+// The 1024-sample ring (10 s at 100 Hz) still holds a pull for this long.
+static constexpr uint64_t MOTION_CAPTURE_RETRY_US=3000000;
+static uint32_t motionCaptureRetries=0,motionRestoreFailures=0;
+static bool motionRestoreNeeded=false;
 static uint32_t motionInitAttempts=0,lastMotionInit=0;
 static bool motionInitPaired=false,motionInitSuccess=false;
 static MotionStore motionStore;
@@ -187,7 +210,10 @@ static bool startMotion() {
     const bool detected=M5.Imu.begin(&M5.In_I2C,m5::board_t::board_M5StickS3);
     motionInitPaired=detected && configureMotionSensor() && motionSensorPaired();
   }
-  motionInitSuccess=motionInitPaired && imuAcquisition.setMount(mountMode) && imuAcquisition.begin();
+  // Nothing is captured before the owner starts, so it can take the chosen mount.
+  const bool mounted=motionInitPaired && imuAcquisition.setMount(mountMode);
+  if(mounted)liveMount=mountMode;
+  motionInitSuccess=mounted && imuAcquisition.begin();
   Serial.printf("IMU_STARTUP attempt=%lu enabled=%d type=%d paired=%d task=%d elapsed_ms=%lu\n",
     (unsigned long)motionInitAttempts,M5.Imu.isEnabled(),int(M5.Imu.getType()),motionInitPaired,
     imuAcquisition.running(),(unsigned long)(millis()-lastMotionInit));
@@ -206,10 +232,19 @@ static bool quietImuForFlash(Action action,bool done,bool ok) {
   return true;
 }
 
+// A cancelled standby re-applies M5's measurement configuration and the FIFO.
+// If that fails the IMU task keeps running on an unconfigured sensor, so the
+// task existing is not proof of tilt data: retry the restore until it works.
+static void noteMotionRestoreFailure(){motionRestoreNeeded=true;++motionRestoreFailures;lastMotionInit=millis();}
 LOOP_HELPER static void retryMotion(uint32_t now,const Snapshot &s) {
-  if(imuAcquisition.running() || motionPending || uint32_t(now-lastMotionInit)<MOTION_INIT_RETRY_MS ||
+  if(motionPending || uint32_t(now-lastMotionInit)<MOTION_INIT_RETRY_MS ||
      (s.phase!=AnalogTachometer::Phase::Ready && s.phase!=AnalogTachometer::Phase::Paused))return;
-  startMotion();dirty=true;
+  if(!imuAcquisition.running()){startMotion();dirty=true;return;}
+  if(!motionRestoreNeeded || !imuAcquisition.lock())return;
+  lastMotionInit=now;
+  const bool restored=shakeWake.restore();imuAcquisition.unlock();
+  if(restored)motionRestoreNeeded=false;else ++motionRestoreFailures;
+  Serial.printf("IMU_RESTORE_RETRY ok=%d failures=%lu\n",restored,(unsigned long)motionRestoreFailures);dirty=true;
 }
 
 static uint8_t backlightValue(){return (unsigned(brightnessPercent)*255+50)/100;}
@@ -260,7 +295,9 @@ LOOP_HELPER static void tickPowerLog(uint32_t now,const Snapshot &s){
   // A resting owner already holds its checkpoint. Keep optional diagnostics
   // in RAM until motion resumes it or final shutdown flushes the log.
   if(!s.resting && powerLogReady && powerLogDirty && now-lastPowerSaveTry>=300000 &&
-    HistoryCheckpoint::practiceIdle(now,lastAcceptedAt,HISTORY_COALESCE_MS,motionPending,launchFeedback.shown(),s.phase)){
+    HistoryCheckpoint::practiceIdle(now,lastAcceptedAt,
+      HistoryCheckpoint::automaticQuietMs(now,imuStill,now-lastPowerSaveTry-300000,HISTORY_COALESCE_MS),
+      motionPending,launchFeedback.shown(),s.phase)){
     // Record the attempt first: a vetoed checkpoint must not repeat the IMU
     // quiet wait on every UI tick. The dirty log stays pending.
     lastPowerSaveTry=now;
@@ -323,16 +360,18 @@ LOOP_HELPER static void status() {
   Serial.printf("RPM_ESTIMATORS selected=%s units=rpm three_turn_peak_rpm=%.1f single_turn_peak_rpm=%.1f confirmation_turns=3 max_rpm=30000 single_updates=%lu single_rejected=%lu\n",
     RpmEstimator::name(s.estimator),s.sustainedPeakRpm,s.singlePeakRpm,
     (unsigned long)s.singlePeakUpdates,(unsigned long)s.singlePeakRejected);
+  Serial.printf("SETTINGS_SAVE_STATUS pending=0x%03x failed=%d saves=%lu errors=%lu refusals=%lu\n",unsigned(settingsSave.pending()),
+    settingsSave.failed(),(unsigned long)settingsSave.saves(),(unsigned long)settingsSave.errors(),(unsigned long)settingsSave.refusals());
   Serial.printf("TOURNAMENT_STATUS enabled=%d display=%s persistent=wake\n",tournamentMode,tournamentViewName());
   soundPlayer.status(appearance.sound);
   Serial.printf("UI_STATUS page=%u menu=%u history=%u setting=%u draft=%u recording=%s\n",
     unsigned(controls.page),controls.menu,controls.history,controls.setting,controls.draft,
     s.resting?"idle_paused":LAUNCHLAB_MOTION_ADC_GATE?"motion_gated":"always");
-  Serial.printf("PERF acquisition_core=0 ui_core=%d processing_pct=%.2f max_batch_us=%lu frame_budget_us=5120 max_read_gap_us=%lu stack_free=%lu invalid_frames=%lu lost_events=%lu max_draw_us=%lu max_effect_us=%lu ui_stalls=%lu stress=%d heap_free=%lu psram_free=%lu\n",
+  Serial.printf("PERF acquisition_core=0 ui_core=%d processing_pct=%.2f max_batch_us=%lu frame_budget_us=5120 max_read_gap_us=%lu stack_free=%lu invalid_frames=%lu lost_events=%lu max_draw_us=%lu max_effect_us=%lu ui_stalls=%lu stress=%d heap_free=%lu psram_free=%lu usb_drain_timeouts=%lu usb_rejected_commands=%lu\n",
     xPortGetCoreID(),s.processingPercent,(unsigned long)s.maxBatchUs,(unsigned long)s.maxReadGapUs,
     (unsigned long)s.stackFree,(unsigned long)s.invalidFrames,(unsigned long)s.lostEvents,
     (unsigned long)maxDrawUs,(unsigned long)maxEffectUs,(unsigned long)uiStalls,stress,
-    (unsigned long)ESP.getFreeHeap(),(unsigned long)ESP.getFreePsram());
+    (unsigned long)ESP.getFreeHeap(),(unsigned long)ESP.getFreePsram(),(unsigned long)UsbTx::drainTimeouts,(unsigned long)usbCommands.rejected);
   heapStatus();nvsStatus();
   const auto tilt=level.reading(millis());const float *acc=level.lastAccel();
   Serial.printf("LEVEL_STATUS imu_ready=%d imu_type=%d state=%s degrees=%.2f accel_g=%.3f,%.3f,%.3f samples=%lu rejected=%lu max_poll_us=%lu draw_buffer=%d\n",
@@ -350,11 +389,12 @@ LOOP_HELPER static void status() {
   const bool pendingHistory=practiceStore.pending(practice);
   const uint32_t pendingMs=pendingHistory && historyPendingSince?now-historyPendingSince:0;
   const uint32_t quietMs=now-lastAcceptedAt;
-  const uint32_t flushDue=quietMs>=HISTORY_COALESCE_MS?0u:HISTORY_COALESCE_MS-quietMs;
+  const uint32_t coalesceMs=HistoryCheckpoint::automaticQuietMs(now,imuStill,pendingMs,HISTORY_COALESCE_MS);
+  const uint32_t flushDue=quietMs>=coalesceMs?0u:coalesceMs-quietMs;
   const uint32_t retryRemaining=saveError && now-lastSaveTry<HISTORY_SAVE_RETRY_MS?HISTORY_SAVE_RETRY_MS-(now-lastSaveTry):0;
-  Serial.printf("HISTORY_PENDING unsaved_pulls=%lu pending_ms=%lu flush_due_ms=%lu coalesce_ms=%lu max_pending_ms=none retry_remaining_ms=%lu\n",
+  Serial.printf("HISTORY_PENDING unsaved_pulls=%lu pending_ms=%lu flush_due_ms=%lu coalesce_ms=%lu max_pending_ms=%lu retry_remaining_ms=%lu\n",
     (unsigned long)practiceStore.pendingCount(practice),(unsigned long)pendingMs,
-    (unsigned long)(pendingHistory?flushDue:0),(unsigned long)HISTORY_COALESCE_MS,(unsigned long)retryRemaining);
+    (unsigned long)(pendingHistory?flushDue:0),(unsigned long)coalesceMs,(unsigned long)HistoryCheckpoint::MAX_PENDING_MS,(unsigned long)retryRemaining);
   Serial.printf("POWER_STATUS auto_off_s=%lu wake=shake sleep=imu_only sensor_rail=L2_off_in_battery_standby idle_s=%lu off_in_s=%lu battery_valid=%d battery_mv=%u battery_pct=%d charging=%s max_battery_poll_us=%lu auto_off_inhibited=%d\n",
     (unsigned long)(inactivity.timeout()/1000),(unsigned long)(inactivity.elapsed(now)/1000),(unsigned long)((inactivity.remaining(now)+999)/1000),
     battery.valid(now),unsigned(battery.millivolts),battery.valid(now)?battery.percent:-1,
@@ -393,6 +433,7 @@ LOOP_HELPER static void status() {
     (unsigned long)inactivity.elapsed(now),inactivity.unusedShake(),(unsigned long)((inactivity.remaining(now)+999)/1000));
   Serial.printf("MOUNT_STATUS selected=%s imu_frame=%s accel_gyro_frame=launcher raw_imu_frame=device display_flip=%d\n",
     MountOrientation::label(mountMode),MountOrientation::label(imu.mount),displayFlipped);
+  Serial.printf("IMU_RESTORE_STATUS needed=%d failures=%lu capture_retries=%lu\n",motionRestoreNeeded,(unsigned long)motionRestoreFailures,(unsigned long)motionCaptureRetries);
   Serial.printf("IMU_STARTUP_STATUS attempts=%lu last_try_ms=%lu last_paired=%d last_success=%d retry_ms=%lu\n",
     (unsigned long)motionInitAttempts,(unsigned long)lastMotionInit,motionInitPaired,motionInitSuccess,
     (unsigned long)MOTION_INIT_RETRY_MS);
@@ -688,6 +729,7 @@ LOOP_HELPER static void pollLevel(uint32_t now) {
        clockUs>=sample.activity.lastMotionUs && clockUs-sample.activity.lastMotionUs<=MotionActivity::FRESH_US) {
       lastActivityMotionUs=sample.activity.lastMotionUs;inactivity.motion(now);
     }
+    imuStill.observe(now,sample.activity.fresh(clockUs) && !sample.activity.moving);
     if(sample.fusedUs && sample.fusedUs!=lastLevelSampleUs) {
       lastLevelSampleUs=sample.fusedUs;
       if(sample.orientationReady)level.feed(sample.gravity[0],sample.gravity[1],sample.gravity[2],uint32_t(sample.fusedUs/1000));
@@ -695,6 +737,7 @@ LOOP_HELPER static void pollLevel(uint32_t now) {
     }
     return;
   }
+  imuStill.observe(now,false);
   if(!M5.Imu.isEnabled())return;
   const int64_t started=esp_timer_get_time();
   // update's returned accel bit establishes freshness; cached data is not a new sample.
@@ -702,7 +745,7 @@ LOOP_HELPER static void pollLevel(uint32_t now) {
     const auto data=M5.Imu.getImuData();
     const auto &range=accelRange();
     const float native[3]={range.toG(data.accel.x),range.toG(data.accel.y),range.toG(data.accel.z)};float mapped[3];
-    MountOrientation::mapVector(mountMode,native,mapped);
+    MountOrientation::mapVector(liveMount,native,mapped);
     level.feed(mapped[0],mapped[1],mapped[2],millis());
   }
   maxImuPollUs=std::max(maxImuPollUs,uint32_t(esp_timer_get_time()-started));
@@ -753,16 +796,19 @@ LOOP_HELPER static void finishMotion() {
   if(!motionPending)return;
   const uint64_t now=esp_timer_get_time();const auto imu=imuAcquisition.snapshot();
   if(!LaunchMotion::captureReady(now,motionEnd,imu.fusedUs))return;
-  imuAcquisition.capture(motionStart,motionEnd,latestMotion.rpm,latestMotion.number,latestMotion);
+  // A failed ring copy (allocation or a busy ring gate) is transient: retry
+  // while the samples are still buffered instead of losing the replay.
+  if(!imuAcquisition.capture(motionStart,motionEnd,latestMotion.rpm,latestMotion.number,latestMotion) &&
+     now<motionEnd+MOTION_CAPTURE_RETRY_US){++motionCaptureRetries;return;}
   motionPending=false;dirty=true;
   const auto state=acquisition.snapshot();
   if(state.phase==AnalogTachometer::Phase::Launch || !launchFeedback.shown() || tournamentMode || historyPage || diagnostics || motionDemo)bestEffect.clear();
   else bestEffect.captured(latestMotion.number);
   if(launchFeedback.shown())launchFeedback.show(millis());
   Serial.printf("MAIN_FEEDBACK shown=%d reason=result t_ms=%lu\n",launchFeedback.shown(),(unsigned long)millis());
-  Serial.printf("MOTION_RESULT launch=%lu quality=%s points=%u duration_ms=%lu rpm=%.1f stationary_bias=%d saturated=%d peak_accel_g=%.2f accel_range_g=%.0f peak_gyro_dps=%.0f gyro_range_dps=%.0f\n",
+  Serial.printf("MOTION_RESULT launch=%lu quality=%s points=%u duration_ms=%lu rpm=%.1f stationary_bias=%d saturated=%d bridged=%d capture_retries=%lu peak_accel_g=%.2f accel_range_g=%.0f peak_gyro_dps=%.0f gyro_range_dps=%.0f\n",
     (unsigned long)latestMotion.number,LaunchMotion::name(latestMotion.quality),latestMotion.count,
-    (unsigned long)latestMotion.durationMs,latestMotion.rpm,latestMotion.stationaryBias,latestMotion.saturated,
+    (unsigned long)latestMotion.durationMs,latestMotion.rpm,latestMotion.stationaryBias,latestMotion.saturated,latestMotion.bridged,(unsigned long)motionCaptureRetries,
     latestMotion.peakAccelG,accelRange().fullScaleG(),latestMotion.peakGyroDps,StickS3AccelRange::GYRO_FULL_SCALE_DPS);
   if(latestMotion.issueMs!=LaunchMotion::Trace::NO_ISSUE)
     Serial.printf("MOTION_ISSUE launch=%lu quality=%s at_ms=%ld pull_ms=%lu\n",(unsigned long)latestMotion.number,
@@ -854,75 +900,101 @@ static void cancelSettingEdit() {
   if(controls.page==Controls::Page::Edit)controls.page=Controls::Page::Settings;
   restorePreview=true;settingsSaveError=false;previewSetting();
 }
-static void commitSetting() {
-  const auto s=acquisition.snapshot();
-  if(motionPending || !acquisition.request(Action::IdleCheckpointBegin,s.launches)) {
-    settingsSaveError=true;dirty=true;return;
+// Runs inside a checkpoint the caller holds, ordinary or shutdown: the
+// detector's estimator and sensor profile can only change there, and the IMU
+// frame only outside a pull or capture. A cancelled power-off then leaves the
+// live state matching the records. Whatever fails stays pending.
+static void writeSettings() {
+  const uint16_t items=settingsSave.pending();
+  if(!items)return;
+  uint16_t saved=0;
+  const auto live=acquisition.snapshot();
+  if(items&SettingsSave::Rpm) {
+    bool current=live.estimator==rpmEstimator;
+    // A metric change starts a new session at the moment the detector switches.
+    if(!current && acquisition.request(Action::Estimator,uint8_t(rpmEstimator))){current=true;practice.newSession();launchFeedback.clear();}
+    if(current && RpmEstimatorSetting::save(prefs,rpmEstimator))saved|=SettingsSave::Rpm;
   }
+  if(items&SettingsSave::Sensor) {
+    bool current=live.sensorProfile==sensorProfile;
+    if(!current && acquisition.request(Action::SensorProfile,uint8_t(sensorProfile))){current=true;practice.newSession();launchFeedback.clear();}
+    if(current && SensorProfileSetting::save(prefs,sensorProfile))saved|=SettingsSave::Sensor;
+  }
+  if((items&SettingsSave::Sleep) && prefs.putUChar("sleep_min",inactivity.minutes())==1)saved|=SettingsSave::Sleep;
+  if((items&SettingsSave::Brightness) && prefs.putUChar("bright_pct",brightnessPercent)==1)saved|=SettingsSave::Brightness;
+  if((items&SettingsSave::Flip) && DisplayFlipSetting::save(prefs,displayFlipped))saved|=SettingsSave::Flip;
+  if(items&SettingsSave::Mount) {
+    bool current=liveMount==mountMode;
+    if(!current && imuAcquisition.setMount(mountMode)) {
+      // Level restarts in the new frame; a recap drawn in the old one goes.
+      current=true;liveMount=mountMode;level=StickS3Level{};drawnLevel={};lastLevelSampleUs=0;
+      launchFeedback.clear();
+    }
+    if(current && MountOrientationSetting::save(prefs,mountMode))saved|=SettingsSave::Mount;
+  }
+  if((items&SettingsSave::Appearance) && appearanceStore.save(appearance))saved|=SettingsSave::Appearance;
+  if((items&SettingsSave::Pin) && prefs.putUChar("ao_pin",live.pin)==1)saved|=SettingsSave::Pin;
+  if((items&SettingsSave::ExtPower) && prefs.putBool("ext5v",extPower)==1)saved|=SettingsSave::ExtPower;
+  settingsSave.wrote(saved);dirty=true;
+  Serial.printf("SETTINGS_SAVE items=0x%03x saved=0x%03x\n",unsigned(items),unsigned(saved));
+}
+// Pending settings reach flash in the first checkpoint the optical owner
+// grants: right away after Apply in the usual case, otherwise as soon as the
+// signal is quiet again. Never during a pull or a motion capture.
+LOOP_HELPER static void saveSettings(uint32_t now,const Snapshot &s,bool immediate=false) {
+  if(!settingsSave.pending() || (!immediate && !settingsSave.due(now)) || motionPending ||
+     !SettingsSave::ownerIdle(s.ready,s.suspended,s.opticalIdle,s.signalFault))return;
+  // Record the attempt first: a vetoed checkpoint must not repeat the IMU
+  // quiet wait on every UI tick.
+  settingsSave.attempted(now);
+  if(!acquisition.request(Action::IdleCheckpointBegin,s.launches)){settingsSave.refused();return;}
+  writeSettings();
+  if(!acquisition.request(Action::CheckpointEnd))Serial.println("SETTING_ERROR acquisition_resume");
+}
+// Apply takes the choice at once and queues its record for flash. It never
+// waits for an idle instant: pressing A can itself jiggle the launcher across
+// a mark, and that used to refuse Apply after Apply with "Try again when idle".
+static void commitSetting() {
   const uint8_t value=controls.draft;
-  bool saved=false;
+  bool applied=true,changed=false;
   switch(Controls::Setting(controls.setting)) {
     case Controls::Setting::Sleep:
-      saved=prefs.putUChar("sleep_min",value)==1;
-      if(saved)inactivity.setMinutes(value);
+      changed=value!=inactivity.minutes();applied=inactivity.setMinutes(value);break;
+    // The estimator, sensor profile and mount switch inside the save checkpoint.
+    case Controls::Setting::Rpm:
+      applied=RpmEstimator::valid(value);changed=applied && RpmEstimator::Mode(value)!=rpmEstimator;
+      if(changed)rpmEstimator=RpmEstimator::Mode(value);
       break;
-    case Controls::Setting::Rpm: {
-      const auto next=RpmEstimator::Mode(value);
-      saved=next==rpmEstimator || RpmEstimatorSetting::save(prefs,next);
-      if(saved && next!=rpmEstimator && !acquisition.request(Action::Estimator,value)) {
-        saved=false;
-        if(!RpmEstimatorSetting::save(prefs,rpmEstimator))Serial.println("RPM_SETTING_ERROR preference_rollback_failed");
-      }
-      if(saved && next!=rpmEstimator){rpmEstimator=next;practice.newSession();launchFeedback.clear();}
+    case Controls::Setting::Brightness:changed=value!=brightnessPercent;brightnessPercent=value;break;
+    case Controls::Setting::Flip:changed=bool(value)!=displayFlipped;displayFlipped=value;break;
+    case Controls::Setting::Sensor:
+      applied=StickS3SensorProfile::valid(value);changed=applied && StickS3SensorProfile::Mode(value)!=sensorProfile;
+      if(changed)sensorProfile=StickS3SensorProfile::Mode(value);
       break;
-    }
-    case Controls::Setting::Brightness:
-      saved=prefs.putUChar("bright_pct",value)==1;
-      if(saved)brightnessPercent=value;
+    case Controls::Setting::Mount:
+      applied=MountOrientation::valid(value);changed=applied && MountOrientation::Mode(value)!=mountMode;
+      if(changed)mountMode=MountOrientation::Mode(value);
       break;
-    case Controls::Setting::Flip:
-      saved=DisplayFlipSetting::save(prefs,bool(value));
-      if(saved)displayFlipped=value;
-      break;
-    case Controls::Setting::Sensor: {
-      if(!StickS3SensorProfile::valid(value))break;
-      const auto next=StickS3SensorProfile::Mode(value);
-      saved=next==sensorProfile || SensorProfileSetting::save(prefs,next);
-      if(next!=sensorProfile && (!saved || !acquisition.request(Action::SensorProfile,value))) {
-        saved=false;
-        if(!SensorProfileSetting::save(prefs,sensorProfile))Serial.println("SENSOR_SETTING_ERROR preference_rollback_failed");
-      }
-      if(saved && next!=sensorProfile){sensorProfile=next;practice.newSession();launchFeedback.clear();}
-      break;
-    }
-    case Controls::Setting::Mount: {
-      if(!MountOrientation::valid(value))break;
-      const auto next=MountOrientation::Mode(value);
-      saved=next==mountMode || MountOrientationSetting::save(prefs,next);
-      if(next!=mountMode && (!saved || !imuAcquisition.setMount(next))) {
-        saved=false;
-        if(!MountOrientationSetting::save(prefs,mountMode))Serial.println("MOUNT_SETTING_ERROR preference_rollback_failed");
-      }
-      if(saved && next!=mountMode) {
-        mountMode=next;level=StickS3Level{};drawnLevel={};lastLevelSampleUs=0;
-        launchFeedback.clear();
-      }
-      break;
-    }
     case Controls::Setting::Theme:case Controls::Setting::BestEffect:case Controls::Setting::Sound: {
+      // An unreadable stored look cannot be replaced; keep showing it rather
+      // than a choice that would silently revert at the next boot.
       auto next=appearance;
-      if(!next.select(controls.setting==5?Appearance::Theme(value):appearance.theme,
+      applied=appearanceStore.ready() && next.select(controls.setting==5?Appearance::Theme(value):appearance.theme,
                       controls.setting==6?Appearance::Effect(value):appearance.effect,
-                      controls.setting==7?Appearance::Sound(value):appearance.sound))break;
-      saved=appearanceStore.save(next);if(saved)appearance=next;
+                      controls.setting==7?Appearance::Sound(value):appearance.sound);
+      changed=applied && next.generation()!=appearance.generation();
+      if(changed)appearance=next;
       break;
     }
-    case Controls::Setting::WipeAll:break; // Erasure never uses Apply or draft values.
+    case Controls::Setting::WipeAll:applied=false;break; // Erasure never uses Apply or draft values.
   }
-  settingsSaveError=!saved;
-  if(saved){controls.page=Controls::Page::Settings;restorePreview=true;previewSetting();}
-  if(!acquisition.request(Action::CheckpointEnd))Serial.println("SETTING_ERROR acquisition_resume");
-  Serial.printf("SETTING_APPLY row=%u value=%u saved=%d\n",controls.setting,value,saved);
+  settingsSaveError=!applied;
+  Serial.printf("SETTING_APPLY row=%u value=%u applied=%d changed=%d\n",controls.setting,value,applied,changed);
+  if(applied) {
+    if(changed)settingsSave.mark(SettingsSave::item(controls.setting));
+    controls.page=Controls::Page::Settings;restorePreview=true;previewSetting();
+    saveSettings(millis(),acquisition.snapshot(),true);
+  }
   syncNavigation();
 }
 LOOP_HELPER static void logLaunchMetrics(const Snapshot &s) {
@@ -996,7 +1068,7 @@ static void cancelWipe() {
 LOOP_HELPER static void restartAfterWipe() {
   if(wipeRestartRequested)return;
   wipeRestartRequested=true;sleepReceipt.magic=0;
-  Serial.println("WIPE_RESTART");Serial.flush();delay(150);ESP.restart();
+  Serial.println("WIPE_RESTART");UsbTx::drain(200);delay(150);ESP.restart();
 }
 LOOP_HELPER static void commitWipe(const Snapshot &s) {
   // Only pollWipe's fresh physical three-second hold calls this function.
@@ -1093,14 +1165,21 @@ LOOP_HELPER static void saveHistory(uint32_t now,const Snapshot &s) {
   const bool best=bestStore.pending(personalBests) && bestStore.ready();
   // Failed writes must leave enough uninterrupted quiet for detector rearm.
   const uint32_t retryMs=saveError?HISTORY_SAVE_RETRY_MS:1000;
+  // A sensor fault (signal held on the low rail) keeps the detector in Hold
+  // until the signal returns, and nothing can be measured meanwhile, as when
+  // Paused. Flush through an idle checkpoint rather than keep pulls in RAM.
+  const bool fault=s.signalFault && s.phase==AnalogTachometer::Phase::Hold;
   if((!history && !best) || now-lastSaveTry<retryMs ||
-     !HistoryCheckpoint::practiceIdle(now,lastAcceptedAt,HISTORY_COALESCE_MS,motionPending,launchFeedback.shown(),s.phase))return;
+     !HistoryCheckpoint::practiceIdle(now,lastAcceptedAt,
+       fault?HISTORY_COALESCE_MS:HistoryCheckpoint::automaticQuietMs(now,imuStill,historyPendingSince?now-historyPendingSince:0,
+         HISTORY_COALESCE_MS),motionPending,launchFeedback.shown(),
+       fault?AnalogTachometer::Phase::Paused:s.phase))return;
   // Coalesce a rapid practice bout instead of resetting fusion after each pull.
   // Pending RAM history is flushed once the newest accepted pull has been idle.
   // No maximum-age override: a long practice bout stays in RAM until quiet.
   // Automatic sleep still forces a verified flush before entering standby.
   lastSaveTry=now;
-  if(!acquisition.request(Action::HistoryIdleCheckpointBegin,s.launches))return;
+  if(!acquisition.request(fault?Action::IdleCheckpointBegin:Action::HistoryIdleCheckpointBegin,s.launches))return;
   const int64_t started=esp_timer_get_time();
   const bool saved=(!history || practiceStore.save(practice)) && (!best || bestStore.save(personalBests));
   maxSaveUs=std::max(maxSaveUs,uint32_t(esp_timer_get_time()-started));
@@ -1126,6 +1205,9 @@ LOOP_HELPER static ShutdownFlush flushForShutdown(uint32_t now,const Snapshot &s
     if(!acquisition.request(Action::CheckpointEnd))acquisition.request(Action::Pin,s.pin);
     return ShutdownFlush::NewPull;
   }
+  // Settings never hold up power-off: a failed write is logged, stays pending
+  // and is retried if the device stays on.
+  writeSettings();
   const bool historyFailed=practiceStore.pending(practice) && (!practiceStore.ready() || !practiceStore.save(practice));
   if(historyFailed || (bestStore.pending(personalBests) && (!bestStore.ready() || !bestStore.save(personalBests)))) {
     saveError=true;++saveErrors;dirty=true;
@@ -1161,7 +1243,7 @@ LOOP_HELPER static void autoPowerOff(uint32_t now,const Snapshot &s) {
   Serial.printf("POWER_OFF reason=inactivity idle_ms=%lu records=%u saved=1\n",
     (unsigned long)inactivity.elapsed(now),practice.size());
   cancelSettingEdit(); // Wake into the settings list, never an unfinished edit.
-  Serial.flush();
+  UsbTx::drain(200);
   if(imuAcquisition.lock()) {
     bool usbCancelled=false;
     if(shakeWake.arm()) {
@@ -1176,7 +1258,7 @@ LOOP_HELPER static void autoPowerOff(uint32_t now,const Snapshot &s) {
         if(!savePowerLog())Serial.println("POWER_LOG_NOTICE sleep_checkpoint_failed");
         sleepReceipt={PowerDiagnostics::MAGIC,wallUs()};
         M5.Display.setBrightness(0);M5.Display.sleep();
-        Serial.printf("SHAKE_SLEEP timeout_s=%lu sensor_rail=L2_off_on_battery wake=imu_motion mode=imu_only\n",(unsigned long)(inactivity.timeout()/1000));Serial.flush();
+        Serial.printf("SHAKE_SLEEP timeout_s=%lu sensor_rail=L2_off_on_battery wake=imu_motion mode=imu_only\n",(unsigned long)(inactivity.timeout()/1000));UsbTx::drain(200);
         // Flash/USB flushing above can outlast the earlier host check. This
         // last O(1) SOF read is safe while holding the IMU mutex; do not call
         // pollUsbAwake here because it can attempt that mutex again.
@@ -1198,6 +1280,7 @@ LOOP_HELPER static void autoPowerOff(uint32_t now,const Snapshot &s) {
       }
     }
     const bool restored=shakeWake.restore();
+    if(!restored)noteMotionRestoreFailure();
     const bool extRestored=pm1Idle().run([](){M5.Power.setExtOutput(extPower);return true;});
     imuAcquisition.unlock();
     if(!extRestored)Serial.println("EXT_POWER_NOTICE restore_wake_failed");
@@ -1241,7 +1324,7 @@ LOOP_HELPER static void powerKeyOff(uint32_t now,const Snapshot &s) {
   ++powerLog.sleeps;powerLog.pendingSleep=1;powerRecord(PowerDiagnostics::Sleep);
   if(!savePowerLog())Serial.println("POWER_LOG_NOTICE sleep_checkpoint_failed");
   sleepReceipt={PowerDiagnostics::MAGIC,wallUs()};
-  M5.Display.setBrightness(0);M5.Display.sleep();Serial.flush();
+  M5.Display.setBrightness(0);M5.Display.sleep();UsbTx::drain(200);
   // PM1 removes battery power. USB can keep the ESP32 powered, so it deep
   // sleeps until the next click asserts the IRQ line; the IMU is not armed.
   if(imuAcquisition.lock()){shakeWake.sleep();imuAcquisition.unlock();}
@@ -1298,7 +1381,7 @@ LOOP_HELPER static void finishRestore(const Snapshot &s) {
     Serial.println("RESTORE_ERROR reason=write_failed written=partial");dirty=true;return;
   }
   heapStatus();
-  Serial.println("RESTORE_OK restarting=1");Serial.flush();
+  Serial.println("RESTORE_OK restarting=1");UsbTx::drain(200);
   delay(200);ESP.restart();
 }
 LOOP_HELPER static void pollRestore(const Snapshot &s) {
@@ -1392,11 +1475,36 @@ LOOP_HELPER static void checkMotionStorage() {
   dirty=true;
 }
 
+// Every checkpoint begins and ends inside one call; only the wipe flow keeps
+// one, and the loop stops before here while it does. A stopped owner that is
+// not resting and outlasts a loop pass therefore means a Begin whose reply was
+// lost, or an End that never arrived. Release it, or the ADC would stay
+// stopped and no later pull would be measured.
+LOOP_HELPER static void releaseOrphanCheckpoint(uint32_t now,const Snapshot &s) {
+  if(!s.suspended || s.resting || wipeCheckpointHeld){orphanSeen=false;return;}
+  if(!orphanSeen){orphanSeen=true;orphanSince=now;return;}
+  if(uint32_t(now-orphanSince)<ORPHAN_CHECKPOINT_MS)return;
+  orphanSeen=false;
+  const bool resumed=acquisition.request(Action::CheckpointEnd) || acquisition.request(Action::Pin,s.pin);
+  Serial.printf("ADC_NOTICE orphaned_checkpoint_released resumed=%d\n",resumed);dirty=true;
+}
+
+#if LAUNCHLAB_HIL
+#include "hil.h"
+#endif
 void setup() {
   const auto wakeCause=esp_sleep_get_wakeup_cause();
   const int64_t sleepEnded=wallUs();
+#if LAUNCHLAB_HIL
+  Serial.setRxBufferSize(Hil::RX_BUFFER); // Before begin: binary uploads.
+#endif
+  // The core's 256-byte USB TX ring cannot hold one status block, so with the
+  // 10 ms timeout below whole lines were dropped while the host was reading
+  // (truncated status, a failed backup checksum). Must be set before begin.
+  Serial.setTxBufferSize(USB_TX_BUFFER_BYTES);
   Serial.begin(115200);
   Serial.setTxTimeoutMs(10);
+  UsbTx::calibrate(); // The TX ring is empty: its free size marks "drained".
   // Set once before either acquisition task starts. Keep ADC, USB and SPI
   // peripheral clocks unchanged; do not switch frequency during a launch.
   const bool clockSet=setCpuFrequencyMhz(LAUNCHLAB_CPU_MHZ);
@@ -1487,6 +1595,7 @@ void setup() {
   else Serial.println("BRIGHTNESS_SETTING_NOTICE invalid_saved_value_using_40_pct");
   if(!DisplayFlipSetting::load(prefs,displayFlipped))Serial.println("DISPLAY_SETTING_NOTICE invalid_record_retained_using_flip_off_default");
   if(!MountOrientationSetting::load(prefs,mountMode))Serial.println("MOUNT_SETTING_NOTICE invalid_record_retained_using_top_default");
+  liveMount=mountMode;
   if(!appearanceStore.begin(appearance,"ll-appearance","cfg0","cfg1"))Serial.println("APPEARANCE_NOTICE invalid_record_retained_using_defaults");
   if(!bestStore.begin(personalBests,"ll-bests","best0","best1"))Serial.println("BEST_NOTICE invalid_record_retained_celebration_disabled");
   uint8_t pin=prefs.getUChar("ao_pin",1);
@@ -1531,6 +1640,9 @@ void setup() {
     StickS3SensorProfile::minMark(sensorProfile),StickS3SensorProfile::EDGE_SWING_FRACTION);
   Serial.printf("RPM_SETTING_BOOT selected=%s default=three_turn_peak legacy_history=retained_metric_not_encoded\n",RpmEstimator::name(rpmEstimator));
   Serial.println("READY commands: p status, P power log, C CPU power profiling, a/c tap A, h tap B, o hold A, b hold B, d diagnostics, n new session, u history export, K backup export, R backup restore, e motion export, q synthetic recap, E<0-4> best effect preview, t synthetic history, y/z storage check, v screen, w recorder export, x ext5V, g<N> GPIO, s stress, j UI stall");
+#if LAUNCHLAB_HIL
+  hilBoot();
+#endif
 }
 
 // A pull, leaving the recap or closing the Sound editor silences at once;
@@ -1601,110 +1713,133 @@ LOOP_HELPER static void exportCpuPower() {
 #endif
 }
 
+// One accepted USB command (usb_command_guard.h): a letter, "g<pin>" or
+// "E[<digit>]".
+LOOP_HELPER static void runUsbCommand(const char *command,const Snapshot &s) {
+  const char c=command[0];
+  if(c=='g') {
+    char *end=nullptr;const long pin=strtol(command+1,&end,10);
+    if(end!=command+1 && *end==0 && pin>=1 && pin<=10) {
+      if(acquisition.request(Action::Pin,uint8_t(pin)))settingsSave.mark(SettingsSave::Pin);
+      else Serial.println("COMMAND_ERROR gpio_init");
+      dirty=true;
+    } else Serial.println("COMMAND_ERROR gpio_must_be_1_to_10");
+    return;
+  }
+  if(c=='E') {
+    // E<digit> previews that effect; E alone the saved one.
+    const unsigned digit=command[1]?unsigned(command[1]-'0'):10u;
+    previewBestEffect(Appearance::drawn(digit)?Appearance::Effect(digit):celebrationEffect());
+    return;
+  }
+  if(c=='p')status();
+  else if(c=='P')exportPowerLog();
+  else if(c=='C')exportCpuPower();
+  else if(c=='S'){
+    inactivity.touch(millis()-inactivity.timeout());
+    Serial.println("POWER_SLEEP_TEST requested=1 normal_save_and_sleep_path=1");
+  }
+  else if(c=='O'){
+    powerKeyRequested=true;powerKeyRequestedAt=millis();
+    Serial.println("POWER_KEY_TEST requested=1 normal_save_and_power_off_path=1");
+  }
+  else if(c=='i') {
+    if(acquisition.request(Action::IdleCheckpointBegin,s.launches)) {
+      if(imuAcquisition.lock()) {
+        const bool armed=shakeWake.arm(),restored=shakeWake.restore();
+        if(!restored)noteMotionRestoreFailure();
+        const bool extRestored=pm1Idle().run([](){M5.Power.setExtOutput(extPower);return true;});
+        imuAcquisition.unlock();
+        if(!extRestored)Serial.println("EXT_POWER_NOTICE test_restore_wake_failed");
+        Serial.printf("SHAKE_WAKE_CHECK armed=%d restored=%d sleep=0\n",armed,restored);
+      }
+      acquisition.request(Action::CheckpointEnd);
+    }
+  }
+  else if(c=='a')buttonA();
+  else if(c=='o')holdA();
+  else if(c=='d'){diagnostics=!diagnostics;dirty=true;}
+  else if(c=='h')toggleHistory();
+  else if(c=='c')nextView();
+  else if(c=='e')exportMotion();
+  else if(c=='Q'){const bool ok=imuAcquisition.quiet(300);Serial.printf("IMU_QUIET_TEST ms=300 ok=%d flash_write=0\n",ok);}
+  else if(c=='q') {
+    if(tournamentMode){Serial.println("RECAP_DEMO_ERROR leave_tournament_first");return;}
+    if(controls.page==Controls::Page::Edit)cancelSettingEdit();
+    controls.page=Controls::Page::Main;syncNavigation();
+    historyPage=diagnostics=false;motionDemo=true;
+    MotionUI::makeDemo(demoMotion,false);
+    launchFeedback.show(millis());dirty=true;
+    Serial.println("RECAP_DEMO synthetic only; real launches and reference unchanged");
+  }
+  else if(c=='b')holdB();
+  else if(c=='n')newSession();
+  else if(c=='u')exportHistory();
+  else if(c=='K')exportBackup();
+  else if(c=='R'){restoreRx.start(millis());Serial.printf("RESTORE_READY max_chars=%u\n",DeviceBackup::TEXT_BYTES);}
+  else if(c=='t')previewHistory();
+  else if(c=='y')checkStorage();
+  else if(c=='z')checkMotionStorage();
+  else if(c=='v')exportScreen();
+  else if(c=='w')exportSignal();
+  else if(c=='x') {
+    // Explicit command only. No automatic voltage/power changes in sampling.
+    if(!imuAcquisition.lock()){Serial.println("COMMAND_ERROR power_busy");return;}
+    const bool nextExtPower=!extPower;
+    const bool changed=pm1Idle().run([&](){M5.Power.setExtOutput(nextExtPower);return true;});
+    imuAcquisition.unlock();
+    if(changed){extPower=nextExtPower;settingsSave.mark(SettingsSave::ExtPower);}
+    else Serial.println("EXT_POWER_NOTICE toggle_wake_failed");
+    acquisition.request(Action::Reset);dirty=true;status();
+  } else if(c=='s'){stress=!stress;diagnostics=true;dirty=true;}
+  else if(c=='j'){++uiStalls;delay(200);}
+}
+
 LOOP_HELPER static void pollCommands(const Snapshot &s) {
-  static char command[8]={};static uint8_t used=0;static bool effectPreview=false;
+  // Stray bytes (an upload gone wrong, a buggy updater, line noise) must not
+  // run state-changing letters: see usb_command_guard.h.
+  auto &guard=usbCommands;char command[UsbCommandGuard::MAX+1];
   if(controls.page==Controls::Page::Wipe || wipeBlocked) {
-    restoreRx.cancel();used=0;effectPreview=false;
-  } else if(restoreRx.active())pollRestore(s);
+    restoreRx.cancel();guard.cancel();
+  } else {
+    if(restoreRx.active())pollRestore(s);
+    // Quiet is the receive queue seen empty, not a slow pass.
+    if(!Serial.available())guard.idle(millis());
+    if(guard.due(millis(),command))runUsbCommand(command,s);
+  }
   // Bound incoming work; an unending USB stream cannot starve button/draw work.
   for(unsigned n=0;n<32 && !restoreRx.active() && Serial.available();++n) {
-    const char c=Serial.read();
+    const char c=Serial.read();const uint32_t now=millis();
     // Wipe confirmations and the final hold belong to physical buttons.
     // Read-only status and cancellation cannot advance the confirmation.
     if(controls.page==Controls::Page::Wipe || wipeBlocked) {
       if(c=='p')status();else if(c=='b' && !wipeBlocked)cancelWipe();
       continue;
     }
+#if LAUNCHLAB_HIL
+    if(hilFeed(c)){guard.consumed(c,now);continue;}
+#endif
     // Status polling is observational; other explicit USB actions count as use.
-    if(c!='p' && c!='P' && c!='C' && c!='\n' && c!='\r')inactivity.touch(millis());
-    if(effectPreview) {
-      // E<digit> previews that effect; E<newline> the saved one.
-      effectPreview=false;const unsigned digit=unsigned(c-'0');
-      if(Appearance::drawn(digit)){previewBestEffect(Appearance::Effect(digit));continue;}
-      previewBestEffect(celebrationEffect());if(c=='\n' || c=='\r')continue;
-    }
-    if(used || c=='g') {
-      if(c=='\n' || c=='\r') {
-        char *end=nullptr;const long pin=strtol(command+1,&end,10);
-        if(end!=command+1 && *end==0 && pin>=1 && pin<=10) {
-          if(acquisition.request(Action::Pin,uint8_t(pin)))prefs.putUChar("ao_pin",pin);
-          else Serial.println("COMMAND_ERROR gpio_init");
-          dirty=true;
-        } else Serial.println("COMMAND_ERROR gpio_must_be_1_to_10");
-        used=0;command[0]=0;
-      } else if(used<sizeof(command)-1){command[used++]=c;command[used]=0;}
-      else {used=0;command[0]=0;Serial.println("COMMAND_ERROR too_long");}
-    } else if(c=='p')status();
-    else if(c=='P')exportPowerLog();
-    else if(c=='C')exportCpuPower();
-    else if(c=='S'){
-      inactivity.touch(millis()-inactivity.timeout());
-      Serial.println("POWER_SLEEP_TEST requested=1 normal_save_and_sleep_path=1");
-    }
-    else if(c=='O'){
-      powerKeyRequested=true;powerKeyRequestedAt=millis();
-      Serial.println("POWER_KEY_TEST requested=1 normal_save_and_power_off_path=1");
-    }
-    else if(c=='i') {
-      if(acquisition.request(Action::IdleCheckpointBegin,s.launches)) {
-        if(imuAcquisition.lock()) {
-          const bool armed=shakeWake.arm(),restored=shakeWake.restore();
-          const bool extRestored=pm1Idle().run([](){M5.Power.setExtOutput(extPower);return true;});
-          imuAcquisition.unlock();
-          if(!extRestored)Serial.println("EXT_POWER_NOTICE test_restore_wake_failed");
-          Serial.printf("SHAKE_WAKE_CHECK armed=%d restored=%d sleep=0\n",armed,restored);
-        }
-        acquisition.request(Action::CheckpointEnd);
-      }
-    }
-    else if(c=='a')buttonA();
-    else if(c=='o')holdA();
-    else if(c=='d'){diagnostics=!diagnostics;dirty=true;}
-    else if(c=='h')toggleHistory();
-    else if(c=='c')nextView();
-    else if(c=='e')exportMotion();
-    else if(c=='Q'){const bool ok=imuAcquisition.quiet(300);Serial.printf("IMU_QUIET_TEST ms=300 ok=%d flash_write=0\n",ok);}
-    else if(c=='E')effectPreview=true;
-    else if(c=='q') {
-      if(tournamentMode){Serial.println("RECAP_DEMO_ERROR leave_tournament_first");continue;}
-      if(controls.page==Controls::Page::Edit)cancelSettingEdit();
-      controls.page=Controls::Page::Main;syncNavigation();
-      historyPage=diagnostics=false;motionDemo=true;
-      MotionUI::makeDemo(demoMotion,false);
-      launchFeedback.show(millis());dirty=true;
-      Serial.println("RECAP_DEMO synthetic only; real launches and reference unchanged");
-    }
-    else if(c=='b')holdB();
-    else if(c=='n')newSession();
-    else if(c=='u')exportHistory();
-    else if(c=='K')exportBackup();
-    else if(c=='R'){restoreRx.start(millis());Serial.printf("RESTORE_READY max_chars=%u\n",DeviceBackup::TEXT_BYTES);}
-    else if(c=='t')previewHistory();
-    else if(c=='y')checkStorage();
-    else if(c=='z')checkMotionStorage();
-    else if(c=='v')exportScreen();
-    else if(c=='w')exportSignal();
-    else if(c=='x') {
-      // Explicit command only. No automatic voltage/power changes in sampling.
-      if(!imuAcquisition.lock()){Serial.println("COMMAND_ERROR power_busy");continue;}
-      const bool nextExtPower=!extPower;
-      const bool changed=pm1Idle().run([&](){M5.Power.setExtOutput(nextExtPower);return true;});
-      imuAcquisition.unlock();
-      if(changed){extPower=nextExtPower;prefs.putBool("ext5v",extPower);}
-      else Serial.println("EXT_POWER_NOTICE toggle_wake_failed");
-      acquisition.request(Action::Reset);dirty=true;status();
-    } else if(c=='s'){stress=!stress;diagnostics=true;dirty=true;}
-    else if(c=='j'){++uiStalls;delay(200);}
+    if(c!='p' && c!='P' && c!='C' && c!='\n' && c!='\r')inactivity.touch(now);
+    if(guard.due(now,command))runUsbCommand(command,s);
+    if(guard.feed(c,now,command))runUsbCommand(command,s);
+    if(controls.page==Controls::Page::Wipe || wipeBlocked)guard.cancel();
   }
+  if(!Serial.available())guard.idle(millis());
 }
 
 #if LAUNCHLAB_MOTION_ADC_GATE
 LOOP_HELPER static void tickSensorIdle(uint32_t now,Snapshot &s) {
   const auto imu=imuAcquisition.snapshot();
-  const bool blocked=usbAwake.inhibited(now) || inactivity.unusedShake() || wipeBlocked ||
+#if LAUNCHLAB_HIL
+  const bool usbBlocks=usbAwake.inhibited(now) && !Hil::usbIdle; // Rest with the rig attached.
+#else
+  const bool usbBlocks=usbAwake.inhibited(now);
+#endif
+  const bool blocked=usbBlocks || inactivity.unusedShake() || wipeBlocked ||
     controls.page!=Controls::Page::Main || historyPage || diagnostics || tournamentMode ||
     motionPending || launchFeedback.shown() || practiceStore.pending(practice) ||
-    bestStore.pending(personalBests) || !imuAcquisition.running() || Serial.available();
+    bestStore.pending(personalBests) || settingsSave.pending() || !imuAcquisition.running() || Serial.available();
   const bool opticalIdle=s.ready && !s.suspended && !s.signalFault && s.opticalIdle &&
     s.phase==AnalogTachometer::Phase::Ready;
   const auto action=sensorIdle.decide(now,esp_timer_get_time(),imu.activity,inactivity.elapsed(now),
@@ -1777,6 +1912,8 @@ void loop() {
   finishMotion();
   retryMotion(now,s);
   saveHistory(now,s);s=acquisition.snapshot();
+  saveSettings(now,s);s=acquisition.snapshot();
+  releaseOrphanCheckpoint(now,s);
   pollBattery(now,s);
   tickPowerLog(now,s);
   pollUsbAwake(now,s);

@@ -72,7 +72,8 @@ struct Trace {
   uint32_t number=0,durationMs=0;
   float rpm=0;
   unsigned count=0;
-  bool stationaryBias=false,fused=false,saturated=false;
+  bool stationaryBias=false,fused=false,saturated=false,bridged=false;
+  bool approximate()const{return saturated || bridged;}
   // Largest single-axis reading from optical onset through post-roll, in the
   // launcher frame. Diagnostics only; never stored or compared.
   float peakAccelG=0,peakGyroDps=0;
@@ -90,7 +91,8 @@ struct Trace {
 // full scale. Fusion continues through saturation, which under-reads the true
 // rate, so a trace containing it is kept but marked approximate.
 struct Sample {uint64_t us=0;float a[3]={},g[3]={};Quaternion q;
-  bool clipped=false,saturated=false,fused=false,settled=false,stationary=false;};
+  // bridged: interpolated across a short data gap; kept but approximate.
+  bool clipped=false,saturated=false,bridged=false,fused=false,settled=false,stationary=false;};
 static constexpr uint64_t PRE_ROLL_US=500000,POST_ROLL_US=150000;
 inline bool captureReady(uint64_t now,uint64_t end,uint64_t latestFused) {
   // Resampling can lag the newest raw poll by one grid interval. Only fused
@@ -162,7 +164,7 @@ public:
           quality(at(begin-1))==Quality::Valid)--begin;
     const uint64_t first=std::max(desiredFirst,at(begin).us);
     for(unsigned i=begin;i<=stop;++i)out.stationaryBias|=at(i).stationary;
-    for(unsigned i=onset;i<=stop;++i)out.saturated|=at(i).saturated;
+    for(unsigned i=onset;i<=stop;++i){out.saturated|=at(i).saturated;out.bridged|=at(i).bridged;}
     // Gravity comes from continuous orientation fusion, never from a moving
     // acceleration average. Acceleration is retained for diagnostics only.
     out.gravity[2]=1;out.fused=true;
@@ -249,7 +251,7 @@ inline void encode(const Trace &t,uint32_t generation,Image &image) {
   put32(image.data()+12,t.number);uint32_t rpm;std::memcpy(&rpm,&t.rpm,4);put32(image.data()+16,rpm);
   put32(image.data()+20,t.durationMs);put32(image.data()+24,generation);
   for(unsigned j=0;j<3;++j)put16(image.data()+28+j*2,int16_t(std::lround(t.gravity[j]*1000)));
-  image[34]=t.stationaryBias;image[35]=t.fused;image[52]=t.saturated;
+  image[34]=t.stationaryBias;image[35]=t.fused;image[52]=uint8_t(t.saturated)|uint8_t(t.bridged<<1);
   for(unsigned i=0;i<2;++i) {
     const auto &level=i?t.endLevel:t.startLevel;auto *p=image.data()+36+i*8;
     if(level.valid()) {
@@ -269,7 +271,7 @@ inline bool decode(const Image &image,Trace &out,uint32_t &generation) {
   const uint32_t schema=get32(p+4);
   if(get32(p)!=0x544f4d4c || (schema!=1 && schema!=2 && schema!=3 && schema!=4) || get32(p+IMAGE_BYTES-4)!=checksum(p,IMAGE_BYTES-4))return false;
   const unsigned count=get32(p+8);if(count<12 || count>Trace::POINTS)return false;
-  Trace t;t.fused=schema>=4 && p[35]!=0;t.saturated=schema>=4 && p[52]!=0;t.stationaryBias=schema==1 || p[34]!=0;t.count=count;t.number=get32(p+12);const uint32_t rpm=get32(p+16);std::memcpy(&t.rpm,&rpm,4);
+  Trace t;t.fused=schema>=4 && p[35]!=0;t.saturated=schema>=4 && (p[52]&1);t.bridged=schema>=4 && (p[52]&2);t.stationaryBias=schema==1 || p[34]!=0;t.count=count;t.number=get32(p+12);const uint32_t rpm=get32(p+16);std::memcpy(&t.rpm,&rpm,4);
   t.durationMs=get32(p+20);if(!std::isfinite(t.rpm) || t.rpm<1000 || t.durationMs>2500)return false;
   for(unsigned j=0;j<3;++j)t.gravity[j]=get16(p+28+j*2)*.001f;
   for(unsigned i=0;i<count;++i) {

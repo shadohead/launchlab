@@ -75,19 +75,22 @@ class FakeAcquisition {
 public:
   bool running(){return task_!=nullptr;}
   bool setMount(MountOrientation::Mode){return true;}
+  bool gateBusy=false;bool lock(){return !gateBusy;}void unlock(){}
 '''
 globals_ = r'''
 };
 static FakeAcquisition imuAcquisition;
 static constexpr uint32_t MOTION_INIT_RETRY_MS=5000,MOTION_DATA_TIMEOUT_MS=250;
+static bool motionRestoreNeeded=false;static uint32_t motionRestoreFailures=0;
+struct {unsigned calls=0,failures=0;bool restore(){++calls;if(failures){--failures;return false;}return true;}} shakeWake;
 static uint32_t motionInitAttempts=0,lastMotionInit=0;
 static bool motionInitPaired=false,motionInitSuccess=false,motionPending=false,dirty=false;
-static MountOrientation::Mode mountMode=MountOrientation::Mode::Top;
+static MountOrientation::Mode mountMode=MountOrientation::Mode::Top,liveMount=MountOrientation::Mode::Top;
 struct Snapshot {AnalogTachometer::Phase phase=AnalogTachometer::Phase::Ready;};
 '''
 tests = r'''
 static void reset(){
-  clockMs=100;M5=FakeM5{};imuAcquisition=FakeAcquisition{};rangeConfigs=rangeFailures=0;
+  clockMs=100;M5=FakeM5{};imuAcquisition=FakeAcquisition{};motionRestoreNeeded=false;motionRestoreFailures=0;shakeWake={};rangeConfigs=rangeFailures=0;
   mutexCalls=taskCalls=mutexFailures=taskFailures=0;
   motionInitAttempts=lastMotionInit=0;
   motionInitPaired=motionInitSuccess=motionPending=dirty=false;
@@ -147,6 +150,18 @@ int main(){
   assert(motionInitAttempts==0);clockMs=3999;retryMotion(clockMs,state);
   assert(motionInitAttempts==1 && imuAcquisition.running());
   std::cout<<"idle recovery: bounded retries, phase/capture guards, timer wrap and one persistent owner\n";
+
+  // A failed standby restore leaves the IMU task running on an unconfigured
+  // sensor: the restore is retried every 5 s while idle until it succeeds.
+  reset();boot();assert(imuAcquisition.running());
+  motionRestoreNeeded=true;lastMotionInit=clockMs;shakeWake.failures=1;Snapshot idle;
+  clockMs+=4999;retryMotion(clockMs,idle);assert(shakeWake.calls==0);
+  clockMs+=1;retryMotion(clockMs,idle);assert(shakeWake.calls==1 && motionRestoreNeeded && motionRestoreFailures==1);
+  idle.phase=AnalogTachometer::Phase::Launch;clockMs+=5000;retryMotion(clockMs,idle);assert(shakeWake.calls==1);
+  idle.phase=AnalogTachometer::Phase::Ready;imuAcquisition.gateBusy=true;retryMotion(clockMs,idle);assert(shakeWake.calls==1);
+  imuAcquisition.gateBusy=false;retryMotion(clockMs,idle);assert(shakeWake.calls==2 && !motionRestoreNeeded);
+  clockMs+=10000;retryMotion(clockMs,idle);assert(shakeWake.calls==2 && taskCalls==1);
+  std::cout<<"restore recovery: failed standby restore retried while idle until the sensor is reconfigured\n";
   std::cout<<"PASS: exact production IMU startup/probe/retry and owner allocation functions\n";
 }
 '''

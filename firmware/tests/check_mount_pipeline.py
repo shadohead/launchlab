@@ -327,9 +327,11 @@ static void quietBarrierAndAnchoring() {
 }
 static StickS3MotionAcquisition imuAcquisition;
 static StickS3Level level;
-static Mode mountMode=Mode::Top;
+static Mode liveMount=Mode::Top;
 static uint64_t lastLevelSampleUs=0;
 static uint64_t lastActivityMotionUs=0;
+static HistoryCheckpoint::Stillness imuStill;
+#define STILL_QUIET(now) HistoryCheckpoint::automaticQuietMs(now,imuStill,0,10000)
 static InactivityTimer inactivity;
 static uint32_t lastImuPoll=0,maxImuPollUs=0;
 static uint32_t millis(){return uint32_t(Fake::now/1000);}
@@ -348,8 +350,8 @@ static void ownerActivity() {
 }
 static void fallbackLevel() {
   cleanRuntime();M5.Imu.data.accel={.98f,.1f,-.2f};level={};lastImuPoll=0;
-  mountMode=Mode::Top;pollLevel(millis());vectorIs(level.lastAccel(),.98f,.1f,-.2f);
-  level={};mountMode=Mode::Sidecar;Fake::now+=20000;pollLevel(millis());
+  liveMount=Mode::Top;pollLevel(millis());vectorIs(level.lastAccel(),.98f,.1f,-.2f);
+  level={};liveMount=Mode::Sidecar;Fake::now+=20000;pollLevel(millis());
   vectorIs(level.lastAccel(),.2f,.1f,.98f);assert(level.reading(millis()).valid());
   unsigned count=level.samples(),updates=M5.Imu.updates;
   pollLevel(millis());assert(level.samples()==count && M5.Imu.updates==updates);
@@ -392,6 +394,21 @@ static void fallbackLevel() {
     assert(level.reading(millis()).valid()==s.orientationReady);
   }
   assert(Fake::now-quietStart==32000000 && inactivity.unusedShake() && inactivity.due(millis()));
+  // Automatic checkpoints keep the short quiet only after 2 s of IMU
+  // stillness, measured from the poll that first saw it (never ahead of now).
+  s.activity={};s.activity.valid=true;s.activity.moving=true;
+  Fake::now=(Fake::now/2000+1)*2000+20000;s.activity.sampleUs=Fake::now;pollLevel(millis());
+  for(unsigned i=0;i<3;++i) {
+    Fake::now+=20000+i*1000;s.activity.sampleUs=Fake::now;s.activity.moving=false;pollLevel(millis());
+    assert(STILL_QUIET(millis())==60000);s.activity.moving=true;Fake::now+=20000;s.activity.sampleUs=Fake::now;pollLevel(millis());
+  }
+  Fake::now+=20000;s.activity.sampleUs=Fake::now;s.activity.moving=false;pollLevel(millis());
+  assert(STILL_QUIET(millis())==60000);
+  for(unsigned i=0;i<99;++i){Fake::now+=20000;s.activity.sampleUs=Fake::now;pollLevel(millis());}
+  assert(STILL_QUIET(millis())==60000);
+  Fake::now+=20000;s.activity.sampleUs=Fake::now;pollLevel(millis());assert(STILL_QUIET(millis())==10000);
+  // A stale snapshot is not stillness.
+  Fake::now+=MotionActivity::FRESH_US+20000;pollLevel(millis());assert(STILL_QUIET(millis())==60000);
 }
 int main() {
   ownerActivity();
@@ -418,11 +435,11 @@ def main():
             (build / name).write_text('#pragma once\n#include "fixture_runtime.h"\n')
         (build / "motion_owner_test.h").write_text(owner)
         cpp = build / "test.cpp"
-        cpp.write_text('#include "power_status.h"\n' + TESTS + "\n" + poll + "\n" + LEVEL_TESTS)
+        cpp.write_text('#include "power_status.h"\n#include "history_checkpoint.h"\n' + TESTS + "\n" + poll + "\n" + LEVEL_TESTS)
         executable = build / "test"
         subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17", "-O1", "-g", "-pthread",
                         "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
-                        "-I" + str(build), "-I" + str(HEADERS), str(cpp),
+                        "-I" + str(build), "-I" + str(HEADERS), "-I" + str(HEADERS.parent / "LaunchLabRpm"), str(cpp),
                         str(HEADERS / "src/vqf/vqf.cpp"), "-o", str(executable)], check=True)
         subprocess.run([str(executable)], check=True)
 

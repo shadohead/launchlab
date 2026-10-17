@@ -14,6 +14,25 @@ int main(){
   assert(!HistoryCheckpoint::practiceIdle(60000,0,10000,true,false,Phase::Ready));
   assert(!HistoryCheckpoint::practiceIdle(60000,0,10000,false,true,Phase::Ready));
   assert(HistoryCheckpoint::practiceIdle(8999,UINT32_MAX-1000,10000,false,false,Phase::Ready));
+  // Automatic checkpoints keep the short quiet only for a launcher the IMU has
+  // shown motion-free for 2 s (set down); handheld or unknown waits 60 s.
+  // Stillness first seen now is not 2 s old (an off-by-one stamp ahead of now
+  // wrapped and allowed the short quiet at once).
+  {
+    HistoryCheckpoint::Stillness imu;assert(HistoryCheckpoint::automaticQuietMs(50000,imu,0,10000)==60000);
+    imu.observe(48000,true);imu.observe(49000,true);
+    assert(HistoryCheckpoint::automaticQuietMs(48000,imu,0,10000)==60000);
+    assert(HistoryCheckpoint::automaticQuietMs(49999,imu,0,10000)==60000);
+    assert(HistoryCheckpoint::automaticQuietMs(50000,imu,0,10000)==10000);
+    imu.observe(50020,false);assert(HistoryCheckpoint::automaticQuietMs(50020,imu,0,10000)==60000);
+    imu.observe(UINT32_MAX-1000,true);assert(HistoryCheckpoint::automaticQuietMs(1000,imu,0,10000)==10000);
+    // Unsaved data older than three minutes is written soon after a pull,
+    // handheld or not, so a handled bout is never only in RAM.
+    HistoryCheckpoint::Stillness handheld;
+    assert(HistoryCheckpoint::automaticQuietMs(50000,handheld,179999,10000)==60000);
+    assert(HistoryCheckpoint::automaticQuietMs(50000,handheld,180000,10000)==3000);
+    assert(HistoryCheckpoint::automaticQuietMs(50000,imu,180000,10000)==3000);
+  }
   AnalogTachometer d;StickS3SensorProfile::configure(d);
   assert(!HistoryCheckpoint::allowedIdle(d,0)); // Starting is not safe.
   level(d,140,1200000);assert(HistoryCheckpoint::allowedIdle(d,0));
@@ -23,7 +42,9 @@ int main(){
   level(d,140,8000);square(d,1);
   assert(d.phase==AnalogTachometer::Phase::Ready && !HistoryCheckpoint::allowedIdle(d,0));
   square(d,10);assert(d.phase==AnalogTachometer::Phase::Launch && !HistoryCheckpoint::allowedIdle(d,0));
-  level(d,140,40000);assert(d.launches==1 && d.phase==AnalogTachometer::Phase::Hold);
+  // Marks stopping at peak speed end the burst once the next marks fail to
+  // continue it (50 ms here), not at the plain two-turn gap.
+  level(d,140,60000);assert(d.launches==1 && d.phase==AnalogTachometer::Phase::Hold);
   assert(!HistoryCheckpoint::allowedIdle(d,1));
   level(d,140,1200000);assert(d.phase==AnalogTachometer::Phase::Ready);
   assert(!HistoryCheckpoint::allowedIdle(d,0)); // Accepted after UI snapshot: reject stale counter.
@@ -39,7 +60,7 @@ int main(){
     // starts right after the flash write is measured (0.10.21 lost it).
     level(d,140,1200000);assert(d.phase==Phase::Ready && HistoryCheckpoint::allowedIdle(d,1));
     HistoryCheckpoint idle(d);idle.restore(d);assert(d.phase==Phase::Ready);
-    level(d,140,1000);square(d,10);level(d,140,40000);
+    level(d,140,1000);square(d,10);level(d,140,60000);
     assert(d.launches==2 && d.resultValid && d.phase==Phase::Hold);
     // The ADC restart transient alone (a single level step) never starts a launch.
     level(d,140,1200000);assert(d.phase==Phase::Ready);

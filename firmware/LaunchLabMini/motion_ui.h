@@ -84,9 +84,9 @@ inline void feedback(lgfx::LGFXBase &g,const LaunchMotion::Trace &trial,
   g.drawString(text,cx,17,g.textWidth(text,&fonts::Font4)<=g.width()-6?4:2);
   if(trial.valid() && trial.fused && !capturing) {
     spatial(g,trial,49,112,progress,flipEnabled);
-    // A full-scale reading under-reads that moment's turn: still show it, marked.
-    g.setTextColor(trial.saturated?TFT_ORANGE:TFT_DARKGREY,TFT_BLACK);
-    g.drawString(trial.saturated?"Tilt approx.":"Tilt replay",cx,164,1);
+    // A full-scale reading or a bridged short gap is approximate: still show it, marked.
+    g.setTextColor(trial.approximate()?TFT_ORANGE:TFT_DARKGREY,TFT_BLACK);
+    g.drawString(trial.approximate()?"Tilt approx.":"Tilt replay",cx,164,1);
     g.drawFastHLine(26,178,83,0x39e7);
     g.fillCircle(26+lroundf(std::max(0.0f,std::min(1.0f,progress))*82),178,2,accent);
   } else {
