@@ -85,7 +85,7 @@ assert 'CpuPower::Guard clock(CpuPower::Ui);' in loop
 assert loop.count('clock.release();delay(IdlePowerPolicy::UI_POLL_MS)')==2
 imu=(header/'motion_acquisition.h').read_text()
 assert 'CpuPower::Guard clock(CpuPower::Imu);' in imu
-assert imu.index('CpuPower::Guard clock(CpuPower::Imu);')<imu.index('readFifo(s);unlock();')
+assert imu.index('CpuPower::Guard clock(CpuPower::Imu);')<imu.index('readFifo(s,sampledUs);unlock();')
 assert source.index('CpuPower::begin();')<source.index('M5.begin(cfg);')
 assert "c!='C'" in source
 print('PASS: CPU PM setup/readback, separate owner locks, early release, fixed80 rollback, default-off and SDK mismatch rejection')

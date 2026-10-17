@@ -765,5 +765,19 @@
       "qre1113",
       "tcrt5000"
     ]
+  },
+  {
+    "release": "0.13.8-sticks3-fifo-timing-pm",
+    "runtime_version": "0.13.8-sticks3-fifo-timing-pm",
+    "board": "M5StickS3 K150",
+    "date": "2026-10-17",
+    "binary": "LaunchLabMini.ino.bin",
+    "binary_bytes": 839760,
+    "sha256": "a1d5c47ef9e46a19ec79e36f65aeee2186a62bfbb1cf59f01af4ae2f83407525",
+    "application_offset": "0x10000",
+    "profiles": [
+      "qre1113",
+      "tcrt5000"
+    ]
   }
 ]

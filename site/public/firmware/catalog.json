@@ -1,38 +1,38 @@
 {
-  "version": "0.13.7",
-  "runtime": "0.13.7-sticks3-accel-16g-pm",
+  "version": "0.13.8",
+  "runtime": "0.13.8-sticks3-fifo-timing-pm",
   "board": "M5StickS3 K150",
   "chip": "ESP32-S3",
   "flashBytes": 8388608,
   "applicationOffset": 65536,
   "files": [
     {
-      "path": "firmware/0.13.7/bootloader.bin",
+      "path": "firmware/0.13.8/bootloader.bin",
       "offset": 0,
       "size": 20256,
       "sha256": "8581a3fb98309f261482327b5ff51a2fabca0ec513f9ba38595ed04479794e58"
     },
     {
-      "path": "firmware/0.13.7/partitions.bin",
+      "path": "firmware/0.13.8/partitions.bin",
       "offset": 32768,
       "size": 3072,
       "sha256": "1d9cca96de0fe07ad7fc0648b9878ddecd9ce565e38b589ad20fea698ed4c80c"
     },
     {
-      "path": "firmware/0.13.7/boot_app0.bin",
+      "path": "firmware/0.13.8/boot_app0.bin",
       "offset": 57344,
       "size": 8192,
       "sha256": "f94c5d786a7a8fab06ac5d10e33bf37711a6697636dc037559ea19cc410a17f0"
     },
     {
-      "path": "firmware/0.13.7/application.bin",
+      "path": "firmware/0.13.8/application.bin",
       "offset": 65536,
-      "size": 838800,
-      "sha256": "83aa6b7610241e45ae5ed2957b958576886967eacdef19e72c7ad5e836f96e52"
+      "size": 839760,
+      "sha256": "a1d5c47ef9e46a19ec79e36f65aeee2186a62bfbb1cf59f01af4ae2f83407525"
     }
   ],
-  "validation": "Exact shipping application installed and read back; software checks, pinned target compilation and 13 consecutive physical tilt captures passed.",
-  "release": "0.13.7-sticks3-accel-16g-pm",
+  "validation": "Exact shipping application installed and read back; software checks, pinned target compilation and repeated reset-during-read recovery passed.",
+  "release": "0.13.8-sticks3-fifo-timing-pm",
   "profiles": [
     "qre1113",
     "tcrt5000"
@@ -480,6 +480,15 @@
       "sha256": "83aa6b7610241e45ae5ed2957b958576886967eacdef19e72c7ad5e836f96e52",
       "md5": "5c10e7c3567ab2faccd20867a89ca298",
       "elfSha256": "6aa656f3af9063861422d8e55493f26ea9a808386b23bed10f5e8c2d92b999fc",
+      "sensor": "qre1113"
+    },
+    {
+      "version": "0.13.8",
+      "runtime": "0.13.8-sticks3-fifo-timing-pm",
+      "size": 839760,
+      "sha256": "a1d5c47ef9e46a19ec79e36f65aeee2186a62bfbb1cf59f01af4ae2f83407525",
+      "md5": "a8a23754930b9817e2fe41801a4a2b69",
+      "elfSha256": "0914886a94237a010a10976a0a9b46115259a9cda70f806ffa2098b87cb29876",
       "sensor": "qre1113"
     }
   ]

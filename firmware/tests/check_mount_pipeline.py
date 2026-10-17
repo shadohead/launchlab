@@ -304,6 +304,27 @@ static void flashQuiet() {
   FakeFifo::stallUs=Bmi270Fifo::transferBudgetUs(13)-1;runFor(*owner,1);FakeFifo::stallUs=0;
   assert(owner->snapshot_.fifoStalls==0 && owner->ring_.size()>size);
 }
+static void quietBarrierAndAnchoring() {
+  // A read in flight longer than lock()'s 20 ms is waited out, not raced.
+  cleanRuntime();auto owner=std::make_unique<StickS3MotionAcquisition>();assert(owner->begin());
+  assert(owner->gate_->mutex.try_lock());
+  std::thread reader([&]{std::this_thread::sleep_for(std::chrono::milliseconds(90));owner->gate_->mutex.unlock();});
+  const auto waitStart=std::chrono::steady_clock::now();
+  assert(owner->quiet(300));reader.join();
+  assert(std::chrono::steady_clock::now()-waitStart>=std::chrono::milliseconds(80));
+  assert(owner->quietUntil_.load()==int64_t(Fake::now)+300000 && owner->quietBeganMs()==uint32_t(Fake::now/1000));
+  owner->endQuiet();
+  // A gate held past the 250 ms budget vetoes: false, and no window or marker changes.
+  const uint32_t began=owner->quietBeganMs();Fake::now+=5000000;
+  assert(owner->gate_->mutex.try_lock());
+  std::thread holder([&]{std::this_thread::sleep_for(std::chrono::milliseconds(400));owner->gate_->mutex.unlock();});
+  assert(!owner->quiet());assert(owner->quietUntil_.load()==0 && owner->quietBeganMs()==began);
+  holder.join();
+  // Frames are stamped when the FIFO length is read, not after a long transfer.
+  cleanRuntime();owner=std::make_unique<StickS3MotionAcquisition>();assert(owner->begin());
+  FakeFifo::stallUs=9000;runFor(*owner,1);FakeFifo::stallUs=0;
+  assert(owner->snapshot_.fifoStalls==0 && owner->ring_.size()==1 && owner->ring_.at(0).us==1000000);
+}
 static StickS3MotionAcquisition imuAcquisition;
 static StickS3Level level;
 static Mode mountMode=Mode::Top;
@@ -375,10 +396,10 @@ static void fallbackLevel() {
 int main() {
   ownerActivity();
   validationAndSerialization();continuousOwnerWarmup();currentModeAtFusion();
-  stalePublication(false);stalePublication(true);flashQuiet();fallbackLevel();
+  stalePublication(false);stalePublication(true);flashQuiet();quietBarrierAndAnchoring();fallbackLevel();
   std::cout<<"PASS: actual mount owner; mutex exclusion, invalid/failure/noop preservation, "
               "frame invalidation, fresh fusion warmup, canonical capture, late/current mapping, "
-              "stale/ABA publication guards, bounded flash-write quiet window, actual level fallback and dot dropouts without timer renewal\n";
+              "stale/ABA publication guards, bounded flash-write quiet window, 250 ms quiet barrier/veto, length-time FIFO anchoring, actual level fallback and dot dropouts without timer renewal\n";
 }
 '''
 

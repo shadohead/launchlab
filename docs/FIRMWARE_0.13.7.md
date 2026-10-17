@@ -1,5 +1,7 @@
 # Firmware 0.13.7 build context
 
+Superseded by [0.13.8](FIRMWARE_0.13.8.md); this document describes the preserved 0.13.7 release.
+
 The shipping runtime is `0.13.7-sticks3-accel-16g-pm`, application SHA-256 `83aa6b7610241e45ae5ed2957b958576886967eacdef19e72c7ad5e836f96e52`. The compiled source snapshot is frozen in the [release directory](../firmware/releases/0.13.7-sticks3-accel-16g-pm/). It uses the same PM SDK, toolchain, bootloader and partition table as [0.13.5](FIRMWARE_0.13.5.md). Use the [USB updater](https://launchlab.beywatch.gg/update) for the shipping image.
 
 ## Build from source

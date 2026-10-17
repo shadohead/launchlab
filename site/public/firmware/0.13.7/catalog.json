@@ -481,6 +481,15 @@
       "md5": "5c10e7c3567ab2faccd20867a89ca298",
       "elfSha256": "6aa656f3af9063861422d8e55493f26ea9a808386b23bed10f5e8c2d92b999fc",
       "sensor": "qre1113"
+    },
+    {
+      "version": "0.13.8",
+      "runtime": "0.13.8-sticks3-fifo-timing-pm",
+      "size": 839760,
+      "sha256": "a1d5c47ef9e46a19ec79e36f65aeee2186a62bfbb1cf59f01af4ae2f83407525",
+      "md5": "a8a23754930b9817e2fe41801a4a2b69",
+      "elfSha256": "0914886a94237a010a10976a0a9b46115259a9cda70f806ffa2098b87cb29876",
+      "sensor": "qre1113"
     }
   ]
 }

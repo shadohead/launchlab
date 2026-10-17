@@ -28,7 +28,7 @@ The [latest website guide](https://launchlab.beywatch.gg/build) uses these names
 
 [Current source packages and plates](HARDWARE_VERSIONS.md#current-downloads) supply the exact files for these images.
 The sensor plate and mount-pair plate are separate.
-Firmware 0.13.7 supports both saved sensor profiles. Choose **Settings → Mounting → Top or Sidecar** to match the physical layout; display flip is a separate setting.
+Firmware 0.13.8 supports both saved sensor profiles. Choose **Settings → Mounting → Top or Sidecar** to match the physical layout; display flip is a separate setting.
 
 ## Parts and wiring
 

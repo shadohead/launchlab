@@ -54,8 +54,10 @@ struct Snapshot {AnalogTachometer::Phase phase;uint32_t launches;bool resting=fa
 struct FakeAcquisition {
   AnalogTachometer detector;
   HistoryCheckpoint saved;
-  unsigned begins=0,ends=0;
+  unsigned begins=0,ends=0,vetoes=0;bool veto=false;
   bool request(Action action,uint32_t=0){
+    // A vetoed begin (IMU quiet barrier unavailable) enqueues nothing.
+    if(action==Action::IdleCheckpointBegin && veto){++vetoes;return false;}
     if(action==Action::IdleCheckpointBegin){++begins;saved=HistoryCheckpoint(detector);}
     else {++ends;saved.restore(detector);}
     return true;
@@ -98,6 +100,14 @@ static void run(const char* name,bool ready,bool fail){
 #endif
 }
 int main(){
+  // A vetoed checkpoint is tried once per 5-minute window, not every UI tick,
+  // and the dirty log stays pending for the next window.
+  reset(true,false);acquisition.veto=true;
+  for(unsigned i=0;i<250;++i){clockMs=300000+i*10;tickPowerLog(clockMs,{AnalogTachometer::Phase::Ready,0});}
+  assert(acquisition.vetoes==1 && acquisition.begins==0 && acquisition.ends==0 && powerPrefs.writes==0 && powerLogDirty);
+  acquisition.veto=false;clockMs=600000;tickPowerLog(clockMs,{AnalogTachometer::Phase::Ready,0});
+  assert(acquisition.begins==1 && acquisition.ends==1 && powerPrefs.writes==1 && !powerLogDirty);
+  std::cout<<"vetoed IMU barrier: one attempt per window, log kept pending, next window saves\n";
   reset(true,false);
   for(unsigned i=0;i<250;++i){clockMs=300000+i*10;tickPowerLog(clockMs,{AnalogTachometer::Phase::Ready,0,true});}
   assert(acquisition.begins==0 && powerPrefs.writes==0 && powerLogDirty);

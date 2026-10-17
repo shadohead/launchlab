@@ -65,7 +65,8 @@ inline void boardAxes(const int16_t *raw,float scale,float *out) {
 
 // Host timestamps for gyro frames. Frames are produced by the sensor clock at
 // a nominal 5 ms. As with the earlier polled path, the newest frame in a read
-// is stamped at read time (on average half a period late, a constant offset).
+// is stamped when the FIFO length is read (on average half a period late, a
+// constant offset), not after the possibly long data transfer.
 // The period follows the measured rate and each step is corrected by at most
 // 3%, so integrated time stays within a fraction of a frame of the host clock.
 // Skipped (overflowed) frames advance time by whole periods. Any other

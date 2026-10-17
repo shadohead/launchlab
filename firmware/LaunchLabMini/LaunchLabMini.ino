@@ -28,6 +28,7 @@
 #include "mount_orientation_setting.h"
 #include "controls_ui.h"
 #include "motion_acquisition.h"
+#include "i2c_bus_recovery.h"
 #include "motion_store.h"
 #include "motion_ui.h"
 #include "launch_feedback.h"
@@ -45,9 +46,9 @@
 // real calls so each one uses stack only while it runs.
 #define LOOP_HELPER __attribute__((noinline))
 #if LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = "0.13.7-sticks3-accel-16g-pm";
+static constexpr char VERSION[] = "0.13.8-sticks3-fifo-timing-pm";
 #else
-static constexpr char VERSION[] = "0.13.7-sticks3-accel-16g";
+static constexpr char VERSION[] = "0.13.8-sticks3-fifo-timing";
 #endif
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ
@@ -148,6 +149,8 @@ static LaunchMotion::Trace latestMotion,referenceMotion,demoMotion;
 static bool motionPending=false,referenceError=false,motionDemo=false;
 static uint64_t motionStart=0,motionEnd=0,lastLevelSampleUs=0;
 static uint32_t motionDrops=0;
+static I2cBusRecovery::Result i2cRecovery=I2cBusRecovery::Result::Idle;static unsigned i2cRecoveryPulses=0;
+static bool i2cSdaWas=true,i2cSclWas=true;
 static LaunchFeedback launchFeedback;
 static AnalogTachometer::Phase lastPhase=AnalogTachometer::Phase::Paused;
 static bool lastFault=false;
@@ -193,11 +196,14 @@ static bool startMotion() {
 
 // Every flash write runs inside an ADC checkpoint (DMA cannot survive the
 // cache stall either). The same boundary keeps IMU transfers out of the stall.
-static void quietImuForFlash(Action action,bool done,bool ok) {
+// If no quiet window can be established the checkpoint is vetoed; every
+// caller already treats a refused checkpoint as busy and retries later.
+static bool quietImuForFlash(Action action,bool done,bool ok) {
   const bool writes=action==Action::IdleCheckpointBegin || action==Action::ShutdownBegin ||
     action==Action::HistoryIdleCheckpointBegin || action==Action::CheckpointBegin;
-  if(writes && !done)imuAcquisition.quiet();
-  else if((writes && done && !ok) || (action==Action::CheckpointEnd && done))imuAcquisition.endQuiet();
+  if(writes && !done)return imuAcquisition.quiet();
+  if((writes && !ok) || action==Action::CheckpointEnd)imuAcquisition.endQuiet();
+  return true;
 }
 
 LOOP_HELPER static void retryMotion(uint32_t now,const Snapshot &s) {
@@ -254,8 +260,11 @@ LOOP_HELPER static void tickPowerLog(uint32_t now,const Snapshot &s){
   // A resting owner already holds its checkpoint. Keep optional diagnostics
   // in RAM until motion resumes it or final shutdown flushes the log.
   if(!s.resting && powerLogReady && powerLogDirty && now-lastPowerSaveTry>=300000 &&
-    HistoryCheckpoint::practiceIdle(now,lastAcceptedAt,HISTORY_COALESCE_MS,motionPending,launchFeedback.shown(),s.phase)
-    && acquisition.request(Action::IdleCheckpointBegin,s.launches)){
+    HistoryCheckpoint::practiceIdle(now,lastAcceptedAt,HISTORY_COALESCE_MS,motionPending,launchFeedback.shown(),s.phase)){
+    // Record the attempt first: a vetoed checkpoint must not repeat the IMU
+    // quiet wait on every UI tick. The dirty log stays pending.
+    lastPowerSaveTry=now;
+    if(!acquisition.request(Action::IdleCheckpointBegin,s.launches))return;
     if(!savePowerLog())Serial.println("POWER_LOG_NOTICE checkpoint_failed");acquisition.request(Action::CheckpointEnd);
   }
 }
@@ -396,6 +405,7 @@ LOOP_HELPER static void status() {
   Serial.printf("ORIENTATION_STATUS algorithm=VQF6D position=disabled absolute_heading=disabled ready=%d rest=%d updates=%lu resets=%lu max_fusion_us=%lu bias_dps=%.4f,%.4f,%.4f bias_sigma_dps=%.4f\n",
     imu.orientationReady,imu.rest,(unsigned long)imu.fusionSamples,(unsigned long)imu.fusionResets,
     (unsigned long)imu.maxFusionUs,imu.bias[0],imu.bias[1],imu.bias[2],imu.biasSigma);
+  Serial.printf("I2C_RECOVERY bus=internal result=%s pulses=%u sda_was=%d scl_was=%d\n",I2cBusRecovery::name(i2cRecovery),i2cRecoveryPulses,i2cSdaWas,i2cSclWas);
   Serial.printf("IMU_FIFO_STATUS reads=%lu errors=%lu skipped_frames=%lu anchors=%lu max_bytes=%lu period_us=%.1f gyro_samples=%lu accel_samples=%lu flash_quiet_polls=%lu length_errors=%lu data_errors=%lu parse_errors=%lu oversize=%lu overflows=%lu stalls=%lu last_stall_us=%lu last_stall_ms=%lu last_error_bytes=%lu last_error_offset=%lu last_error_ms=%lu last_quiet_ms=%lu..%lu\n",
     (unsigned long)imu.fifoReads,(unsigned long)imu.fifoErrors,(unsigned long)imu.fifoSkipped,(unsigned long)imu.fifoAnchors,
     (unsigned long)imu.fifoMaxBytes,imu.fifoPeriodUs,(unsigned long)imu.pairedSamples,(unsigned long)imu.accelSamples,(unsigned long)imu.quietPolls,
@@ -1394,6 +1404,9 @@ void setup() {
   if(!clockOk)setCpuFrequencyMhz(240);
   Serial.printf("CPU_POLICY requested_mhz=%u actual_mhz=%lu apb_hz=%lu fallback=%d\n",
     unsigned(LAUNCHLAB_CPU_MHZ),(unsigned long)getCpuFrequencyMhz(),(unsigned long)getApbFrequency(),!clockOk);
+  // Free a bus left held by a slave interrupted mid-read before any I2C use.
+  i2cRecovery=I2cBusRecovery::recoverStickS3Internal(i2cRecoveryPulses,i2cSdaWas,i2cSclWas);
+  Serial.printf("I2C_RECOVERY bus=internal result=%s pulses=%u sda_was=%d scl_was=%d\n",I2cBusRecovery::name(i2cRecovery),i2cRecoveryPulses,i2cSdaWas,i2cSclWas);
   CpuPower::begin();
   CpuPower::Guard startupClock(CpuPower::Ui);
   auto cfg=M5.config();
@@ -1650,7 +1663,7 @@ LOOP_HELPER static void pollCommands(const Snapshot &s) {
     else if(c=='h')toggleHistory();
     else if(c=='c')nextView();
     else if(c=='e')exportMotion();
-    else if(c=='Q'){imuAcquisition.quiet(300);Serial.println("IMU_QUIET_TEST ms=300 flash_write=0");}
+    else if(c=='Q'){const bool ok=imuAcquisition.quiet(300);Serial.printf("IMU_QUIET_TEST ms=300 ok=%d flash_write=0\n",ok);}
     else if(c=='E')effectPreview=true;
     else if(c=='q') {
       if(tournamentMode){Serial.println("RECAP_DEMO_ERROR leave_tournament_first");continue;}

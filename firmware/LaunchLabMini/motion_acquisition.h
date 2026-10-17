@@ -60,10 +60,20 @@ public:
   // which is reported and becomes an honest gap. The cap only guards against
   // a missing checkpoint end, which would also leave the optical ADC stopped.
   static constexpr uint32_t QUIET_MAX_MS=10000;
-  void quiet(uint32_t ms=QUIET_MAX_MS) {
-    quietBeganMs_=uint32_t(esp_timer_get_time()/1000);
-    quietUntil_=esp_timer_get_time()+int64_t(std::min(ms,QUIET_MAX_MS))*1000;
-    if(lock())unlock();
+  // A catch-up FIFO read can hold the gate far longer than lock()'s 20 ms
+  // (about 90 ms near capacity). Wait well beyond that, but if quiescence
+  // cannot be established return false so the flash checkpoint is vetoed and
+  // deferred; never write flash with a transfer possibly in flight.
+  static constexpr uint32_t QUIET_WAIT_MS=250;
+  bool quiet(uint32_t ms=QUIET_MAX_MS) {
+    if(gate_ && xSemaphoreTake(gate_,pdMS_TO_TICKS(QUIET_WAIT_MS))!=pdTRUE)return false;
+    // Publish the window while holding the gate: the IMU task checks it under
+    // the same gate, and a short window cannot expire during the wait.
+    const int64_t now=esp_timer_get_time();
+    quietBeganMs_=uint32_t(now/1000);
+    quietUntil_=now+int64_t(std::min(ms,QUIET_MAX_MS))*1000;
+    unlock();
+    return true;
   }
   void endQuiet(){quietUntil_=0;quietEndedMs_=uint32_t(esp_timer_get_time()/1000);}
   uint32_t quietBeganMs()const{return quietBeganMs_;}
@@ -105,13 +115,14 @@ private:
       const uint64_t wake=esp_timer_get_time();
       if(previousWake)span.periodUs=std::max(span.periodUs,uint32_t(wake-previousWake));
       previousWake=wake;++span.polls;
-      // Checked while holding the gate: quiet() sets the window, then waits on the gate.
+      // Checked while holding the gate; quiet() publishes the window under it.
       const bool locked=lock();
       if(locked && esp_timer_get_time()<quietUntil_.load()){unlock();++s.quietPolls;}
       else if(locked) {
         CpuPower::Guard clock(CpuPower::Imu);
         const int64_t started=esp_timer_get_time();span.lockUs=std::max(span.lockUs,uint32_t(started-wake));
-        const unsigned bytes=readFifo(s);unlock();
+        uint64_t sampledUs=0;
+        const unsigned bytes=readFifo(s,sampledUs);unlock();
         const uint64_t now=esp_timer_get_time();s.maxPollUs=std::max(s.maxPollUs,uint32_t(now-started));
         span.pollUs=std::max(span.pollUs,uint32_t(now-started));
         unsigned gyroFrames=0,skipped=0;
@@ -124,11 +135,11 @@ private:
         if(parsed && !gyroFrames) {
           // Accelerometer-only frames update the held value; nothing is fused or published.
           Bmi270Fifo::parse(fifo_,bytes,[&](const Bmi270Fifo::Frame &f) {
-            if(f.accel){Bmi270Fifo::boardAxes(f.a,accelScale,s.a);s.accelUs=now;++s.accelSamples;haveAccel=true;}
+            if(f.accel){Bmi270Fifo::boardAxes(f.a,accelScale,s.a);s.accelUs=sampledUs;++s.accelSamples;haveAccel=true;}
           },[](unsigned){});
         }
         if(parsed && gyroFrames) {
-          timeline_.begin(now,gyroFrames);
+          timeline_.begin(sampledUs,gyroFrames);
           const uint64_t fusionStart=esp_timer_get_time();
           if(xSemaphoreTake(ringGate_,pdMS_TO_TICKS(20))==pdTRUE) {
             if(activeFrame!=frame_) {
@@ -138,7 +149,7 @@ private:
             }
             s.mount=mode_;
             Bmi270Fifo::parse(fifo_,bytes,[&](const Bmi270Fifo::Frame &f) {
-              if(f.accel){Bmi270Fifo::boardAxes(f.a,accelScale,s.a);s.accelUs=now;++s.accelSamples;haveAccel=true;}
+              if(f.accel){Bmi270Fifo::boardAxes(f.a,accelScale,s.a);s.accelUs=sampledUs;++s.accelSamples;haveAccel=true;}
               if(!f.gyro)return;
               const uint64_t at=timeline_.next();
               if(!haveAccel)return;
@@ -168,7 +179,10 @@ private:
   }
   // Reads every complete FIFO byte. Returns 0 when empty or on a failed
   // length read, which consumes nothing and is retried on the next poll.
-  unsigned readFifo(Snapshot &s) {
+  // sampledUs is when the FIFO length was read: every returned frame was
+  // already buffered then. A long transfer must not shift sample times later.
+  unsigned readFifo(Snapshot &s,uint64_t &sampledUs) {
+    sampledUs=esp_timer_get_time();
     uint8_t length[2];
     if(!Bmi270Fifo::readRegisters(Bmi270Fifo::FIFO_LENGTH_0,length,2)){++s.fifoErrors;++s.fifoLengthErrors;return 0;}
     const unsigned bytes=unsigned(length[0])|(unsigned(length[1]&0x3F)<<8);
