@@ -7,7 +7,8 @@
 #include "appearance.h"
 
 // Personal-best celebrations, drawn into the recap's 16-bit canvas after the
-// UI and before it is pushed. Decoration lands only on background pixels at
+// UI and before it is pushed. Decoration lands only on background pixels (the
+// theme's background color; black for the built-ins) at
 // least HALO px from every UI pixel, so it reads as a layer behind the UI and
 // each label, digit and replay line keeps its pixels and a dark outline. The
 // glint is the one exception: it brightens existing header glyph pixels
@@ -53,10 +54,11 @@ public:
   // The ink the effect frames: the recap's RPM readout by default, or another
   // UI element such as a Settings value. Its bounds are searched in this region.
   struct Anchor {int top=NUMBER_TOP,bottom=NUMBER_BOTTOM,left=0,right=MAX_W-1;};
-  // Draws nothing once elapsed reaches Appearance::duration(effect).
+  // Draws nothing once elapsed reaches Appearance::duration(effect). Every
+  // pixel not of the theme's `background` color is UI ink.
   void draw(const Surface &s,Appearance::Effect effect,uint32_t elapsed,uint16_t accent){draw(s,effect,elapsed,accent,Anchor());}
-  void draw(const Surface &s,Appearance::Effect effect,uint32_t elapsed,uint16_t accent,const Anchor &anchor) {
-    plots_=0;
+  void draw(const Surface &s,Appearance::Effect effect,uint32_t elapsed,uint16_t accent,const Anchor &anchor,uint16_t background=0) {
+    plots_=0;bg_=store(background);
     if(!s.pixels || s.width<64 || s.width>MAX_W || s.height<NUMBER_BOTTOM+HALO+1 || s.height>MAX_H ||
        elapsed>=Appearance::duration(effect))return;
     px_=s.pixels;w_=s.width;h_=s.height;
@@ -93,7 +95,7 @@ private:
   // a stamp per word marks the frame that built it.
   std::array<Row,MAX_H> ink_{},blocked_{};
   std::array<std::array<uint8_t,WORDS>,MAX_H> inkStamp_{},blockedStamp_{};
-  uint16_t *px_=nullptr;int w_=0,h_=0,bottom_=-1;uint8_t stamp_=0;
+  uint16_t *px_=nullptr,bg_=0;int w_=0,h_=0,bottom_=-1;uint8_t stamp_=0;
   Box number_{};Rgb accent_{};uint32_t plots_=0;
 
   // ---- colour and pixels ----------------------------------------------------
@@ -168,7 +170,7 @@ private:
       const float centre=head-(y-number_.cy())*.45f;
       const int c8=q8(centre);
       for(int x=std::max(0,int(centre-7));x<=std::min(w_-1,int(centre+7));++x) {
-        uint16_t &p=px_[y*w_+x];if(!p)continue;
+        uint16_t &p=px_[y*w_+x];if(p==bg_)continue;
         // Band weight (1-|x-centre|/7)*0.9 in Q8.
         const int k=((7*256-std::abs(x*256-c8))*33)>>8;if(k<=0)continue;
         const unsigned v=load(p);const int r=v>>11,g=(v>>5)&63,b=v&31;
@@ -193,7 +195,7 @@ private:
   }
 
   // ---- UI mask ---------------------------------------------------------------
-  // A pixel is blocked when any non-black pixel lies within HALO px (a
+  // A pixel is blocked when any non-background pixel lies within HALO px (a
   // square). Mask words are built on first use each frame, so thin strokes
   // read only the pixels around them; a word is always built before
   // decoration is written to it, so decoration never masks itself.
@@ -207,7 +209,7 @@ private:
     static_assert(HALO==2,"the five-bit stamp below is 2*HALO+1 wide");
     const int first=i*32,from=std::max(0,first-HALO),to=std::min(w_-1,first+31+HALO);
     const uint16_t *p=px_+y*w_;uint32_t bits=0;
-    for(int x=from;x<=to;++x)if(p[x]) {
+    for(int x=from;x<=to;++x)if(p[x]!=bg_) {
       const int d=x-first;bits|=d>=HALO?0x1fu<<(d-HALO):0x1fu>>(HALO-d);
     }
     return bits;
@@ -219,9 +221,9 @@ private:
     int x0=w_,y0=h_,x1=-1,y1=-1;
     for(int y=top;y<=bottom;++y) {
       const uint16_t *p=px_+y*w_;int left=first;
-      while(left<=last && !p[left])++left;
+      while(left<=last && p[left]==bg_)++left;
       if(left>last)continue;
-      int right=last;while(!p[right])--right;
+      int right=last;while(p[right]==bg_)--right;
       x0=std::min(x0,left);x1=std::max(x1,right);y0=std::min(y0,y);y1=y;
     }
     number_=x1>=0?Box{x0,y0,x1,y1}:Box{first+10,top+6,last-10,std::max(top+6,bottom-5)};

@@ -67,7 +67,7 @@ def main():
     header = constants + "\n" + still + "\n".join(function(source, name) for name in ["prepareMotion", "finishMotion", "toggleFeedback", "saveHistory"])
     header += "\nstatic int actualSourceTime(const LaunchMotion::Trace &trial,float progress){using namespace MotionReplay;return " + pose_time + ";}\n"
     header += "static float actualProgress(uint32_t replayFrameElapsed){return " + progress + ";}\n"
-    header += "static void draw(const Snapshot &s){" + frame_time + "lgfx::LGFXBase view;if(launchFeedback.shown() && !tournamentMode && !diagnostics && !historyPage){" + call + ";}recordFrame(view,replayFrameElapsed);advance(drawCostUs);" + hook + "}\n"
+    header += "static void draw(const Snapshot &s){const Palette::Colors colors=ui();" + frame_time + "lgfx::LGFXBase view;if(launchFeedback.shown() && !tournamentMode && !diagnostics && !historyPage){" + call + ";}recordFrame(view,replayFrameElapsed);advance(drawCostUs);" + hook + "}\n"
     header += "static void productionStep(){Snapshot s;" + loop + "}\n"
     with tempfile.TemporaryDirectory(prefix="launchlab-pipeline-") as directory:
         build = Path(directory)

@@ -9,8 +9,8 @@
 #include <memory>
 #include <vector>
 static constexpr uint16_t TFT_BLACK=0,TFT_WHITE=0xffff,TFT_DARKGREY=0x7bef,TFT_CYAN=0x07ff,TFT_ORANGE=0xfd20;
-static constexpr int top_center=0,top_right=1;
-namespace fonts {static int Font4=4;}
+static constexpr int top_center=0,top_right=1,top_left=2;
+namespace fonts {static int Font4=4,Font6=6;}
 namespace lgfx {
 class LGFXBase {
 public:
@@ -35,7 +35,9 @@ private:
 }
 #include "../LaunchLabMini/motion_ui.h"
 #include "../LaunchLabMini/appearance.h"
-static Appearance::Celebration bestEffect;static uint16_t themeAccent(){return Appearance::accent(Appearance::Theme::Classic);}
+#include "../LaunchLabMini/theme_library.h"
+#include "../LaunchLabMini/screens_ui.h"
+static Appearance::Celebration bestEffect;static Palette::Colors ui(){return Themes::builtIn(Appearance::Theme::Classic);}
 #include "../LaunchLabMini/launch_feedback.h"
 #include "fixtures/tilt_launch96.h"
 static uint32_t hostNow=0;

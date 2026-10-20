@@ -36,6 +36,8 @@
 #include "launch_feedback.h"
 #include "appearance_store.h"
 #include "best_effect_ui.h"
+#include "screens_ui.h"
+#include "theme_store.h"
 #include "best_effect_speaker.h"
 #include "device_backup.h"
 #include "nvs_budget.h"
@@ -50,11 +52,11 @@
 #define LOOP_HELPER __attribute__((noinline))
 #if LAUNCHLAB_HIL
 // Test-only hardware-in-the-loop build; never a release. See tools/hil.
-static constexpr char VERSION[] = "0.13.9-sticks3-rpm-guard-hil-pm";
+static constexpr char VERSION[] = "0.14.0-sticks3-themes-hil-pm";
 #elif LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = "0.13.9-sticks3-rpm-guard-pm";
+static constexpr char VERSION[] = "0.14.0-sticks3-themes-pm";
 #else
-static constexpr char VERSION[] = "0.13.9-sticks3-rpm-guard";
+static constexpr char VERSION[] = "0.14.0-sticks3-themes";
 #endif
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ
@@ -75,6 +77,9 @@ static Appearance::Config appearance;
 static Appearance::Bests personalBests;
 static AppearanceStore<Appearance::Config> appearanceStore;
 static AppearanceStore<Appearance::Bests> bestStore;
+// The user's custom themes (theme IDs THEMES..), beside the appearance record.
+static Themes::Library themeLibrary;
+static ThemeStore themeStore;
 static Appearance::Celebration bestEffect;
 // The Best effect editor previews the draft around its value card.
 static Appearance::Celebration editorEffect;
@@ -168,6 +173,8 @@ static uint32_t motionInitAttempts=0,lastMotionInit=0;
 static bool motionInitPaired=false,motionInitSuccess=false;
 static MotionStore motionStore;
 static DeviceBackup::Receiver restoreRx;
+// One framed custom theme request (USB `T`).
+static DeviceBackup::LineReceiver<(Themes::Request::BYTES+2)/3*4> themeRx;
 static LaunchMotion::Trace latestMotion,referenceMotion,demoMotion;
 static bool motionPending=false,referenceError=false,motionDemo=false;
 static uint64_t motionStart=0,motionEnd=0,lastLevelSampleUs=0;
@@ -252,7 +259,9 @@ static uint8_t backlightValue(){return (unsigned(brightnessPercent)*255+50)/100;
 // the LCD orientation that was actually applied, rather than an unseen draft.
 static bool visibleDisplayFlipped(){return DisplayOrientation::flipForRotation(M5.Display.getRotation());}
 static Appearance::Theme visibleTheme(){return controls.page==Controls::Page::Edit && controls.setting==5?Appearance::Theme(controls.draft):appearance.theme;}
-static uint16_t themeAccent(){return Appearance::accent(visibleTheme());}
+// The colors on screen: the Theme editor's draft while it is open. A custom
+// theme that is missing or invalid shows the default.
+static Palette::Colors ui(){return themeLibrary.colors(visibleTheme());}
 static void cancelSettingEdit();
 static void beginWipe();
 static void cancelWipe();
@@ -531,26 +540,11 @@ LOOP_HELPER static void tickDisplayPower(uint32_t now,const Snapshot &s) {
 }
 
 static void drawBattery(lgfx::LGFXBase &g,uint32_t now) {
-  const int cx=g.width()/2;
-  g.setTextDatum(top_center);g.setTextColor(TFT_WHITE,TFT_BLACK);
-  g.drawString("Battery",cx,8,2);
-  char line[32];
-  const bool valid=battery.valid(now);
-  if(valid)snprintf(line,sizeof(line),"%d%%",battery.percent);else snprintf(line,sizeof(line),"--");
-  g.setTextColor(valid && battery.percent<=20?TFT_ORANGE:themeAccent(),TFT_BLACK);
-  g.drawString(line,cx,43,4);
-  g.drawRoundRect(29,96,74,25,3,TFT_DARKGREY);g.fillRect(103,103,4,11,TFT_DARKGREY);
-  if(valid)g.fillRect(33,100,66*battery.percent/100,17,battery.percent<=20?TFT_ORANGE:themeAccent());
-  g.setTextColor(TFT_WHITE,TFT_BLACK);
-  if(valid)snprintf(line,sizeof(line),"%.2f V",battery.millivolts/1000.0);else snprintf(line,sizeof(line),"Reading unavailable");
-  g.drawString(line,cx,133,2);
-  g.drawString(!battery.chargeKnown?"Charge status unknown":battery.charging?"Charging":"Not charging",cx,161,1);
-  g.setTextColor(TFT_DARKGREY,TFT_BLACK);
-  ControlsUI::footer(g,"A Done");
+  ControlsUI::battery(g,battery.valid(now),battery.percent,battery.millivolts,battery.chargeKnown,battery.charging);
 }
 
 static void drawSettings(lgfx::LGFXBase &g) {
-  const uint8_t values[]={inactivity.minutes(),uint8_t(rpmEstimator),brightnessPercent,uint8_t(displayFlipped),uint8_t(sensorProfile),uint8_t(appearance.theme),uint8_t(appearance.effect),uint8_t(appearance.sound),uint8_t(mountMode)};
+  const uint8_t values[]={inactivity.minutes(),uint8_t(rpmEstimator),brightnessPercent,uint8_t(displayFlipped),uint8_t(sensorProfile),uint8_t(themeLibrary.effective(appearance.theme)),uint8_t(appearance.effect),uint8_t(appearance.sound),uint8_t(mountMode)};
   ControlsUI::settings(g,controls,values);
 }
 
@@ -570,69 +564,32 @@ LOOP_HELPER static void exportSignal() {
 }
 
 static void drawLiveLevel(lgfx::LGFXBase &view,int cx) {
-    const int cy=165,radius=38;
-    view.setTextColor(TFT_DARKGREY,TFT_BLACK);
-    view.drawCircle(cx,cy,radius,TFT_DARKGREY);
-    view.drawFastHLine(cx-radius+3,cy,2*radius-5,TFT_DARKGREY);
-    view.drawFastVLine(cx,cy-radius+3,2*radius-5,TFT_DARKGREY);
-    view.drawCircle(cx,cy,6,TFT_DARKGREY);
-    drawnLevel=StickS3Level::forDisplay(level.reading(millis()),visibleDisplayFlipped());
-    if(drawnLevel.valid()) {
-      const auto color=drawnLevel.degrees<=2?themeAccent():TFT_ORANGE;
-      view.fillCircle(cx+lroundf(drawnLevel.right*32),cy+lroundf(drawnLevel.down*32),5,color);
-      char angle[20];snprintf(angle,sizeof(angle),"%.1f deg",drawnLevel.degrees);
-      view.setTextColor(color,TFT_BLACK);view.drawString(angle,cx,207,2);
-    } else {
-      view.drawString("--",cx,207,2);
-    }
+  drawnLevel=StickS3Level::forDisplay(level.reading(millis()),visibleDisplayFlipped());
+  ScreensUI::level(view,ui(),cx,drawnLevel);
 }
 
 LOOP_HELPER static void draw(const Snapshot &s) {
   const int64_t started=esp_timer_get_time();
-  ControlsUI::accent=themeAccent();
+  const Palette::Colors colors=ui();
+  ControlsUI::colors=colors;ControlsUI::themeLabel=[](Appearance::Theme t){return themeLibrary.label(t);};
   const uint32_t replayFrameElapsed=launchFeedback.replayElapsed(millis());
   const bool replayWasStarted=launchFeedback.replayStarted();
   auto &view=screenReady?static_cast<lgfx::LGFXBase &>(screen):static_cast<lgfx::LGFXBase &>(M5.Display);
   if(!screenReady){acquisition.displayBoundary(true);M5.Display.startWrite();}
-  view.fillScreen(TFT_BLACK);
+  view.fillScreen(colors.background);
   const int cx=view.width()/2;
   view.setTextDatum(top_center);
-  view.setTextColor(TFT_WHITE,TFT_BLACK);
-  if(!tournamentMode && diagnostics) {
-    if(newSessionAt && millis()-newSessionAt<1500)view.drawString("New session ready",cx,8,2);
-    view.setTextColor(s.ready && !s.signalFault?TFT_GREEN:TFT_ORANGE,TFT_BLACK);
-    view.drawString(s.stateName(),cx,32,2);
-  }
-  view.setTextColor(TFT_WHITE,TFT_BLACK);
+  view.setTextColor(colors.text,colors.background);
+  if(!tournamentMode && diagnostics)
+    ScreensUI::diagnosticsHeader(view,colors,newSessionAt && millis()-newSessionAt<1500,s.stateName(),s.ready && !s.signalFault);
+  view.setTextColor(colors.text,colors.background);
   if(tournamentMode) {
-    if(!s.ready || s.signalFault) {
-      view.setTextColor(TFT_ORANGE,TFT_BLACK);
-      view.drawString("Check sensor",cx,92,2);
-    } else if(tournamentView==TournamentView::RecordingOnly) {
-      // A static card keeps launch results out of the competitor's view.
-      view.setTextColor(TFT_RED,TFT_BLACK);
-      view.drawString("RECORDING",cx,84,2);
-      view.drawString("ONLY",cx,108,4);
-    } else {
-      char rpm[16];
-      if(s.valid)snprintf(rpm,sizeof(rpm),"%.0f",s.resultRpm);
-      else snprintf(rpm,sizeof(rpm),"--");
-      const int rpmFont=view.textWidth(rpm,&fonts::Font6)<=view.width()-8?6:4;
-      view.drawString(rpm,cx,86,rpmFont);
-      view.drawString("RPM",cx,137,2);
-    }
+    ScreensUI::tournament(view,colors,s.ready && !s.signalFault,tournamentView==TournamentView::RecordingOnly,s.valid,s.resultRpm);
     if(int32_t(tournamentHintUntil-millis())>0)ControlsUI::footer(view,"B View  Hold A Exit");
   } else if(diagnostics) {
-    view.setTextDatum(top_left);
-    char line[64];
-    snprintf(line,sizeof(line),"AO G%u: %lu",s.pin,(unsigned long)s.last);
-    view.drawString(line,8,64,2);
-    snprintf(line,sizeof(line),"Range %lu-%lu",(unsigned long)s.minimum,(unsigned long)s.maximum);
-    view.drawString(line,8,93,2);
-    snprintf(line,sizeof(line),"%.0f samples/s",s.rate);
-    view.drawString(line,8,122,2);
+    ScreensUI::diagnostics(view,s.pin,s.last,s.minimum,s.maximum,s.rate);
   } else if(historyPage) {
-    view.fillScreen(TFT_BLACK);
+    view.fillScreen(colors.background);
     switch(controls.page) {
       case Controls::Page::Menu:ControlsUI::list(view,"Menu",ControlsUI::MENU,6,controls.menu);break;
       case Controls::Page::HistoryMenu:ControlsUI::list(view,"History",ControlsUI::HISTORY,4,controls.history);break;
@@ -645,46 +602,37 @@ LOOP_HELPER static void draw(const Snapshot &s) {
           const int64_t effectStarted=esp_timer_get_time();BestEffectUI::Renderer::Anchor card;
           card.top=72;card.bottom=128;card.left=8;card.right=view.width()-9;
           bestEffectRenderer.draw({static_cast<uint16_t *>(screen.getBuffer()),screen.width(),screen.height()},
-            editorEffect.effect(),editorEffect.elapsed(millis()),themeAccent(),card);
+            editorEffect.effect(),editorEffect.elapsed(millis()),colors.accent,card,colors.background);
           maxEffectUs=std::max(maxEffectUs,uint32_t(esp_timer_get_time()-effectStarted));
         }
         break;
       case Controls::Page::NewSession:ControlsUI::session(view,controls.startSession);break;
       case Controls::Page::Battery:drawBattery(view,millis());break;
       case Controls::Page::Wipe:ControlsUI::wipe(view,wipeConfirmation,millis(),wipeFailed,wipeBlocked,wipeComplete);break;
-      default:PracticeUI::draw(view,demo?demoPractice:practice,historyView,historyOffset,demo,themeAccent());break;
+      default:PracticeUI::draw(view,demo?demoPractice:practice,historyView,historyOffset,demo,colors);break;
     }
   } else if(launchFeedback.shown()) {
-    view.fillScreen(TFT_BLACK);
+    view.fillScreen(colors.background);
     MotionUI::feedback(view,motionDemo?demoMotion:latestMotion,
-      motionPending && !motionDemo,motionDemo,MotionReplay::playbackProgress(motionDemo?demoMotion:latestMotion,replayFrameElapsed),visibleDisplayFlipped(),themeAccent(),!motionDemo && bestEffect.badge());
+      motionPending && !motionDemo,motionDemo,MotionReplay::playbackProgress(motionDemo?demoMotion:latestMotion,replayFrameElapsed),visibleDisplayFlipped(),colors,!motionDemo && bestEffect.badge());
     ControlsUI::footer(view,"A Main  B Menu");
     // Direct-draw fallback stays functional without reading the hardware LCD.
     if(screenReady && !motionDemo && !motionPending && bestEffect.badge()) {
       const int64_t effectStarted=esp_timer_get_time();
       bestEffectRenderer.draw({static_cast<uint16_t *>(screen.getBuffer()),screen.width(),screen.height()},
-        bestEffect.effect(),bestEffect.elapsed(millis()),themeAccent());
+        bestEffect.effect(),bestEffect.elapsed(millis()),colors.accent,BestEffectUI::Renderer::Anchor(),colors.background);
       maxEffectUs=std::max(maxEffectUs,uint32_t(esp_timer_get_time()-effectStarted));
     }
   } else {
     const bool sessionNotice=newSessionAt && millis()-newSessionAt<1500 &&
       s.ready && !s.signalFault && !s.suspended && s.phase==AnalogTachometer::Phase::Ready;
     const char *status=sessionNotice?"New session ready":s.stateName();
-    view.setTextColor(sessionNotice?TFT_WHITE:s.ready && !s.signalFault?TFT_GREEN:TFT_ORANGE,TFT_BLACK);
-    view.drawString(status,cx,8,2);
-    char rpm[16];
-    if(s.valid)snprintf(rpm,sizeof(rpm),"%.0f",s.resultRpm);
-    else snprintf(rpm,sizeof(rpm),"--");
-    view.setTextDatum(top_center);
-    // Keep large values inside the narrow portrait width as well.
-    const int rpmFont=view.textWidth(rpm,&fonts::Font6)<=view.width()-8?6:4;
-    view.setTextColor(visibleTheme()==Appearance::Theme::Classic?TFT_WHITE:themeAccent(),TFT_BLACK);
-    view.drawString(rpm,cx,47,rpmFont);
-    view.drawString("RPM",cx,99,2);
+    ScreensUI::live(view,colors,status,sessionNotice?ScreensUI::Tone::Text:s.ready && !s.signalFault?ScreensUI::Tone::Ready:ScreensUI::Tone::Warning,
+      s.valid,s.resultRpm);
     drawLiveLevel(view,cx);
   }
   if(!tournamentMode && (diagnostics || (!historyPage && !launchFeedback.shown()))) {
-    view.setTextDatum(top_center);view.setTextColor(TFT_DARKGREY,TFT_BLACK);
+    view.setTextDatum(top_center);view.setTextColor(colors.muted,colors.background);
     ControlsUI::footer(view,"A Recap  B Menu");
   }
   const uint32_t now=millis();
@@ -979,7 +927,8 @@ static void commitSetting() {
       // An unreadable stored look cannot be replaced; keep showing it rather
       // than a choice that would silently revert at the next boot.
       auto next=appearance;
-      applied=appearanceStore.ready() && next.select(controls.setting==5?Appearance::Theme(value):appearance.theme,
+      applied=appearanceStore.ready() && (controls.setting!=5 || themeLibrary.available(Appearance::Theme(value))) &&
+        next.select(controls.setting==5?Appearance::Theme(value):appearance.theme,
                       controls.setting==6?Appearance::Effect(value):appearance.effect,
                       controls.setting==7?Appearance::Sound(value):appearance.sound);
       changed=applied && next.generation()!=appearance.generation();
@@ -1020,7 +969,7 @@ static void navigate(Controls::Effect effect,Controls::Page previous) {
       settingsSaveError=false;
       controls.draft=controls.setting==0?inactivity.minutes():controls.setting==1?uint8_t(rpmEstimator):controls.setting==2?brightnessPercent:
         controls.setting==3?uint8_t(displayFlipped):controls.setting==4?uint8_t(sensorProfile):
-        controls.setting==5?uint8_t(appearance.theme):controls.setting==6?uint8_t(appearance.effect):
+        controls.setting==5?uint8_t(themeLibrary.effective(appearance.theme)):controls.setting==6?uint8_t(appearance.effect):
         controls.setting==7?uint8_t(appearance.sound):uint8_t(mountMode);
       if(controls.setting==6)previewEffect();
       break;
@@ -1344,10 +1293,11 @@ LOOP_HELPER static void exportBackup() {
   contents->practice=practice;contents->look=appearance;contents->bests=personalBests;
   contents->hasMotion=referenceMotion.valid();if(contents->hasMotion)contents->motion=referenceMotion;
   contents->settings={inactivity.minutes(),brightnessPercent,rpmEstimator,sensorProfile,displayFlipped,mountMode};
+  contents->hasThemes=!themeLibrary.empty();contents->themes=themeLibrary;
   const size_t n=DeviceBackup::encode(*contents,VERSION,*buffer);
   if(!n){Serial.println("BACKUP_ERROR out_of_memory");return;}
-  Serial.printf("BACKUP_BEGIN format=%lu bytes=%u records=%u sessions=%u motion=%d runtime=%s\n",
-    (unsigned long)DeviceBackup::FORMAT,unsigned(n),practice.size(),practice.sessions(),contents->hasMotion,VERSION);
+  Serial.printf("BACKUP_BEGIN format=%lu bytes=%u records=%u sessions=%u motion=%d themes=%d runtime=%s\n",
+    (unsigned long)contents->format(),unsigned(n),practice.size(),practice.sessions(),contents->hasMotion,contents->hasThemes,VERSION);
   DeviceBackup::base64Lines(buffer->data(),n,96,[](const char *line){Serial.print("BACKUP_DATA ");Serial.println(line);});
   Serial.println("BACKUP_END");
 }
@@ -1362,19 +1312,21 @@ LOOP_HELPER static void finishRestore(const Snapshot &s) {
   if(!restoreRx.take(buffer->data(),buffer->size(),n) || !DeviceBackup::decode(buffer->data(),n,*contents)) {
     Serial.println("RESTORE_ERROR reason=invalid_backup written=0");return;
   }
-  Serial.printf("RESTORE_VALID records=%u sessions=%u motion=%d from=%s\n",contents->practice.size(),
-    contents->practice.sessions(),contents->hasMotion,contents->runtime);
+  Serial.printf("RESTORE_VALID records=%u sessions=%u motion=%d themes=%d from=%s\n",contents->practice.size(),
+    contents->practice.sessions(),contents->hasMotion,contents->hasThemes,contents->runtime);
   if(motionPending || s.phase==AnalogTachometer::Phase::Launch || !acquisition.request(Action::IdleCheckpointBegin,s.launches)) {
     Serial.println("RESTORE_ERROR reason=busy written=0");return;
   }
   contents->practice.supersede(practice.generation());
   contents->look.revision=appearance.revision+1;contents->bests.revision=personalBests.revision+1;
+  contents->themes.revision=themeLibrary.revision+1;
   const auto &settings=contents->settings;
   const bool saved=practiceStore.save(contents->practice) && appearanceStore.save(contents->look) &&
     bestStore.save(contents->bests) && (!contents->hasMotion || motionStore.save(contents->motion)) &&
     prefs.putUChar("sleep_min",settings.sleepMinutes)==1 && prefs.putUChar("bright_pct",settings.brightness)==1 &&
     RpmEstimatorSetting::save(prefs,settings.rpmMethod) && SensorProfileSetting::save(prefs,settings.sensorProfile) &&
-    DisplayFlipSetting::save(prefs,settings.flipped) && MountOrientationSetting::save(prefs,settings.mount);
+    DisplayFlipSetting::save(prefs,settings.flipped) && MountOrientationSetting::save(prefs,settings.mount) &&
+    (!contents->hasThemes || themeStore.save(contents->themes,true));
   if(!saved) {
     if(!acquisition.request(Action::CheckpointEnd))Serial.println("RESTORE_ERROR ADC checkpoint resume failed");
     // Earlier records may already hold the restored values; restoring again is safe.
@@ -1394,6 +1346,109 @@ LOOP_HELPER static void pollRestore(const Snapshot &s) {
       case DeviceBackup::Receiver::Event::Chunk:Serial.printf("RESTORE_CHUNK chars=%u\n",restoreRx.received());break;
       case DeviceBackup::Receiver::Event::Complete:finishRestore(s);break;
       case DeviceBackup::Receiver::Event::Error:Serial.printf("RESTORE_ERROR reason=%s written=0\n",restoreRx.error());break;
+      case DeviceBackup::Receiver::Event::None:break;
+    }
+  }
+}
+
+// ---- USB custom themes ------------------------------------------------------
+// `L` lists the slots; `T` takes one framed, checksummed request (put, delete,
+// select or clear) as a base64 line and a "." line, like a restore. Replies
+// are drained at once: a short reply can otherwise wait in the USB ring.
+static void themeReply(){UsbTx::drain(100);}
+LOOP_HELPER static void listThemes() {
+  unsigned available=0;const bool known=nvsAvailable(available);
+  Serial.printf("THEME_LIST slots=%u selected=%u showing=%u store=%s revision=%lu nvs_available=%d nvs_needed=%u\n",
+    Themes::SLOTS,unsigned(appearance.theme),unsigned(themeLibrary.effective(appearance.theme)),ThemeStore::name(themeStore.status()),
+    (unsigned long)themeLibrary.revision,known?int(available):-1,ThemeStore::NEEDED_ENTRIES);
+  for(unsigned i=0;i<Themes::SLOTS;++i) {
+    char data[(Themes::SLOT_BYTES+2)/3*4+1]={};
+    DeviceBackup::base64Lines(themeLibrary.raw(i),Themes::SLOT_BYTES,96,[&](const char *line){strncpy(data,line,sizeof(data)-1);});
+    Palette::Custom theme;const bool valid=themeLibrary.get(i,theme);
+    Serial.printf("THEME_SLOT slot=%u theme=%u state=%s data=%s name=%s\n",i,unsigned(Themes::slotTheme(i)),
+      Themes::stateName(themeLibrary.state(i)),data,valid?theme.name:"");
+  }
+  Serial.println("THEME_LIST_END");themeReply();
+}
+// A selection the library no longer has returns to the default; an open
+// Theme editor closes, since its draft may be gone.
+static void themesChanged() {
+  controls.customThemes=themeLibrary.validMask();
+  if(controls.page==Controls::Page::Edit && controls.setting==unsigned(Controls::Setting::Theme))cancelSettingEdit();
+  if(!themeLibrary.available(appearance.theme)) {
+    auto next=appearance;
+    if(appearanceStore.ready() && next.select(Themes::FALLBACK,appearance.effect,appearance.sound)){appearance=next;settingsSave.mark(SettingsSave::Appearance);}
+  }
+  syncNavigation();
+}
+LOOP_HELPER static void selectTheme(Appearance::Theme theme,const Snapshot &s) {
+  auto next=appearance;
+  if(!themeLibrary.available(theme)){Serial.printf("THEME_ERROR op=select reason=unavailable theme=%u written=0\n",unsigned(theme));themeReply();return;}
+  if(!appearanceStore.ready() || !next.select(theme,appearance.effect,appearance.sound)) {
+    Serial.println("THEME_ERROR op=select reason=appearance_unavailable written=0");themeReply();return;
+  }
+  if(next.generation()!=appearance.generation()){appearance=next;settingsSave.mark(SettingsSave::Appearance);}
+  if(controls.page==Controls::Page::Edit && controls.setting==unsigned(Controls::Setting::Theme))cancelSettingEdit();
+  syncNavigation();
+  // Saved with the other settings: at once when the owner is idle, otherwise
+  // at its next checkpoint.
+  saveSettings(millis(),s,true);
+  Serial.printf("THEME_OK op=select theme=%u pending=%d\n",unsigned(theme),bool(settingsSave.pending()&SettingsSave::Appearance));themeReply();
+}
+LOOP_HELPER static void finishThemeRequest(const Snapshot &s) {
+  uint8_t bytes[Themes::Request::BYTES];size_t n=0;
+  auto request=std::unique_ptr<Themes::Request>(new(std::nothrow) Themes::Request);
+  auto next=std::unique_ptr<Themes::Library>(new(std::nothrow) Themes::Library);
+  if(!request || !next){Serial.println("THEME_ERROR reason=out_of_memory written=0");themeReply();return;}
+  if(!themeRx.take(bytes,sizeof(bytes),n) || !request->decode(bytes,n)) {
+    Serial.println("THEME_ERROR reason=invalid_request written=0");themeReply();return;
+  }
+  using Op=Themes::Request::Op;
+  const char *op=Themes::Request::name(request->op);const unsigned slot=request->argument;
+  if(request->op==Op::Select){selectTheme(Appearance::Theme(request->argument),s);return;}
+  auto fail=[&](const char *reason){Serial.printf("THEME_ERROR op=%s slot=%u reason=%s written=0\n",op,slot,reason);themeReply();};
+  if(request->op!=Op::Clear && slot>=Themes::SLOTS)return fail("bad_slot");
+  if(request->op==Op::Put) {
+    unsigned role=0;const auto problem=request->theme.check(&role);
+    if(problem!=Palette::Problem::None) {
+      Serial.printf("THEME_ERROR op=put slot=%u reason=%s role=%s written=0\n",slot,Palette::problemName(problem),
+        problem==Palette::Problem::Contrast?Palette::roleName(role):"none");themeReply();return;
+    }
+  }
+  if(themeStore.status()==ThemeStore::Status::Unavailable)return fail("storage_unavailable");
+  // An unreadable record is kept until it is cleared on purpose.
+  if(request->op!=Op::Clear && themeStore.status()==ThemeStore::Status::Unreadable)return fail("store_unreadable");
+  *next=themeLibrary;
+  if(request->op==Op::Put)next->put(slot,request->theme);
+  else if(request->op==Op::Delete)next->remove(slot);
+  else *next=Themes::Library{};
+  if(request->op!=Op::Clear && *next==themeLibrary) {
+    Serial.printf("THEME_OK op=%s slot=%u revision=%lu unchanged=1\n",op,slot,(unsigned long)themeLibrary.revision);themeReply();return;
+  }
+  unsigned available=0;
+  if(request->op==Op::Put && (!nvsAvailable(available) || !ThemeStore::fits(available))) {
+    Serial.printf("THEME_ERROR op=put slot=%u reason=nvs_space available_entries=%u needed_entries=%u written=0\n",slot,available,ThemeStore::NEEDED_ENTRIES);
+    themeReply();return;
+  }
+  if(motionPending || s.phase==AnalogTachometer::Phase::Launch || !acquisition.request(Action::IdleCheckpointBegin,s.launches))return fail("busy");
+  const bool ok=request->op==Op::Clear?themeStore.clear():themeStore.save(*next);
+  if(!acquisition.request(Action::CheckpointEnd))Serial.println("THEME_NOTICE adc_checkpoint_resume_failed");
+  if(!ok){Serial.printf("THEME_ERROR op=%s slot=%u reason=write_failed written=unknown\n",op,slot);themeReply();dirty=true;return;}
+  themeLibrary=*next;themesChanged();
+  Serial.printf("THEME_OK op=%s slot=%u revision=%lu state=%s\n",op,slot,(unsigned long)themeLibrary.revision,
+    request->op==Op::Clear?"empty":Themes::stateName(themeLibrary.state(slot)));themeReply();
+  // A selection that fell back is saved like any other setting.
+  saveSettings(millis(),acquisition.snapshot(),true);dirty=true;
+}
+LOOP_HELPER static void pollThemeRequest(const Snapshot &s) {
+  const uint32_t now=millis();
+  if(themeRx.timedOut(now)){themeRx.cancel();Serial.println("THEME_ERROR reason=timeout written=0");themeReply();return;}
+  for(unsigned n=0;n<256 && themeRx.active() && Serial.available();++n) {
+    inactivity.touch(now);
+    switch(themeRx.feed(Serial.read(),now)) {
+      case DeviceBackup::Receiver::Event::Chunk:Serial.printf("THEME_CHUNK chars=%u\n",themeRx.received());themeReply();break;
+      case DeviceBackup::Receiver::Event::Complete:finishThemeRequest(s);break;
+      case DeviceBackup::Receiver::Event::Error:Serial.printf("THEME_ERROR reason=%s written=0\n",themeRx.error());themeReply();break;
       case DeviceBackup::Receiver::Event::None:break;
     }
   }
@@ -1598,6 +1653,9 @@ void setup() {
   liveMount=mountMode;
   if(!appearanceStore.begin(appearance,"ll-appearance","cfg0","cfg1"))Serial.println("APPEARANCE_NOTICE invalid_record_retained_using_defaults");
   if(!bestStore.begin(personalBests,"ll-bests","best0","best1"))Serial.println("BEST_NOTICE invalid_record_retained_celebration_disabled");
+  if(themeStore.begin(themeLibrary)==ThemeStore::Status::Unreadable)Serial.println("THEME_NOTICE invalid_record_retained_using_default_colors");
+  controls.customThemes=themeLibrary.validMask();
+  if(!themeLibrary.available(appearance.theme))Serial.printf("THEME_NOTICE selected_theme_unavailable theme=%u showing=%u\n",unsigned(appearance.theme),unsigned(Themes::FALLBACK));
   uint8_t pin=prefs.getUChar("ao_pin",1);
   if(pin<1 || pin>10)pin=1;
   extPower=prefs.getBool("ext5v",false);
@@ -1639,7 +1697,7 @@ void setup() {
   Serial.printf("BOOT %s ppr=1 min_rpm=1000 min_mark=%.0f edge_fraction=%.2f sample_hz=50000 task_core=0\n",VERSION,
     StickS3SensorProfile::minMark(sensorProfile),StickS3SensorProfile::EDGE_SWING_FRACTION);
   Serial.printf("RPM_SETTING_BOOT selected=%s default=three_turn_peak legacy_history=retained_metric_not_encoded\n",RpmEstimator::name(rpmEstimator));
-  Serial.println("READY commands: p status, P power log, C CPU power profiling, a/c tap A, h tap B, o hold A, b hold B, d diagnostics, n new session, u history export, K backup export, R backup restore, e motion export, q synthetic recap, E<0-4> best effect preview, t synthetic history, y/z storage check, v screen, w recorder export, x ext5V, g<N> GPIO, s stress, j UI stall");
+  Serial.println("READY commands: p status, P power log, C CPU power profiling, a/c tap A, h tap B, o hold A, b hold B, d diagnostics, n new session, u history export, K backup export, R backup restore, L custom themes, T theme request, e motion export, q synthetic recap, E<0-4> best effect preview, t synthetic history, y/z storage check, v screen, w recorder export, x ext5V, g<N> GPIO, s stress, j UI stall");
 #if LAUNCHLAB_HIL
   hilBoot();
 #endif
@@ -1777,6 +1835,8 @@ LOOP_HELPER static void runUsbCommand(const char *command,const Snapshot &s) {
   else if(c=='u')exportHistory();
   else if(c=='K')exportBackup();
   else if(c=='R'){restoreRx.start(millis());Serial.printf("RESTORE_READY max_chars=%u\n",DeviceBackup::TEXT_BYTES);}
+  else if(c=='L')listThemes();
+  else if(c=='T'){themeRx.start(millis());Serial.printf("THEME_READY max_chars=%u\n",unsigned((Themes::Request::BYTES+2)/3*4));themeReply();}
   else if(c=='t')previewHistory();
   else if(c=='y')checkStorage();
   else if(c=='z')checkMotionStorage();
@@ -1800,15 +1860,16 @@ LOOP_HELPER static void pollCommands(const Snapshot &s) {
   // run state-changing letters: see usb_command_guard.h.
   auto &guard=usbCommands;char command[UsbCommandGuard::MAX+1];
   if(controls.page==Controls::Page::Wipe || wipeBlocked) {
-    restoreRx.cancel();guard.cancel();
+    restoreRx.cancel();themeRx.cancel();guard.cancel();
   } else {
     if(restoreRx.active())pollRestore(s);
+    if(themeRx.active())pollThemeRequest(s);
     // Quiet is the receive queue seen empty, not a slow pass.
     if(!Serial.available())guard.idle(millis());
     if(guard.due(millis(),command))runUsbCommand(command,s);
   }
   // Bound incoming work; an unending USB stream cannot starve button/draw work.
-  for(unsigned n=0;n<32 && !restoreRx.active() && Serial.available();++n) {
+  for(unsigned n=0;n<32 && !restoreRx.active() && !themeRx.active() && Serial.available();++n) {
     const char c=Serial.read();const uint32_t now=millis();
     // Wipe confirmations and the final hold belong to physical buttons.
     // Read-only status and cancellation cannot advance the confirmation.

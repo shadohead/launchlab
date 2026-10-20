@@ -67,8 +67,8 @@ def main():
     header = (
         function(source, "static bool visibleDisplayFlipped()") + "\n"
         + function(source, "static void drawLiveLevel(") + "\n"
-        + "static uint32_t drawActualFeedback(lgfx::LGFXBase &view){" + frame_time + call + ";return replayFrameElapsed;}\n"
-        "static void drawExpectedFeedback(lgfx::LGFXBase &view,float expectedProgress){" + expected_call + ";}\n"
+        + "static uint32_t drawActualFeedback(lgfx::LGFXBase &view){const Palette::Colors colors=ui();" + frame_time + call + ";return replayFrameElapsed;}\n"
+        "static void drawExpectedFeedback(lgfx::LGFXBase &view,float expectedProgress){const Palette::Colors colors=ui();" + expected_call + ";}\n"
         "static void finishActualFeedbackFrame(uint32_t replayFrameElapsed){" + hook + ";}\n"
         "static bool actualNeedsReplayFrame(uint32_t now,uint32_t lastDraw){return " + condition + ";}\n"
     )

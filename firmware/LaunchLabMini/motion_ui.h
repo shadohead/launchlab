@@ -2,6 +2,7 @@
 #include "launch_motion.h"
 #include "level_indicator.h"
 #include "motion_replay.h"
+#include "palette.h"
 
 namespace MotionUI {
 inline const char *unavailableTilt(LaunchMotion::Quality quality) {
@@ -14,7 +15,7 @@ inline const char *unavailableTilt(LaunchMotion::Quality quality) {
   }
 }
 inline void spatial(lgfx::LGFXBase &g,const LaunchMotion::Trace &trial,
-                    int top,int height,float progress=1,bool flipEnabled=false) {
+                    int top,int height,const Palette::Colors &c,float progress=1,bool flipEnabled=false) {
   using namespace MotionReplay;
   // Fixed camera/scale and fused orientation only. Cached geometry lives off
   // the UI task stack; no live IMU, acquisition, travel or height inference.
@@ -35,11 +36,11 @@ inline void spatial(lgfx::LGFXBase &g,const LaunchMotion::Trace &trial,
   static constexpr unsigned edges[12][2]={{0,1},{1,2},{2,3},{3,0},{4,5},{5,6},{6,7},{7,4},{0,4},{1,5},{2,6},{3,7}};
   // Quiet rear edges, brighter near edges, a stationary mid-height plane and
   // a tiny up arrow give a gravity reference without obscuring the body.
-  for(const auto &e:edges)line(cube.corner(e[0]),cube.corner(e[1]),0x18c3);
-  for(const unsigned i:{0u,1u,5u,4u})line(cube.corner(i),cube.corner((i+1)%4+(i>=4?4:0)),0x39e7);
-  line({-.84f,-.84f,0},{.84f,-.84f,0},0x2965);
-  line({.84f,-.84f,0},{.84f,.84f,0},0x2965);
-  g.drawLine(9,top+20,9,top+5,0x7bef);g.drawLine(9,top+5,6,top+9,0x7bef);g.drawLine(9,top+5,12,top+9,0x7bef);
+  for(const auto &e:edges)line(cube.corner(e[0]),cube.corner(e[1]),c.sceneRear);
+  for(const unsigned i:{0u,1u,5u,4u})line(cube.corner(i),cube.corner((i+1)%4+(i>=4?4:0)),c.faint);
+  line({-.84f,-.84f,0},{.84f,-.84f,0},c.scenePlane);
+  line({.84f,-.84f,0},{.84f,.84f,0},c.scenePlane);
+  g.drawLine(9,top+20,9,top+5,c.muted);g.drawLine(9,top+5,6,top+9,c.muted);g.drawLine(9,top+5,12,top+9,c.muted);
   progress=std::max(0.0f,std::min(1.0f,progress));
   // Full recorded context at original speed. Start/End circles retain optical
   // onset/end tilt, independent of the pre/post context shown in the replay.
@@ -55,7 +56,8 @@ inline void spatial(lgfx::LGFXBase &g,const LaunchMotion::Trace &trial,
   };
   static constexpr unsigned faces[6][4]={{0,3,7,4},{1,2,6,5},{0,1,5,4},{3,2,6,7},{0,1,2,3},{4,5,6,7}};
   static constexpr Vec normal[6]={{-1,0,0},{1,0,0},{0,-1,0},{0,1,0},{0,0,-1},{0,0,1}};
-  // Blue screen, violet back and dark sides provide front/back identity.
+  // Blue screen, violet back and dark sides provide front/back identity: the
+  // StickS3's own colors, the same in every theme.
   static constexpr uint16_t colors[6]={0x1947,0x2169,0x298a,0x298a,0x50ea,0x0396};
   for(unsigned f=0;f<6;++f){const auto n=rotate(pose,normal[f]);if(n.x-n.y+n.z>0)face(faces[f][0],faces[f][1],faces[f][2],faces[f][3],colors[f]);}
   for(const auto &e:edges)line(body(pose,e[0]),body(pose,e[1]),0x5dff);
@@ -65,7 +67,7 @@ inline void spatial(lgfx::LGFXBase &g,const LaunchMotion::Trace &trial,
   auto hardware=[&](Vec v){return rotate(pose,{v.x*hardwareSign,v.y*hardwareSign,v.z});};
   // Thick white USB cap remains identifiable even when the screen faces away.
   const Vec usbA=project(hardware({-.4f,-.65f,0})),usbB=project(hardware({.4f,-.65f,0}));
-  for(int offset=-1;offset<=1;++offset)g.drawLine(lroundf(usbA.x),lroundf(usbA.y)+offset,lroundf(usbB.x),lroundf(usbB.y)+offset,TFT_WHITE);
+  for(int offset=-1;offset<=1;++offset)g.drawLine(lroundf(usbA.x),lroundf(usbA.y)+offset,lroundf(usbB.x),lroundf(usbB.y)+offset,Palette::WHITE);
   // An inset rectangle identifies the screen; omit it when looking at the back.
   const auto front=rotate(pose,{0,0,1});
   if(front.x-front.y+front.z>0) {
@@ -76,34 +78,34 @@ inline void spatial(lgfx::LGFXBase &g,const LaunchMotion::Trace &trial,
 
 inline void feedback(lgfx::LGFXBase &g,const LaunchMotion::Trace &trial,
                      bool capturing,bool demo=false,float progress=1,bool flipEnabled=false,
-                     uint16_t accent=TFT_CYAN,bool best=false) {
+                     const Palette::Colors &c=Palette::builtIn(0x07ff,true),bool best=false) {
   const int cx=g.width()/2;char text[64];
   g.setTextDatum(top_center);
-  g.setTextColor(demo?TFT_ORANGE:best?accent:TFT_DARKGREY,TFT_BLACK);g.drawString(demo?"DEMO":best?"NEW BEST":"Last launch",cx,2,1);
-  snprintf(text,sizeof(text),"%.0f RPM",trial.rpm);g.setTextColor(accent,TFT_BLACK);
+  g.setTextColor(demo?c.warning:best?c.accent:c.muted,c.background);g.drawString(demo?"DEMO":best?"NEW BEST":"Last launch",cx,2,1);
+  snprintf(text,sizeof(text),"%.0f RPM",trial.rpm);g.setTextColor(c.accent,c.background);
   g.drawString(text,cx,17,g.textWidth(text,&fonts::Font4)<=g.width()-6?4:2);
   if(trial.valid() && trial.fused && !capturing) {
-    spatial(g,trial,49,112,progress,flipEnabled);
+    spatial(g,trial,49,112,c,progress,flipEnabled);
     // A full-scale reading or a bridged short gap is approximate: still show it, marked.
-    g.setTextColor(trial.approximate()?TFT_ORANGE:TFT_DARKGREY,TFT_BLACK);
+    g.setTextColor(trial.approximate()?c.warning:c.muted,c.background);
     g.drawString(trial.approximate()?"Tilt approx.":"Tilt replay",cx,164,1);
-    g.drawFastHLine(26,178,83,0x39e7);
-    g.fillCircle(26+lroundf(std::max(0.0f,std::min(1.0f,progress))*82),178,2,accent);
+    g.drawFastHLine(26,178,83,c.faint);
+    g.fillCircle(26+lroundf(std::max(0.0f,std::min(1.0f,progress))*82),178,2,c.accent);
   } else {
     // Keep the graph area quiet when capture is pending or unavailable.
-    g.drawRect(cx-39,71,79,79,TFT_DARKGREY);
-    g.setTextColor(TFT_DARKGREY,TFT_BLACK);g.drawString(capturing?"Capturing":unavailableTilt(trial.quality),cx,104,1);
+    g.drawRect(cx-39,71,79,79,c.muted);
+    g.setTextColor(c.muted,c.background);g.drawString(capturing?"Capturing":unavailableTilt(trial.quality),cx,104,1);
   }
   for(unsigned i=0;i<2;++i) {
     const int bx=i?99:36,by=211,radius=17;
     const auto level=StickS3Level::forDisplay(i?trial.endLevel:trial.startLevel,flipEnabled);
-    g.setTextColor(TFT_DARKGREY,TFT_BLACK);g.drawString(i?"End":"Start",bx,183,1);
-    g.drawCircle(bx,by,radius,TFT_DARKGREY);g.drawFastHLine(bx-radius+2,by,2*radius-3,TFT_DARKGREY);
-    g.drawFastVLine(bx,by-radius+2,2*radius-3,TFT_DARKGREY);
+    g.setTextColor(c.muted,c.background);g.drawString(i?"End":"Start",bx,183,1);
+    g.drawCircle(bx,by,radius,c.muted);g.drawFastHLine(bx-radius+2,by,2*radius-3,c.muted);
+    g.drawFastVLine(bx,by-radius+2,2*radius-3,c.muted);
     if(level.valid() && trial.fused && !capturing) {
-      const auto color=level.degrees<=2?accent:TFT_ORANGE;
+      const auto color=level.degrees<=2?c.accent:c.warning;
       g.fillCircle(bx+lroundf(level.right*13),by+lroundf(level.down*13),4,color);
-    } else g.drawFastHLine(bx-3,by,7,TFT_DARKGREY);
+    } else g.drawFastHLine(bx-3,by,7,c.muted);
   }
 }
 inline void makeDemo(LaunchMotion::Trace &t,bool reference) {

@@ -318,6 +318,21 @@ LOOP_HELPER static void hilCommand(char *line) {
     powerRecord(PowerDiagnostics::Sample);lastPowerSaveTry=millis()-300000;
     Hil::reply("HIL_OK powerlog dirty=%d ready=%d\n",powerLogDirty,powerLogReady);return;
   }
+  if(!strcmp(cmd,"reboot")) {
+    // A restart through the normal boot path (the custom theme scenario).
+    Hil::replyLine("HIL_REBOOT");UsbTx::drain(200);delay(100);ESP.restart();return;
+  }
+  if(!strcmp(cmd,"themecorrupt")) {
+    // Damages the stored custom themes record, inside an ADC checkpoint as
+    // every flash write is; the next boot must fall back to the default.
+    const auto s=acquisition.snapshot();bool ok=false;
+    if(acquisition.request(Action::IdleCheckpointBegin,s.launches)) {
+      Preferences store;uint8_t junk[Themes::Library::IMAGE_BYTES];std::memset(junk,0x5a,sizeof(junk));
+      ok=store.begin(ThemeStore::SPACE,false) && store.putBytes(ThemeStore::KEY,junk,sizeof(junk))==sizeof(junk);store.end();
+      acquisition.request(Action::CheckpointEnd);
+    }
+    Hil::reply("HIL_OK themecorrupt ok=%d\n",ok);return;
+  }
   if(!strcmp(cmd,"home")) {
     if(controls.page==Controls::Page::Edit)cancelSettingEdit();
     controls.page=Controls::Page::Main;syncNavigation();

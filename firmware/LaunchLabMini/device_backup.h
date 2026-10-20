@@ -12,16 +12,21 @@
 #include "rpm_estimator.h"
 #include "sensor_profile.h"
 #include "mount_orientation.h"
+#include "theme_library.h"
 
 // A portable copy of everything a player would miss after a crash or on a new
-// M5: history, personal bests, appearance, the last recap and settings. Bench
+// M5: history, personal bests, appearance, custom themes, the last recap and
+// settings. Bench
 // settings (sensor GPIO, 5 V output) and the power log are device-specific
 // and stay out. Pure data: encoding, validation and the USB text transfer.
 // The sketch applies a restore inside its ADC-owned idle checkpoint.
 namespace DeviceBackup {
-constexpr uint32_t MAGIC=0x4b424c4c,FORMAT=1; // "LLBK"
+// Format 2 adds the custom themes section. A backup without custom themes,
+// whose look selects a built-in, is still written as format 1, so firmware
+// and hosts that predate custom themes keep reading it; both formats restore.
+constexpr uint32_t MAGIC=0x4b424c4c,FORMAT=2,LEGACY_FORMAT=1; // "LLBK"
 constexpr unsigned HEADER_BYTES=44,RUNTIME_BYTES=32;
-enum Section:uint8_t {Practice=1,Look=2,Bests=3,Motion=4,Settings=5};
+enum Section:uint8_t {Practice=1,Look=2,Bests=3,Motion=4,Settings=5,CustomThemes=6};
 
 struct UserSettings {
   uint8_t sleepMinutes=InactivityTimer::DEFAULT_MINUTES,brightness=40;
@@ -39,11 +44,17 @@ struct Contents {
   bool hasMotion=false;
   LaunchMotion::Trace motion;
   UserSettings settings;
+  // Format 2: the custom themes record. A restore replaces the device's
+  // themes only when the backup carries them.
+  bool hasThemes=false;
+  Themes::Library themes;
   char runtime[RUNTIME_BYTES+1]={};
+  uint32_t format()const{return hasThemes || Appearance::custom(look.theme)?FORMAT:LEGACY_FORMAT;}
 };
 
 constexpr unsigned SETTINGS_BYTES=8;
-constexpr unsigned MAX_BYTES=HEADER_BYTES+5*8+PracticeHistory::IMAGE_BYTES+16+32+LaunchMotion::IMAGE_BYTES+SETTINGS_BYTES+4;
+constexpr unsigned MAX_BYTES=HEADER_BYTES+6*8+PracticeHistory::IMAGE_BYTES+16+32+LaunchMotion::IMAGE_BYTES+SETTINGS_BYTES+
+  Themes::Library::IMAGE_BYTES+4;
 using Buffer=std::array<uint8_t,MAX_BYTES>;
 
 inline void put32(uint8_t *p,uint32_t v){for(unsigned i=0;i<4;++i)p[i]=uint8_t(v>>(8*i));}
@@ -68,7 +79,9 @@ inline size_t encode(const Contents &c,const char *runtime,Buffer &out) {
   const uint8_t settings[SETTINGS_BYTES]={c.settings.sleepMinutes,c.settings.brightness,uint8_t(c.settings.rpmMethod),
     uint8_t(c.settings.sensorProfile),uint8_t(c.settings.flipped),uint8_t(c.settings.mount),0,0};
   section(Settings,settings,sizeof(settings));
-  put32(out.data(),MAGIC);put32(out.data()+4,FORMAT);put32(out.data()+8,uint32_t(p+4));
+  const uint32_t format=c.format();
+  if(format==FORMAT){Themes::Library::Image themes;c.themes.encode(themes);section(CustomThemes,themes.data(),themes.size());}
+  put32(out.data(),MAGIC);put32(out.data()+4,format);put32(out.data()+8,uint32_t(p+4));
   std::strncpy(reinterpret_cast<char *>(out.data()+12),runtime,RUNTIME_BYTES);
   out[12+RUNTIME_BYTES-1]=0;
   put32(out.data()+p,checksum(out.data(),p));
@@ -77,8 +90,10 @@ inline size_t encode(const Contents &c,const char *runtime,Buffer &out) {
 
 // All-or-nothing: every record must pass its own validation, each section may
 // appear once, and history, appearance, bests and settings are all required.
+// Custom themes appear in format 2 only, and always.
 inline bool decode(const uint8_t *data,size_t n,Contents &out) {
-  if(n<HEADER_BYTES+4 || n>MAX_BYTES || get32(data)!=MAGIC || get32(data+4)!=FORMAT || get32(data+8)!=n ||
+  const uint32_t format=n>=8?get32(data+4):0;
+  if(n<HEADER_BYTES+4 || n>MAX_BYTES || get32(data)!=MAGIC || (format!=FORMAT && format!=LEGACY_FORMAT) || get32(data+8)!=n ||
      get32(data+n-4)!=checksum(data,n-4) || std::memchr(data+12,0,RUNTIME_BYTES)==nullptr)return false;
   auto c=std::unique_ptr<Contents>(new(std::nothrow) Contents);
   if(!c)return false;
@@ -87,12 +102,14 @@ inline bool decode(const uint8_t *data,size_t n,Contents &out) {
   while(p<n-4) {
     if(n-4-p<8 || data[p+1] || data[p+2] || data[p+3])return false;
     const uint8_t id=data[p];const uint32_t length=get32(data+p+4);const uint8_t *body=data+p+8;
-    if(length>n-4-p-8 || id<Practice || id>Settings || (seen&(1u<<id)))return false;
+    const uint8_t last=format==FORMAT?CustomThemes:Settings;
+    if(length>n-4-p-8 || id<Practice || id>last || (seen&(1u<<id)))return false;
     seen|=1u<<id;
     bool ok=false;
     switch(Section(id)) {
       case Practice:ok=c->practice.decode(body,length);break;
       case Look:ok=c->look.decode(body,length);break;
+      case CustomThemes:ok=c->themes.decode(body,length);c->hasThemes=ok;break;
       case Bests:ok=c->bests.decode(body,length);break;
       case Motion:{
         if(length!=LaunchMotion::IMAGE_BYTES)break;
@@ -116,7 +133,8 @@ inline bool decode(const uint8_t *data,size_t n,Contents &out) {
     if(!ok)return false;
     p+=8+length;
   }
-  const unsigned required=(1u<<Practice)|(1u<<Look)|(1u<<Bests)|(1u<<Settings);
+  // Format 2 exists to carry the custom themes, so it must.
+  const unsigned required=(1u<<Practice)|(1u<<Look)|(1u<<Bests)|(1u<<Settings)|(format==FORMAT?1u<<CustomThemes:0u);
   if(p!=n-4 || (seen&required)!=required)return false;
   out=*c;return true;
 }
@@ -157,13 +175,15 @@ inline bool base64Decode(const char *text,size_t n,uint8_t *out,size_t capacity,
   return true;
 }
 
-// Collects a restore sent as base64 lines ending in a "." line. Bounded in
-// size and time; any stray character abandons the transfer.
-class Receiver {
+// Collects a transfer sent as base64 lines ending in a "." line: a restore,
+// or a theme request. Bounded in size and time; any stray character abandons
+// the transfer.
+enum class TransferEvent {None,Chunk,Complete,Error};
+template<unsigned CAPACITY> class LineReceiver {
 public:
   static constexpr uint32_t IDLE_MS=15000;
-  enum class Event {None,Chunk,Complete,Error};
-  // Reset in place: a `*this=Receiver{}` temporary would put the 5 KB buffer on the stack.
+  using Event=TransferEvent;
+  // Reset in place: a `*this=LineReceiver{}` temporary would put the 5 KB buffer on the stack.
   void start(uint32_t now){length_=line_=0;dot_=false;error_="";active_=true;last_=now;}
   void cancel(){active_=false;}
   bool active()const{return active_;}
@@ -182,16 +202,17 @@ public:
     if(c=='.' && !line_ && !dot_){dot_=true;return Event::None;}
     if(dot_)return fail("bad_terminator");
     if(sextet(c)<0 && c!='=')return fail("bad_character");
-    if(length_>=TEXT_BYTES)return fail("too_large");
+    if(length_>=CAPACITY)return fail("too_large");
     text_[length_++]=c;++line_;return Event::None;
   }
   bool take(uint8_t *out,size_t capacity,size_t &written)const{return base64Decode(text_,length_,out,capacity,written);}
 private:
   Event fail(const char *why){error_=why;active_=false;return Event::Error;}
-  char text_[TEXT_BYTES]={};
+  char text_[CAPACITY]={};
   unsigned length_=0,line_=0;
   uint32_t last_=0;
   bool active_=false,dot_=false;
   const char *error_="";
 };
+using Receiver=LineReceiver<TEXT_BYTES>;
 }

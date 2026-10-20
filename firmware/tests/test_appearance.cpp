@@ -49,7 +49,7 @@ int main(){
   // Checksummed invalid IDs are rejected without changing the current config.
   {Config kept;assert(kept.select(Theme::TyrannoOrange,Effect::Lightning,Sound::High));
    Config::Image good;kept.encode(good);
-   for(unsigned invalid:{THEMES,255u}) {
+   for(unsigned invalid:{ALL_THEMES,255u}) {
      assert(!kept.select(Theme(invalid),Effect::Off));
      auto bad=good;bad[8]=invalid;put32(bad.data()+12,hash(bad.data(),12));
      assert(!kept.decode(bad.data(),bad.size()));Config::Image after;kept.encode(after);assert(after==good);
@@ -125,6 +125,24 @@ int main(){
     if(Effect(mode)==Effect::Sparkles || Effect(mode)==Effect::Shockwave || Effect(mode)==Effect::Lightning)assert(lower);
     assert(maxPlots<=12000);
   }
+  // A custom theme's background: the same pixels change as on black, since
+  // ink is anything not of the background color; untouched pixels keep it.
+  {
+    const uint16_t bg=0x0841;std::array<uint16_t,135*240> themed=base;
+    for(auto &p:themed)if(!p)p=swap(bg);
+    for(unsigned mode=0;mode<DRAWN;++mode)for(unsigned ms:{40u,300u,700u,1200u}) {
+      auto black=base;renderer.draw({black.data(),135,240},Effect(mode),ms,accent(Theme::Mint));
+      auto out=themed;renderer.draw({out.data(),135,240},Effect(mode),ms,accent(Theme::Mint),BestEffectUI::Renderer::Anchor(),bg);
+      for(int i=0;i<135*240;++i)assert((out[i]!=themed[i])==(black[i]!=base[i]));
+    }
+  }
+  // Custom theme IDs follow the built-ins in the same record, which firmware
+  // without custom themes rejects (falling back to its other slot or defaults).
+  {Config c;for(unsigned theme=THEMES;theme<ALL_THEMES;++theme) {
+     assert(custom(Theme(theme)) && c.select(Theme(theme),Effect::Orbit));
+     Config::Image image;c.encode(image);assert(image[8]==theme);Config back;assert(back.decode(image.data(),16) && back.theme==Theme(theme));
+   }
+   assert(!custom(Theme::TyrannoOrange) && !custom(Theme(ALL_THEMES)));}
   // Unsupported canvases are left alone.
   {auto out=base;renderer.draw({out.data(),240,135},Effect::Orbit,100,accent(Theme::Classic));assert(out==base);
    renderer.draw({nullptr,135,240},Effect::Orbit,100,accent(Theme::Classic));}

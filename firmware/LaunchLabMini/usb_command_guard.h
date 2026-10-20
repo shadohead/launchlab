@@ -23,7 +23,7 @@ public:
   static constexpr uint32_t QUIET_MS=20,TYPING_MS=2000;
   static constexpr unsigned MAX=7;
   static bool immediate(char c){return c=='p' || c=='P' || c=='C' || c=='K' || c=='R';}
-  static bool guarded(char c){return c && strchr("OSxgiaodhceQEqbnutyzvwjs",c);}
+  static bool guarded(char c){return c && strchr("OSxgiaodhceQEqbnutyzvwjsLT",c);}
   uint32_t rejected=0;
   // A byte for the command parser. True when `out` holds a command to run.
   bool feed(char c,uint32_t now,char *out) {

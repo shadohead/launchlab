@@ -51,6 +51,7 @@ PREFIX = r'''
 #include "sensor_profile_setting.h"
 #include "mount_orientation.h"
 #include "device_backup.h"
+#include "theme_library.h"
 #include "launch_motion.h"
 #include "Button_Class.hpp"
 #define M5UNIFIED_IMPLEMENTATION
@@ -109,7 +110,7 @@ static const char *tournamentViewName(){return "recording_only";}
 static RpmEstimator::Mode rpmEstimator=RpmEstimator::DEFAULT_MODE;
 static StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;
 static MountOrientation::Mode mountMode=MountOrientation::Mode::Top;
-static Appearance::Config appearance;static Appearance::Celebration bestEffect,editorEffect;
+static Appearance::Config appearance;static Appearance::Celebration bestEffect,editorEffect;static Themes::Library themeLibrary;
 static InactivityTimer inactivity;static StickS3Level level;static StickS3Level::Reading drawnLevel;
 static UsbHostAwake usbAwake;
 struct {uint32_t magic=123;}sleepReceipt;
@@ -124,7 +125,7 @@ struct Receiver {
   bool receiving=false;unsigned cancellations=0;
   bool active()const{return receiving;}void cancel(){receiving=false;++cancellations;}
   void start(uint32_t){receiving=true;normal();}
-}restoreRx;
+}restoreRx,themeRx;
 enum class Action{IdleCheckpointBegin,CheckpointEnd,Pin,Reset};
 struct Snapshot {
   AnalogTachometer::Phase phase=AnalogTachometer::Phase::Ready;
@@ -172,6 +173,8 @@ static void previewSetting(){normal();}static void previewSound(){normal();}stat
 static void commitSetting(){normal();}static void cancelSettingEdit(){normal();}
 static void toggleFeedback(){normal();}static void browseOlder(){normal();}static void newSession(){normal();}
 static void pollRestore(const Snapshot &){normal();restoreRx.receiving=false;}
+static void pollThemeRequest(const Snapshot &){normal();themeRx.receiving=false;}
+static void listThemes(){normal();}static void themeReply(){}
 static void exportPowerLog(){normal();}static void toggleHistory(){normal();}static void nextView(){normal();}
 static void exportMotion(){normal();}static void exportHistory(){normal();}static void exportBackup(){normal();}
 static void previewHistory(){normal();}static void checkStorage(){normal();}static void checkMotionStorage(){normal();}

@@ -76,6 +76,24 @@ static struct Receiver {
   bool active()const{return receiving;}void cancel(){receiving=false;}
   void start(uint32_t){receiving=true;text.clear();act("restore_start");}
 }restoreRx;
+// Theme requests: the same framing as a restore.
+namespace Themes {struct Request {static constexpr unsigned BYTES=44;};}
+static struct ThemeReceiver {
+  bool receiving=false;std::string text;unsigned received=0,errors=0;
+  bool active()const{return receiving;}void cancel(){receiving=false;}
+  void start(uint32_t){receiving=true;text.clear();act("theme_start");}
+}themeRx;
+static void themeReply(){}
+static void listThemes(){act("theme_list");}
+static void pollThemeRequest(const Snapshot &) {
+  while(themeRx.active() && Serial.available()) {
+    const char c=Serial.read();
+    const bool b64=(c>='A' && c<='Z')||(c>='a' && c<='z')||(c>='0' && c<='9')||c=='+'||c=='/'||c=='=';
+    if(c=='.'){themeRx.receiving=false;++themeRx.received;continue;}
+    if(b64 || c=='\n'){themeRx.text+=c;continue;}
+    themeRx.receiving=false;++themeRx.errors;
+  }
+}
 static void pollRestore(const Snapshot &) {
   while(restoreRx.active() && Serial.available()) {
     const char c=Serial.read();
@@ -118,7 +136,7 @@ static uint32_t loopRng=11;
 static void pass(){pollCommands(Snapshot{});loopRng=loopRng*1664525u+1013904223u;clockMs+=5+(loopRng>>24)%31;}
 static void send(const std::string &bytes){for(char c:bytes)Serial.input.push_back(c);while(Serial.available())pass();}
 static void idle(unsigned ms){for(unsigned t=0;t<ms;t+=5)pass();}
-static void reset(){acted.clear();Serial.input.clear();Serial.output.clear();restoreRx={};idle(100);}
+static void reset(){acted.clear();Serial.input.clear();Serial.output.clear();restoreRx={};themeRx={};idle(100);}
 static unsigned harmful() {
   unsigned n=0;
   for(auto &[what,count]:acted)
@@ -132,15 +150,15 @@ int main() {
     reset();
     for(unsigned burst=0;burst<12;++burst) {
       std::string bytes;
-      if(burst%3==1)bytes+="OSxgiaodhceQEqbnutyzvwjs"[next()%24];
+      if(burst%3==1)bytes+="OSxgiaodhceQEqbnutyzvwjsLT"[next()%26];
       bytes+=char(0x80|next());
       for(unsigned i=0;i<2048;++i) {
         const uint8_t r=next();
-        if(r<10)bytes+=std::string("OOSSxxnnggaa\n")+"OSxgiaodhceQEqbnutyzvwjs"[next()%24]+"\n";
-        else if(r<18)bytes+=std::string(1,"PpKC"[r%4])+"OSxgiaodhceQEqbnutyzvwjs"[next()%24]+"\n";
+        if(r<10)bytes+=std::string("OOSSxxnnggaa\n")+"OSxgiaodhceQEqbnutyzvwjsLT"[next()%26]+"\n";
+        else if(r<18)bytes+=std::string(1,"PpKC"[r%4])+"OSxgiaodhceQEqbnutyzvwjsLT"[next()%26]+"\n";
         else bytes+=char(next());
       }
-      if(burst%3==2)bytes+=std::string("\n")+"OSxgiaodhceQEqbnutyzvwjs"[next()%24];
+      if(burst%3==2)bytes+=std::string("\n")+"OSxgiaodhceQEqbnutyzvwjsLT"[next()%26];
       send(bytes);idle(60+next());
     }
     if(harmful()){for(auto &[w,n]:acted)std::cerr<<w<<"="<<n<<"\n";}
@@ -151,6 +169,12 @@ int main() {
   reset();send("K");idle(100);assert(acted["backup"]==1 && !harmful());
   send("R");send("QUJDRA==\nRUZHSA==\n.\n");idle(50);
   assert(acted["restore_start"]==1 && restoreRx.received==1 && restoreRx.text=="QUJDRA==\nRUZHSA==\n" && !harmful());
+  // The theme editor: L lists, T takes one framed request, each sent standalone.
+  reset();send("L\n");idle(50);assert(acted["theme_list"]==1);
+  reset();send("T\n");idle(50);assert(acted["theme_start"]==1 && themeRx.active());
+  send("TExRAQEA\n.\n");idle(50);assert(!themeRx.active() && themeRx.received==1 && themeRx.text=="TExRAQEA\n" && !themeRx.errors);
+  // Inside a burst neither runs.
+  reset();send("xxLxxTxx");idle(50);assert(!acted.count("theme_list") && !acted.count("theme_start"));
   std::cout<<"updater: K backup and R restore lines intact\n";
   // Tools: a bare letter after a pause, scripted lines, typed keys.
   reset();send("w");idle(30);assert(acted["export"]==1);

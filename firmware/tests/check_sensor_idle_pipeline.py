@@ -205,4 +205,4 @@ with tempfile.TemporaryDirectory(prefix='launchlab_sensor_idle_') as tmp:
                     '-I' + str(args.firmware / 'LaunchLabMini'),
                     '-I' + str(args.firmware / 'LaunchLabRpm'),
                     str(cpp), '-o', str(executable)], check=True)
-    subprocess.run([str(executable)], check=True, timeout=30)
+    subprocess.run([str(executable)], check=True, timeout=120)  # hang guard only

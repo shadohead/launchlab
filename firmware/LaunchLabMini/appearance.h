@@ -15,6 +15,11 @@ enum class Effect:uint8_t {Orbit,Flames,Sparkles,Shockwave,Lightning,Off,Random}
 enum class Sound:uint8_t {Off,Low,High};
 // The first DRAWN effects animate; Off and Random do not themselves.
 constexpr unsigned THEMES=10,EFFECTS=7,DRAWN=5,SOUNDS=3;
+// Theme IDs THEMES.. select the user's custom theme slots (theme_library.h).
+// Firmware without custom themes rejects such a record and falls back to its
+// other slot or the defaults, as it does for any newer record.
+constexpr unsigned CUSTOM_THEMES=4,ALL_THEMES=THEMES+CUSTOM_THEMES;
+inline bool custom(Theme t){return unsigned(t)>=THEMES && unsigned(t)<ALL_THEMES;}
 inline bool drawn(unsigned e){return e<DRAWN;}
 inline const char *label(Theme t){static const char *s[]={"Pegasus Cyan","Wolf Mint","Wizard Gold","Meteor Purple","Golem Green","Phoenix Red","Cobalt Blue","Shark Pink","Valkyrie White","Tyranno Orange"};return unsigned(t)<THEMES?s[unsigned(t)]:s[0];}
 inline const char *label(Effect e){static const char *s[]={"Orbit","Flames","Sparkles","Shockwave","Lightning","Off","Random"};return unsigned(e)<EFFECTS?s[unsigned(e)]:s[0];}
@@ -38,7 +43,7 @@ struct Config {
   uint32_t generation()const{return revision;}
   bool select(Theme t,Effect e){return select(t,e,sound);}
   bool select(Theme t,Effect e,Sound s){
-    if(unsigned(t)>=THEMES || unsigned(e)>=EFFECTS || unsigned(s)>=SOUNDS)return false;
+    if(unsigned(t)>=ALL_THEMES || unsigned(e)>=EFFECTS || unsigned(s)>=SOUNDS)return false;
     if(t!=theme || e!=effect || s!=sound){theme=t;effect=e;sound=s;++revision;}return true;
   }
   // Byte 10 holds the sound level; it was reserved as zero before, so older
@@ -46,7 +51,7 @@ struct Config {
   // record with sound on and falls back to its other slot or defaults.
   void encode(Image &b)const{b={};put32(b.data(),0x01414c4c);put32(b.data()+4,revision);b[8]=uint8_t(theme);b[9]=uint8_t(effect);b[10]=uint8_t(sound);put32(b.data()+12,hash(b.data(),12));}
   bool decode(const uint8_t *b,size_t n){
-    if(n!=16 || get32(b)!=0x01414c4c || get32(b+12)!=hash(b,12) || b[8]>=THEMES || b[9]>=EFFECTS || b[10]>=SOUNDS || b[11])return false;
+    if(n!=16 || get32(b)!=0x01414c4c || get32(b+12)!=hash(b,12) || b[8]>=ALL_THEMES || b[9]>=EFFECTS || b[10]>=SOUNDS || b[11])return false;
     revision=get32(b+4);theme=Theme(b[8]);effect=Effect(b[9]);sound=Sound(b[10]);return true;
   }
 };

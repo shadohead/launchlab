@@ -71,6 +71,18 @@ int main() {
     assert(editor.valueFonts.size()==1 && editor.valueFonts[0]==2);
     assert(editor.valueEdges[0]>=8 && editor.valueEdges[1]<=127);++renders;
   }
+  // Custom theme names (up to 14 characters) keep the built-ins' size when
+  // they fit and drop to the small font when not, inside the card either way.
+  for(const char *name:{"Dragoon Storm","WWWWWWWWWWWWWW","A"}) {
+    static const char *shown;shown=name;
+    ControlsUI::themeLabel=[](Appearance::Theme t){return Appearance::custom(t)?shown:Appearance::label(t);};
+    State state;state.setting=unsigned(Setting::Theme);state.draft=uint8_t(Appearance::THEMES);values[state.setting]=state.draft;
+    lgfx::LGFXBase row;ControlsUI::settings(row,state,values);assert(row.footers==1);++renders;
+    lgfx::LGFXBase editor;ControlsUI::editor(editor,state,false,false);
+    assert(editor.valueFonts.size()==1 && editor.valueFonts[0]==(std::strlen(name)*8<=119?2:1));
+    assert(editor.valueEdges[0]>=8 && editor.valueEdges[1]<=127);++renders;
+  }
+  ControlsUI::themeLabel=nullptr;values[unsigned(Setting::Theme)]=0;
   for(bool start:{false,true}){lgfx::LGFXBase g;ControlsUI::session(g,start);assert(g.footers==1);++renders;}
   for(const char *label:{"Enter tournament","Exit tournament","Cancel change","Back"})for(unsigned elapsed:{0u,999u,1000u,10000u}) {
     lgfx::LGFXBase g;ControlsUI::hold(g,label,elapsed,1000);assert(g.footers==1);++renders;

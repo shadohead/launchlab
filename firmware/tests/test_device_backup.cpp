@@ -2,6 +2,7 @@
 #include "../LaunchLabMini/appearance_store.h"
 #include "../LaunchLabMini/motion_store.h"
 #include "../LaunchLabMini/practice_store.h"
+#include "../LaunchLabMini/theme_store.h"
 #include <cassert>
 #include <iostream>
 #include <string>
@@ -31,6 +32,11 @@ static bool same(const DeviceBackup::Contents &a,const DeviceBackup::Contents &b
   const auto &s=a.settings,&t=b.settings;
   return s.sleepMinutes==t.sleepMinutes && s.brightness==t.brightness && s.rpmMethod==t.rpmMethod && s.sensorProfile==t.sensorProfile && s.flipped==t.flipped && s.mount==t.mount;
 }
+static Palette::Custom custom(const char *name,uint16_t accent) {
+  Palette::Custom t;std::strncpy(t.name,name,Palette::Custom::MAX_NAME);
+  const uint16_t roles[Palette::ROLES]={0x0841,0xffff,0x8c71,accent,accent,0xfda0,0x07e0,0xf800};
+  std::memcpy(t.role,roles,sizeof(roles));assert(t.valid());return t;
+}
 // Sends text through the receiver the way the web updater does: lines, then ".".
 static DeviceBackup::Receiver::Event transfer(DeviceBackup::Receiver &rx,const std::vector<std::string> &lines,uint32_t &now) {
   rx.start(now);auto last=DeviceBackup::Receiver::Event::None;
@@ -46,6 +52,44 @@ int main() {
   assert(n<=MAX_BYTES && get32(buffer.data()+8)==n);
   Contents decoded;assert(decode(buffer.data(),n,decoded) && same(original,decoded));
   assert(std::string(decoded.runtime)=="0.11.0-sticks3-test");
+  // Without custom themes a backup is still format 1, byte for byte what
+  // 0.13.9 wrote (and the web updater's fixture), so older firmware and an
+  // older updater keep reading it.
+  assert(!original.hasThemes && get32(buffer.data()+4)==LEGACY_FORMAT && n==3936 && checksum(buffer.data(),n)==0x3e6edb68u);
+  assert(!decoded.hasThemes && decoded.themes.empty());
+
+  // Custom themes make it format 2, which always carries their record: two
+  // themes, one selected, round trip exactly.
+  {
+    auto themed=original;themed.hasThemes=true;
+    assert(themed.themes.put(1,custom("Dragoon Storm",0x5c7f)) && themed.themes.put(3,custom("Ember",0xfb20)));
+    assert(themed.look.select(Themes::slotTheme(3),Appearance::Effect::Orbit) && themed.format()==FORMAT);
+    Buffer encoded;const size_t length=encode(themed,"0.14.0-sticks3-test",encoded);
+    assert(get32(encoded.data()+4)==FORMAT && length==n+8+Themes::Library::IMAGE_BYTES);
+    Contents restored;assert(decode(encoded.data(),length,restored) && same(themed,restored));
+    assert(restored.hasThemes && restored.themes==themed.themes && restored.themes.state(1)==Themes::SlotState::Valid);
+    Palette::Custom back;assert(restored.themes.get(3,back) && !std::strcmp(back.name,"Ember") && restored.look.theme==Themes::slotTheme(3));
+    // Every corruption of a format 2 backup is rejected too.
+    for(size_t i=0;i<length;i+=5){auto bad=encoded;bad[i]^=0x20;Contents ignored;assert(!decode(bad.data(),length,ignored));}
+    // Format 1 cannot carry the themes section, and no other format is read.
+    for(uint32_t format:{LEGACY_FORMAT,FORMAT+1}) {
+      auto bad=encoded;put32(bad.data()+4,format);put32(bad.data()+length-4,checksum(bad.data(),length-4));
+      Contents ignored;assert(!decode(bad.data(),length,ignored));
+    }
+    // A format 2 restore replaces the device's themes, even an unreadable record.
+    Preferences::data.clear();Preferences::data["ll-appearancethemes"]={1,2,3};
+    Themes::Library device;ThemeStore store;assert(store.begin(device)==ThemeStore::Status::Unreadable && device.empty());
+    assert(!store.save(restored.themes) && Preferences::data["ll-appearancethemes"].size()==3);
+    assert(store.save(restored.themes,true));
+    Themes::Library reloaded;ThemeStore reader;assert(reader.begin(reloaded)==ThemeStore::Status::Loaded && reloaded==restored.themes);
+  }
+  // A custom selection with no themes left is format 2 with an empty record,
+  // never a format 1 backup older firmware would half-read.
+  {
+    auto orphan=original;assert(orphan.look.select(Themes::slotTheme(0),Appearance::Effect::Off) && !orphan.hasThemes);
+    Buffer encoded;const size_t length=encode(orphan,"x",encoded);assert(get32(encoded.data()+4)==FORMAT);
+    Contents restored;assert(decode(encoded.data(),length,restored) && restored.hasThemes && restored.themes.empty());
+  }
 
   // Expanded accents travel through the complete USB backup, including the
   // highest new ID and either saved Flip switch value.
@@ -91,7 +135,8 @@ int main() {
   assert(same(rejected,untouched));
   assert(!decode(buffer.data(),n-1,rejected) && !decode(buffer.data(),HEADER_BYTES,rejected));
   {
-    auto bad=buffer;put32(bad.data()+4,2);put32(bad.data()+n-4,checksum(bad.data(),n-4));assert(!decode(bad.data(),n,rejected));
+    // Format 2 without its themes section is not a backup either.
+    auto bad=buffer;put32(bad.data()+4,FORMAT);put32(bad.data()+n-4,checksum(bad.data(),n-4));assert(!decode(bad.data(),n,rejected));
   }
   {
     // A valid checksum cannot rescue an invalid setting.
@@ -124,6 +169,22 @@ int main() {
   rx.start(100);assert(!rx.timedOut(100+Receiver::IDLE_MS-1) && rx.timedOut(100+Receiver::IDLE_MS));
   rx.start(0);assert(rx.feed('Q',1)==Receiver::Event::None && rx.feed('\n',2)==Receiver::Event::Chunk && rx.received()==1);
   assert(rx.feed('.',3)==Receiver::Event::None && rx.feed('\n',4)==Receiver::Event::Complete && !rx.take(back.data(),back.size(),written));
+
+  // A theme request is one short framed line; the theme receiver is bounded to it.
+  {
+    DeviceBackup::LineReceiver<(Themes::Request::BYTES+2)/3*4> themeRx;
+    Themes::Request request;request.op=Themes::Request::Op::Put;request.argument=2;request.theme=custom("Wolf Night",0x8ff9);
+    uint8_t bytes[Themes::Request::BYTES];request.encode(bytes);
+    std::vector<std::string> text;base64Lines(bytes,sizeof(bytes),96,[&](const char *line){text.push_back(line);});
+    assert(text.size()==1 && text[0].size()==60);
+    uint32_t at=0;themeRx.start(at);for(char ch:text[0]+"\n.\n")event=themeRx.feed(ch,++at);
+    uint8_t back[Themes::Request::BYTES];size_t got=0;Themes::Request decoded;
+    assert(event==Receiver::Event::Complete && themeRx.take(back,sizeof(back),got) && decoded.decode(back,got));
+    assert(decoded.op==request.op && decoded.argument==2 && !std::strcmp(decoded.theme.name,"Wolf Night"));
+    themeRx.start(0);event=Receiver::Event::None;
+    for(unsigned i=0;i<=60 && event!=Receiver::Event::Error;++i)event=themeRx.feed('A',1);
+    assert(event==Receiver::Event::Error && std::string(themeRx.error())=="too_large");
+  }
 
   // Restoring an older backup onto a device whose stores hold newer generations:
   // the restored records must be the ones loaded after the restart.

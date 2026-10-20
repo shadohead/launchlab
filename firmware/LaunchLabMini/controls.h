@@ -13,6 +13,9 @@ struct State {
   Page page=Page::Main;
   uint8_t menu=0,history=0,setting=0,draft=0;
   bool startSession=false;
+  // Valid custom theme slots (bit i: theme THEMES+i), kept current by the
+  // sketch; Theme cycles through the built-ins and then these.
+  uint8_t customThemes=0;
   bool autoRecap()const{return page==Page::Main;}
   Effect tapA() {
     switch(page) {
@@ -52,7 +55,10 @@ struct State {
           case Setting::Sleep:draft=draft>=10?1:draft+1;break;
           case Setting::Rpm:case Setting::Flip:case Setting::Sensor:case Setting::Mount:draft=!draft;break;
           case Setting::Brightness:draft=draft>=100?10:draft+10;break;
-          case Setting::Theme:draft=(draft+1)%Appearance::THEMES;break;
+          case Setting::Theme:
+            do draft=(draft+1)%Appearance::ALL_THEMES;
+            while(draft>=Appearance::THEMES && !((customThemes>>(draft-Appearance::THEMES))&1u));
+            break;
           case Setting::BestEffect:draft=uint8_t(Appearance::nextChoice(Appearance::Effect(draft)));break;
           case Setting::Sound:draft=(draft+1)%3;break;
           case Setting::WipeAll:return Effect::None;

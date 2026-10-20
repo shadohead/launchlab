@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "roles": ["background","text","muted","accent","number","warning","ready","alert"],
+  "rules": {"text": 450, "muted": 300, "maxBackgroundLuminance": 50000, "maxName": 14, "slots": 4, "builtIns": 10},
+  "builtIns": [
+    {"id": 0, "name": "Pegasus Cyan", "colors": {"background":0,"text":65535,"muted":31727,"faint":14823,"accent":2047,"number":65535,"warning":64928,"ready":2016,"alert":63488,"sceneRear":6339,"scenePlane":10597}},
+    {"id": 1, "name": "Wolf Mint", "colors": {"background":0,"text":65535,"muted":31727,"faint":14823,"accent":36857,"number":36857,"warning":64928,"ready":2016,"alert":63488,"sceneRear":6339,"scenePlane":10597}},
+    {"id": 2, "name": "Wizard Gold", "colors": {"background":0,"text":65535,"muted":31727,"faint":14823,"accent":65296,"number":65296,"warning":64928,"ready":2016,"alert":63488,"sceneRear":6339,"scenePlane":10597}},
+    {"id": 3, "name": "Meteor Purple", "colors": {"background":0,"text":65535,"muted":31727,"faint":14823,"accent":50623,"number":50623,"warning":64928,"ready":2016,"alert":63488,"sceneRear":6339,"scenePlane":10597}},
+    {"id": 4, "name": "Golem Green", "colors": {"background":0,"text":65535,"muted":31727,"faint":14823,"accent":30694,"number":30694,"warning":64928,"ready":2016,"alert":63488,"sceneRear":6339,"scenePlane":10597}},
+    {"id": 5, "name": "Phoenix Red", "colors": {"background":0,"text":65535,"muted":31727,"faint":14823,"accent":64138,"number":64138,"warning":64928,"ready":2016,"alert":63488,"sceneRear":6339,"scenePlane":10597}},
+    {"id": 6, "name": "Cobalt Blue", "colors": {"background":0,"text":65535,"muted":31727,"faint":14823,"accent":23679,"number":23679,"warning":64928,"ready":2016,"alert":63488,"sceneRear":6339,"scenePlane":10597}},
+    {"id": 7, "name": "Shark Pink", "colors": {"background":0,"text":65535,"muted":31727,"faint":14823,"accent":64415,"number":64415,"warning":64928,"ready":2016,"alert":63488,"sceneRear":6339,"scenePlane":10597}},
+    {"id": 8, "name": "Valkyrie White", "colors": {"background":0,"text":65535,"muted":31727,"faint":14823,"accent":65535,"number":65535,"warning":64928,"ready":2016,"alert":63488,"sceneRear":6339,"scenePlane":10597}},
+    {"id": 9, "name": "Tyranno Orange", "colors": {"background":0,"text":65535,"muted":31727,"faint":14823,"accent":64768,"number":64768,"warning":64928,"ready":2016,"alert":63488,"sceneRear":6339,"scenePlane":10597}}
+  ],
+  "luminance": [[0, 0], [1, 180], [32, 879], [2048, 531], [2113, 2468], [31727, 204675], [14823, 44954], [2047, 787400], [64928, 547744], [2016, 715200], [63488, 212600], [65535, 1000000], [16904, 52959], [27501, 151803]],
+  "contrast": [[0, 1, 100], [1, 32, 101], [32, 2048, 100], [2048, 2113, 103], [2113, 31727, 485], [31727, 14823, 268], [14823, 2047, 881], [2047, 64928, 140], [64928, 2016, 128], [2016, 63488, 291], [63488, 65535, 399], [65535, 16904, 1019], [16904, 27501, 196]],
+  "themes": [
+    {"name": "Dragoon Storm", "roles": [0, 65535, 31727, 23679, 23679, 64928, 2016, 63488], "problem": "none", "failedRole": null, "slot": "AURyYWdvb24gU3Rvcm0AAAAA///ve39cf1yg/eAHAPg=", "colors": {"background":0,"text":65535,"muted":31727,"faint":14823,"accent":23679,"number":23679,"warning":64928,"ready":2016,"alert":63488,"sceneRear":6339,"scenePlane":10597}},
+    {"name": "Night Ember", "roles": [4226, 61277, 33808, 64288, 65535, 65120, 24554, 64073], "problem": "none", "failedRole": null, "slot": "AU5pZ2h0IEVtYmVyAAAAAIIQXe8QhCD7//9g/upfSfo=", "colors": {"background":4226,"text":61277,"muted":33808,"faint":19017,"accent":64288,"number":65535,"warning":65120,"ready":24554,"alert":64073,"sceneRear":8484,"scenePlane":14791}},
+    {"name": "Abyss", "roles": [6, 65535, 23243, 11647, 11647, 64928, 2016, 63488], "problem": "contrast", "failedRole": "muted", "slot": "AUFieXNzAAAAAAAAAAAAAAYA///LWn8tfy2g/eAHAPg=", "colors": {"background":6,"text":65535,"muted":23243,"faint":10600,"accent":11647,"number":11647,"warning":64928,"ready":2016,"alert":63488,"sceneRear":4231,"scenePlane":6375}},
+    {"name": "Abyss", "roles": [6, 65535, 23275, 11647, 11647, 64928, 2016, 63488], "problem": "none", "failedRole": null, "slot": "AUFieXNzAAAAAAAAAAAAAAYA///rWn8tfy2g/eAHAPg=", "colors": {"background":6,"text":65535,"muted":23275,"faint":10600,"accent":11647,"number":11647,"warning":64928,"ready":2016,"alert":63488,"sceneRear":4231,"scenePlane":6407}},
+    {"name": "Grey Day", "roles": [16904, 65535, 50712, 65504, 65504, 64928, 2016, 65535], "problem": "background_too_light", "failedRole": null, "slot": "AUdyZXkgRGF5AAAAAAAAAAhC//8YxuD/4P+g/eAH//8=", "colors": {"background":16904,"text":65535,"muted":50712,"faint":33808,"accent":65504,"number":65504,"warning":64928,"ready":2016,"alert":65535,"sceneRear":23243,"scenePlane":27501}},
+    {"name": "Low Ink", "roles": [0, 19017, 31727, 2047, 2047, 64928, 2016, 63488], "problem": "contrast", "failedRole": "text", "slot": "AUxvdyBJbmsAAAAAAAAAAAAASUrve/8H/weg/eAHAPg=", "colors": {"background":0,"text":19017,"muted":31727,"faint":14823,"accent":2047,"number":2047,"warning":64928,"ready":2016,"alert":63488,"sceneRear":6339,"scenePlane":10597}},
+    {"name": "Dim Alert", "roles": [0, 65535, 31727, 2047, 2047, 64928, 2016, 36864], "problem": "contrast", "failedRole": "alert", "slot": "AURpbSBBbGVydAAAAAAAAAAA///ve/8H/weg/eAHAJA=", "colors": {"background":0,"text":65535,"muted":31727,"faint":14823,"accent":2047,"number":2047,"warning":64928,"ready":2016,"alert":36864,"sceneRear":6339,"scenePlane":10597}},
+    {"name": "", "roles": [0, 65535, 31727, 2047, 2047, 64928, 2016, 63488], "problem": "name", "failedRole": null, "slot": "AQAAAAAAAAAAAAAAAAAAAAAA///ve/8H/weg/eAHAPg=", "colors": {"background":0,"text":65535,"muted":31727,"faint":14823,"accent":2047,"number":2047,"warning":64928,"ready":2016,"alert":63488,"sceneRear":6339,"scenePlane":10597}},
+    {"name": " Lead", "roles": [0, 65535, 31727, 2047, 2047, 64928, 2016, 63488], "problem": "name", "failedRole": null, "slot": "ASBMZWFkAAAAAAAAAAAAAAAA///ve/8H/weg/eAHAPg=", "colors": {"background":0,"text":65535,"muted":31727,"faint":14823,"accent":2047,"number":2047,"warning":64928,"ready":2016,"alert":63488,"sceneRear":6339,"scenePlane":10597}},
+    {"name": "Fourteen chars", "roles": [0, 65535, 31727, 2047, 2047, 64928, 2016, 63488], "problem": "none", "failedRole": null, "slot": "AUZvdXJ0ZWVuIGNoYXJzAAAA///ve/8H/weg/eAHAPg=", "colors": {"background":0,"text":65535,"muted":31727,"faint":14823,"accent":2047,"number":2047,"warning":64928,"ready":2016,"alert":63488,"sceneRear":6339,"scenePlane":10597}},
+    {"name": "Tab\u0009Name", "roles": [0, 65535, 31727, 2047, 2047, 64928, 2016, 63488], "problem": "name", "failedRole": null, "slot": "AVRhYglOYW1lAAAAAAAAAAAA///ve/8H/weg/eAHAPg=", "colors": {"background":0,"text":65535,"muted":31727,"faint":14823,"accent":2047,"number":2047,"warning":64928,"ready":2016,"alert":63488,"sceneRear":6339,"scenePlane":10597}}
+  ],
+  "requests": [
+    {"op": "put", "argument": 0, "theme": 0, "base64": "TExRAQEAAAABRHJhZ29vbiBTdG9ybQAAAAD//+97f1x/XKD94AcA+D6mowQ="},
+    {"op": "put", "argument": 3, "theme": 1, "base64": "TExRAQEDAAABTmlnaHQgRW1iZXIAAAAAghBd7xCEIPv//2D+6l9J+qSkiTM="},
+    {"op": "delete", "argument": 2, "theme": null, "base64": "TExRAQICAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAN/0BZw="},
+    {"op": "select", "argument": 11, "theme": null, "base64": "TExRAQMLAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAO06zjo="},
+    {"op": "select", "argument": 4, "theme": null, "base64": "TExRAQMEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAALhvZLc="},
+    {"op": "clear", "argument": 0, "theme": null, "base64": "TExRAQQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFMnSL4="}
+  ],
+  "library": {"revision": 4, "image": "TExUAQQAAAABRHJhZ29vbiBTdG9ybQAAAAD//+97f1x/XKD94AcA+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABTmlnaHQgRW1iZXIAAAAAghBd7xCEIPv//2D+6l9J+m2jXaE=", "states": ["valid", "empty", "empty", "valid"]}
+}

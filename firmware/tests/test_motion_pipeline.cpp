@@ -29,6 +29,7 @@ public:
 }
 #include "../LaunchLabMini/accel_range.h"
 #include "../LaunchLabMini/motion_ui.h"
+#include "../LaunchLabMini/theme_library.h"
 #include "../LaunchLabMini/launch_feedback.h"
 #include "../LaunchLabMini/appearance_store.h"
 #include "../LaunchLabMini/rpm_estimator.h"
@@ -84,7 +85,7 @@ static LaunchFeedback launchFeedback;
 static Appearance::Config appearance;static Appearance::Bests personalBests;static AppearanceStore<Appearance::Bests> bestStore;static Appearance::Celebration bestEffect,editorEffect;static bool effectWasMoving=false;
 // Random's pick is device-side (esp_random); a fixed pick keeps the fixture deterministic.
 static Appearance::Effect celebrationEffect(){return appearance.effect==Appearance::Effect::Random?Appearance::Effect::Orbit:appearance.effect;}
-static uint16_t themeAccent(){return Appearance::accent(appearance.theme);}
+static Palette::Colors ui(){return Themes::builtIn(appearance.theme);}
 static StickS3Level level;static StickS3Level::Reading drawnLevel;
 static uint64_t motionStart=0,motionEnd=0;
 static uint32_t motionDrops=0,lastAcceptedAt=0,historyPendingSince=0,lastSaveTry=0,maxSaveUs=0,saveCount=0,saveErrors=0,lastDraw=0,newSessionAt=0;

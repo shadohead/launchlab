@@ -793,5 +793,20 @@
       "qre1113",
       "tcrt5000"
     ]
+  },
+  {
+    "release": "0.14.0-sticks3-themes-pm",
+    "runtime_version": "0.14.0-sticks3-themes-pm",
+    "board": "M5StickS3 K150",
+    "date": "2026-10-20",
+    "binary": "LaunchLabMini.ino.bin",
+    "binary_bytes": 851648,
+    "sha256": "e3014ec527da2fa13dc29ed3d1f4c351d9d45d55e893eb07f047235b7b0e4659",
+    "application_offset": "0x10000",
+    "profiles": [
+      "qre1113",
+      "tcrt5000"
+    ],
+    "published_channel": "beta"
   }
 ]

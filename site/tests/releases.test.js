@@ -51,9 +51,9 @@ test('withdrawn 0.12.1 cannot be selected through the updater index',async()=>{
 });
 
 const withBeta=()=>{const i=structuredClone(index);i.betaReleases=[{version:'0.14.0',catalog:'firmware/0.14.0/catalog.json',channel:'beta'}];i.beta='0.14.0';return i;};
-test('every published release is stable and latest stays the newest stable',()=>{
-  assert.ok(index.releases.every(r=>r.channel==='stable'));
-  assert.equal(index.beta,null);assert.deepEqual(index.betaReleases,[]);
+test('stable releases stay stable, latest stays 0.13.9 and 0.14.0 is the published beta',()=>{
+  assert.ok(index.releases.every(r=>r.channel==='stable'));assert.equal(index.latest,'0.13.9');
+  assert.equal(index.beta,'0.14.0');assert.deepEqual(index.betaReleases.map(r=>[r.version,r.channel]),[['0.14.0','beta']]);
 });
 test('a newer beta sits beside latest, which older readers keep following',()=>{
   const i=validateReleaseIndex(withBeta());
@@ -79,7 +79,7 @@ test('channel lists and the beta pointer must agree',()=>{
   validateReleaseIndex(older);
 });
 test('a beta release is selectable by version',async()=>{
-  const i=structuredClone(index);const old=i.releases.pop();i.betaReleases=[{...old,channel:'beta'}];
+  const i=structuredClone(index);const old=i.releases.pop();i.betaReleases=[{...old,channel:'beta'}];i.beta=null;
   const selection=createReleaseSelection({index:i,baseUrl:base,fetchFn:async()=>reply(oldCatalog)});
   await selection.select(old.version);assert.equal(selection.state.error,null);assert.equal(selection.state.catalog.version,old.version);
 });

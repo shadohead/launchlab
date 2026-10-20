@@ -37,7 +37,7 @@ prefix = r'''
 #include <vector>
 #include <iostream>
 static constexpr uint16_t TFT_BLACK=0,TFT_WHITE=0xffff,TFT_DARKGREY=0x7bef,TFT_ORANGE=0xfd20,TFT_GREEN=0x07e0;
-static constexpr int top_center=0;
+static constexpr int top_center=0,top_left=1;
 namespace fonts {static int Font6=6,Font4=4,Font2=2;}
 namespace lgfx {
 class LGFXBase {
@@ -61,6 +61,9 @@ public:
   void fillCircle(int x,int y,int r,uint16_t){drawCircle(x,y,r,0);bubbles.emplace_back(x,y);}
 };
 }
+#include "palette.h"
+#include "theme_library.h"
+#include "screens_ui.h"
 static uint32_t hostNow=2000,newSessionAt=0;
 static uint32_t millis(){return hostNow;}
 static StickS3Level level;static StickS3Level::Reading drawnLevel;
@@ -69,6 +72,7 @@ static Appearance::Theme theme=Appearance::Theme::Classic;
 static bool visibleDisplayFlipped(){return flip;}
 static Appearance::Theme visibleTheme(){return theme;}
 static uint16_t themeAccent(){return Appearance::accent(theme);}
+static Palette::Colors ui(){return Themes::builtIn(theme);}
 struct Snapshot {
   bool ready=true,suspended=false,resting=false,valid=false,signalFault=false;
   float resultRpm=0;
@@ -76,7 +80,7 @@ struct Snapshot {
 '''
 prefix += function(acquisition, "const char *stateName() const") + "\n};\n"
 prefix += function(source, "static void drawLiveLevel(")
-prefix += "\nstatic void drawMain(lgfx::LGFXBase &view,const Snapshot &s){const int cx=67;" + main + "\n}\n"
+prefix += "\nstatic void drawMain(lgfx::LGFXBase &view,const Snapshot &s){const int cx=67;const Palette::Colors colors=ui();" + main + "\n}\n"
 tests = r'''
 int main(){
   unsigned cases=0;

@@ -40,6 +40,9 @@ using TaskHandle_t = void *;
 struct FakeMutex {
   std::timed_mutex mutex;
   std::atomic<unsigned> attempts{0}, releases{0};
+  // Another task holds the gate for this long, in virtual time, so a wait
+  // budget is tested without depending on how threads get scheduled.
+  uint32_t heldByOtherMs=0;
 };
 using SemaphoreHandle_t = FakeMutex *;
 static constexpr int pdTRUE=1,pdFALSE=0,pdPASS=1;
@@ -62,6 +65,10 @@ inline SemaphoreHandle_t xSemaphoreCreateMutex() {
 inline int xSemaphoreTake(SemaphoreHandle_t gate,TickType_t wait) {
   if(!gate)return pdFALSE;
   ++gate->attempts;
+  if(const uint32_t held=gate->heldByOtherMs) {
+    if(wait<held){Fake::now+=uint64_t(wait)*1000;return pdFALSE;}
+    Fake::now+=uint64_t(held)*1000;gate->heldByOtherMs=0;
+  }
   if(!gate->mutex.try_lock_for(std::chrono::milliseconds(wait)))return pdFALSE;
   Fake::hook(Fake::locked,gate);return pdTRUE;
 }
@@ -307,19 +314,21 @@ static void flashQuiet() {
 static void quietBarrierAndAnchoring() {
   // A read in flight longer than lock()'s 20 ms is waited out, not raced.
   cleanRuntime();auto owner=std::make_unique<StickS3MotionAcquisition>();assert(owner->begin());
-  assert(owner->gate_->mutex.try_lock());
-  std::thread reader([&]{std::this_thread::sleep_for(std::chrono::milliseconds(90));owner->gate_->mutex.unlock();});
-  const auto waitStart=std::chrono::steady_clock::now();
-  assert(owner->quiet(300));reader.join();
-  assert(std::chrono::steady_clock::now()-waitStart>=std::chrono::milliseconds(80));
+  owner->gate_->heldByOtherMs=90;
+  const uint64_t waitStart=Fake::now;
+  assert(owner->quiet(300));
+  assert(Fake::now-waitStart==90000 && owner->gate_->heldByOtherMs==0);
+  // The window starts after the wait, so a short one cannot expire during it.
   assert(owner->quietUntil_.load()==int64_t(Fake::now)+300000 && owner->quietBeganMs()==uint32_t(Fake::now/1000));
   owner->endQuiet();
   // A gate held past the 250 ms budget vetoes: false, and no window or marker changes.
   const uint32_t began=owner->quietBeganMs();Fake::now+=5000000;
-  assert(owner->gate_->mutex.try_lock());
-  std::thread holder([&]{std::this_thread::sleep_for(std::chrono::milliseconds(400));owner->gate_->mutex.unlock();});
+  owner->gate_->heldByOtherMs=400;
   assert(!owner->quiet());assert(owner->quietUntil_.load()==0 && owner->quietBeganMs()==began);
-  holder.join();
+  owner->gate_->heldByOtherMs=0;
+  // The budget itself: a hold of exactly 250 ms is waited out, 251 ms vetoes.
+  owner->gate_->heldByOtherMs=251;assert(!owner->quiet());owner->gate_->heldByOtherMs=0;
+  owner->gate_->heldByOtherMs=250;assert(owner->quiet());owner->endQuiet();
   // Frames are stamped when the FIFO length is read, not after a long transfer.
   cleanRuntime();owner=std::make_unique<StickS3MotionAcquisition>();assert(owner->begin());
   FakeFifo::stallUs=9000;runFor(*owner,1);FakeFifo::stallUs=0;

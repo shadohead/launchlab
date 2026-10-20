@@ -64,6 +64,7 @@ prefix = r'''
 #undef private
 #include "controls.h"
 #include "appearance_store.h"
+#include "theme_library.h"
 #include "practice_store.h"
 #include "rpm_estimator_setting.h"
 #include "display_flip_setting.h"
@@ -74,6 +75,8 @@ prefix = r'''
 #include "power_status.h"
 #include "launch_feedback.h"
 #include "settings_save.h"
+#include "theme_store.h"
+#include "device_backup.h"
 #include <cassert>
 #include <iostream>
 #define LOOP_HELPER
@@ -122,7 +125,7 @@ static uint32_t lastSaveTry=0,saveCount=0,saveErrors=0,maxSaveUs=0,lastAcceptedA
 static HistoryCheckpoint::Stillness imuStill{true,0}; // launcher set down
 static InactivityTimer inactivity;static LaunchFeedback launchFeedback;
 static PracticeHistory practice;static PracticeStore practiceStore;
-static Appearance::Config appearance;static Appearance::Bests personalBests;
+static Appearance::Config appearance;static Appearance::Bests personalBests;static Themes::Library themeLibrary;
 static AppearanceStore<Appearance::Config> appearanceStore;static AppearanceStore<Appearance::Bests> bestStore;
 static RpmEstimator::Mode rpmEstimator=RpmEstimator::DEFAULT_MODE;
 static StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;
@@ -130,6 +133,10 @@ static MountOrientation::Mode mountMode=MountOrientation::Mode::Top,liveMount=Mo
 static StickS3Level level;static StickS3Level::Reading drawnLevel;static uint64_t lastLevelSampleUs=0;
 static uint8_t backlightValue(){return (unsigned(brightnessPercent)*255+50)/100;}
 static void syncNavigation(){dirty=true;}
+// Custom theme requests (USB T): the real receiver and store; free NVS entries are set by the test.
+static ThemeStore themeStore;static DeviceBackup::LineReceiver<(Themes::Request::BYTES+2)/3*4> themeRx;
+static unsigned freeEntries=158;static bool nvsAvailable(unsigned &available){available=freeEntries;return true;}
+static void cancelSettingEdit(){if(controls.page==Controls::Page::Edit)controls.page=Controls::Page::Settings;}
 static void prepareMotion(const Snapshot&){lastAcceptedAt=millis();}static void logLaunchMetrics(const Snapshot&){}
 '''
 
@@ -277,6 +284,59 @@ static void shutdownFlush() {
   std::cout<<"PASS: shutdown writes pending settings in its own checkpoint; a settings write failure never blocks power-off\n";
 }
 
+// One framed request through the receiver, as the USB loop feeds it.
+static void themeRequest(Themes::Request::Op op,uint8_t argument,const Palette::Custom *theme=nullptr) {
+  Themes::Request q;q.op=op;q.argument=argument;if(theme)q.theme=*theme;
+  uint8_t bytes[Themes::Request::BYTES];q.encode(bytes);std::string line;
+  DeviceBackup::base64Lines(bytes,sizeof(bytes),96,[&](const char *text){line+=text;});
+  themeRx.start(millis());auto event=DeviceBackup::TransferEvent::None;
+  for(char c:line+"\n.\n")event=themeRx.feed(c,millis());
+  assert(event==DeviceBackup::TransferEvent::Complete);
+  finishThemeRequest(snap());
+}
+static void themeRequests() {
+  using Op=Themes::Request::Op;
+  boot();themeStore=ThemeStore{};themeLibrary={};freeEntries=158;assert(themeStore.begin(themeLibrary)==ThemeStore::Status::Empty);
+  Palette::Custom navy;std::strcpy(navy.name,"HIL Navy");
+  const uint16_t roles[]={0x0006,0xffff,0x5aeb,0x2d7f,0xfea0,0xfda0,0x07e0,0xf800};std::memcpy(navy.role,roles,sizeof(roles));
+  // An upload is written in its own checkpoint with the IMU quiet, then the ADC runs again.
+  themeRequest(Op::Put,1,&navy);
+  assert(themeLibrary.state(1)==Themes::SlotState::Valid && guardedWrites==1 && running() && controls.customThemes==0b10);
+  {Themes::Library stored;ThemeStore reader;assert(reader.begin(stored)==ThemeStore::Status::Loaded && stored==themeLibrary);}
+  // Busy (a pull, a vetoed IMU barrier) or short of NVS: refused, nothing written.
+  auto other=navy;std::strcpy(other.name,"Other");
+  optical(5000,1100);optical(5000);optical(5000,1100);optical(5000);
+  for(unsigned turn=0;turn<4;++turn){optical(5000,1100);optical(5000);}
+  assert(snap().phase==D::Phase::Launch);themeRequest(Op::Put,2,&other);
+  assert(themeLibrary.state(2)==Themes::SlotState::Empty && guardedWrites==1);
+  passes(1700);assert(practice.size()==1 && running());
+  imuAcquisition.veto=true;themeRequest(Op::Put,2,&other);imuAcquisition.veto=false;
+  assert(themeLibrary.state(2)==Themes::SlotState::Empty && guardedWrites==1 && running());
+  freeEntries=ThemeStore::NEEDED_ENTRIES-1;themeRequest(Op::Put,2,&other);freeEntries=158;
+  assert(themeLibrary.state(2)==Themes::SlotState::Empty && guardedWrites==1);
+  // Invalid contents are refused before any checkpoint.
+  auto dim=navy;dim.role[Palette::Text]=0x2104;const unsigned windows=imuAcquisition.windows;
+  themeRequest(Op::Put,2,&dim);assert(themeLibrary.state(2)==Themes::SlotState::Empty && imuAcquisition.windows==windows);
+  // Select saves the appearance record like Apply; Settings Apply refuses a missing theme.
+  themeRequest(Op::Select,Appearance::THEMES+1);passes(100);
+  assert(appearance.theme==Themes::slotTheme(1) && !settingsSave.pending() && running());
+  {Appearance::Config saved;AppearanceStore<Appearance::Config> reader;assert(reader.begin(saved,"ll-appearance","cfg0","cfg1") && saved.theme==Themes::slotTheme(1));}
+  apply(5,uint8_t(Appearance::THEMES+3));assert(settingsSaveError && appearance.theme==Themes::slotTheme(1));
+  controls.page=Controls::Page::Main;
+  // Deleting the selected theme returns to the default, saved too.
+  themeRequest(Op::Delete,1);passes(100);
+  assert(themeLibrary.empty() && appearance.theme==Themes::FALLBACK && !settingsSave.pending() && running());
+  {Appearance::Config saved;AppearanceStore<Appearance::Config> reader;assert(reader.begin(saved,"ll-appearance","cfg0","cfg1") && saved.theme==Themes::FALLBACK);}
+  // An unreadable record is kept until Clear, which may replace it.
+  themeRequest(Op::Put,0,&navy);Preferences::data["ll-appearancethemes"][9]^=1;
+  themeStore=ThemeStore{};assert(themeStore.begin(themeLibrary)==ThemeStore::Status::Unreadable && themeLibrary.empty());
+  const auto retained=Preferences::data["ll-appearancethemes"];
+  themeRequest(Op::Put,0,&navy);assert(themeLibrary.empty() && Preferences::data["ll-appearancethemes"]==retained);
+  themeRequest(Op::Clear,0);assert(!Preferences::data.count("ll-appearancethemes") && themeStore.status()==ThemeStore::Status::Empty);
+  themeRequest(Op::Put,0,&navy);assert(themeLibrary.state(0)==Themes::SlotState::Valid && running());
+  std::cout<<"PASS: theme uploads, deletes and clears write inside a checkpoint only; busy, short of NVS, invalid or unreadable requests write nothing; select and fallback save like Apply\n";
+}
+
 static void sensorFaultHistory() {
   // After a pull, the sensor signal drops to the low rail (CHECK SENSOR). The
   // detector holds in Hold indefinitely; history still flushes once quiet.
@@ -292,7 +352,7 @@ static void sensorFaultHistory() {
 
 main = r'''
 int main() {
-  freshEdgeAtApply();imuVeto();applyDuringPull();lostReplies();usbDeviceSettings();shutdownFlush();sensorFaultHistory();
+  freshEdgeAtApply();imuVeto();applyDuringPull();lostReplies();usbDeviceSettings();shutdownFlush();themeRequests();sensorFaultHistory();
 }
 '''
 
@@ -300,6 +360,7 @@ functions = '\n'.join([
     function('quietImuForFlash', 'bool'), function('previewSetting'), function('writeSettings'),
     function('saveSettings'), function('commitSetting'), function('saveHistory'),
     function('releaseOrphanCheckpoint'), shutdown_flush(),
+    function('themeReply'), function('themesChanged'), function('selectTheme'), function('finishThemeRequest'),
 ])
 with tempfile.TemporaryDirectory(prefix='launchlab-save-paths-') as temp:
     build = pathlib.Path(temp)

@@ -22,6 +22,7 @@ def function(name):
 prefix=r'''
 #include "controls.h"
 #include "appearance_store.h"
+#include "theme_library.h"
 #include "analog_tachometer.h"
 #include "rpm_estimator_setting.h"
 #include "display_flip_setting.h"
@@ -43,7 +44,7 @@ prefix=prefix.replace('#include "practice_ui.h"','#include "practice_history.h"\
 practice_ui=(root/'LaunchLabMini/practice_ui.h').read_text()
 prefix+=practice_ui[practice_ui.index('namespace PracticeUI {'):practice_ui.index('inline void draw(')]+'}\n'
 prefix+=r'''
-static Appearance::Config appearance;static Appearance::Bests personalBests;
+static Appearance::Config appearance;static Appearance::Bests personalBests;static Themes::Library themeLibrary;
 static AppearanceStore<Appearance::Bests> bestStore;static AppearanceStore<Appearance::Config> appearanceStore;static Appearance::Celebration bestEffect;
 static uint32_t clockMs=10000;static uint32_t millis(){return clockMs;}
 static unsigned soundPreviews=0,effectPreviews=0;static void previewSound(){++soundPreviews;}static void previewEffect(){++effectPreviews;}

@@ -1,14 +1,15 @@
 # LaunchLab for M5StickS3
 
-Current revision: **0.13.9-sticks3-rpm-guard-pm** for **M5StickS3 K150 (ESP32-S3, 8 MB flash / 8 MB OPI PSRAM)**.
+This source is **0.14.0-sticks3-themes-pm** (beta). The recommended release is still **0.13.9-sticks3-rpm-guard-pm**. Both are for **M5StickS3 K150 (ESP32-S3, 8 MB flash / 8 MB OPI PSRAM)**.
 One application supports analog QRE1113 and TCRT5000 through the saved Sensor profile setting.
-See [build context](../../docs/FIRMWARE_0.13.9.md) and [release notes](../releases/0.13.9-sticks3-rpm-guard-pm/README.md).
+See the beta [build context](../../docs/FIRMWARE_0.14.0.md) and [release notes](../releases/0.14.0-sticks3-themes-pm/README.md), or the stable [build context](../../docs/FIRMWARE_0.13.9.md).
 
 Tilt replay is reliable on hard pulls: the accelerometer uses its ±16 g range, and every IMU sample is read from the BMI270 FIFO, so the live level and recordings no longer drop out at rest or during saves. A pull that reaches the gyro's 2000 °/s limit keeps its replay, marked **Tilt approx.**
 A single click of the side power key saves pending pulls and powers off.
 RPM detection treats the cord rewind after a pull as part of that pull, confirms sharp pulls and rides through a missed mark. State-changing USB letters run only when sent on their own, so stray serial data cannot power off the device or change settings; backup and restore work as before.
 
 Filtered movement renews the 30-second unused shake-wake timer. Stillness also enables RESTING, which pauses ADC sampling until movement or a button resumes it. The shared sensor supply remains powered. USB keeps the device awake.
+Custom color themes made in the [website theme editor](https://launchlab.beywatch.gg/themes) can be uploaded over USB and chosen under Settings > Theme (0.14.0 beta); the ten built-in themes are unchanged.
 Settings adds saved Top/Sidecar mounting and a guarded Wipe all flow. Themes, personal-best effects, optional sound, history and USB backup/restore remain available.
 Battery display uses filtered voltage readings, idle screen updates are reduced, and PM1 access uses checked wake/retry handling.
 
@@ -60,6 +61,6 @@ Measured launches, button use and interactive USB commands refresh the inactivit
 
 Run `bash scripts/build-firmware.sh` with Arduino CLI installed. The script pins ESP32 3.3.0, M5Unified 0.2.23 and M5GFX 0.2.30, verifies the complete PM SDK and explicitly enables both release flags. Use the frozen application for exact binary restoration; rebuilt bytes can vary with build environment.
 
-Run `bash scripts/test-firmware.sh` for 48 sanitizer-enabled native suites and 19 production-code harnesses with synthetic fixtures. The updater tests cover application-only upgrades, no-op detection, intentional rollback, first-install confirmation, chip/capacity checks and artifact verification.
+Run `bash scripts/test-firmware.sh` for 49 sanitizer-enabled native suites and 19 production-code harnesses with synthetic fixtures. The updater tests cover application-only upgrades, no-op detection, intentional rollback, first-install confirmation, chip/capacity checks and artifact verification.
 
 [USB update and backup](../../docs/UPDATER.md) · [Recovery](../../docs/RECOVERY.md).

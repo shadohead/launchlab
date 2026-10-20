@@ -60,7 +60,7 @@ int main() {
   // of dangerous letters, bursts that start or end on one. No guarded command
   // may run. (A burst that is exactly "<letter>\n" after quiet is a command.)
   uint32_t state=2026101701u;auto next=[&]{state=state*1664525u+1013904223u;return uint8_t(state>>24);};
-  const std::string dangerous="OSxgiaodhceQEqbnutyzvwjs";
+  const std::string dangerous="OSxgiaodhceQEqbnutyzvwjsLT";
   unsigned leaked=0;
   for(unsigned trial=0;trial<64;++trial) {
     Loop loop;loop.slow=true;loop.idle(100);
