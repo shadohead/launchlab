@@ -40,6 +40,7 @@ assert capture_at < loop.index("tickSound(s);") < loop.index("draw(s);",capture_
 
 prefix = r'''
 #include "appearance_store.h"
+#include "milestones.h"
 #include "analog_tachometer.h"
 #include "best_effect_sound.h"
 #include "controls.h"
@@ -92,6 +93,7 @@ static Appearance::Config appearance;
 static Appearance::Bests personalBests;
 static AppearanceStore<Appearance::Bests> bestStore;
 static Appearance::Celebration bestEffect,editorEffect;
+static Milestones::Config milestones;
 static Appearance::Effect upcomingEffect=Appearance::Effect::Off;
 static Controls::State controls;
 static PracticeHistory practice;
@@ -118,7 +120,7 @@ tests = r'''
 static void reset(Appearance::Effect effect=Appearance::Effect::Random) {
   M5.Speaker={};soundPlayer.~BestEffectSpeaker();new(&soundPlayer) BestEffectSpeaker(imuAcquisition);soundPlayer.configure();
   appearance={};appearance.effect=effect;appearance.sound=Appearance::Sound::Low;
-  personalBests={};bestStore={};bestEffect={};editorEffect={};upcomingEffect=Appearance::Effect::Off;
+  personalBests={};bestStore={};bestEffect={};editorEffect={};upcomingEffect=Appearance::Effect::Off;milestones={};
   practice={};latestMotion={};launchFeedback={};controls={};soundRequest={};
   dirty=motionPending=celebrationSound=soundPreview=tournamentMode=historyPage=diagnostics=motionDemo=demo=false;
   hostUs=5000000;randomCalls=0;lastAcceptedAt=historyPendingSince=motionDrops=0;
@@ -162,7 +164,7 @@ int main() {
   // idle pass before the first frame, even when the saved choice is Orbit.
   for(unsigned e=0;e<Appearance::DRAWN;++e) {
     reset(Appearance::Effect::Orbit);latestMotion.number=1;
-    const auto effect=Appearance::Effect(e);previewBestEffect(effect);
+    const auto effect=Appearance::drawnEffect(e);previewBestEffect(effect);
     assert(soundPlayer.prepared(effect));tickSound(Snapshot{});
     assert(soundPlayer.prepared(effect));presentFrame();
     assert(M5.Speaker.plays==1);checkClip(effect);
@@ -179,22 +181,22 @@ int main() {
   // The existing Best effect editor previews every concrete draft through
   // its actual helper and first-frame cue, including an unprepared clip.
   for(unsigned e=0;e<Appearance::DRAWN;++e) {
-    reset(Appearance::Effect::Orbit);controls.page=Controls::Page::Edit;controls.setting=6;controls.draft=e;
-    previewEffect();assert(editorEffect.badge() && editorEffect.effect()==Appearance::Effect(e));
+    reset(Appearance::Effect::Orbit);controls.page=Controls::Page::Edit;controls.setting=unsigned(Controls::Setting::BestEffect);controls.draft=unsigned(Appearance::drawnEffect(e));
+    previewEffect();assert(editorEffect.badge() && editorEffect.effect()==Appearance::drawnEffect(e));
     tickSound(Snapshot{});presentFrame();
     for(unsigned i=0;soundRequest.active && i<200;++i){hostUs+=10000;tickSound(Snapshot{});}
-    assert(M5.Speaker.plays==1 && !soundRequest.active);checkClip(Appearance::Effect(e));
+    assert(M5.Speaker.plays==1 && !soundRequest.active);checkClip(Appearance::drawnEffect(e));
     controls.page=Controls::Page::Settings;tickSound(Snapshot{});
     assert(!editorEffect.badge() && !soundPlayer.playing() && !soundPlayer.powered());
   }
-  reset();controls.page=Controls::Page::Edit;controls.setting=6;controls.draft=unsigned(Appearance::Effect::Random);
+  reset();controls.page=Controls::Page::Edit;controls.setting=unsigned(Controls::Setting::BestEffect);controls.draft=unsigned(Appearance::Effect::Random);
   previewEffect();const auto editorPick=editorEffect.effect();previewEffect();
   assert(editorEffect.effect()!=editorPick);
   controls.draft=unsigned(Appearance::Effect::Off);previewEffect();presentFrame();
   assert(!editorEffect.badge() && !soundRequest.active && M5.Speaker.plays==0);
   // Deferred editor requests render in idle slices, survive the celebration
   // deadline, and stop when the editor closes.
-  reset(Appearance::Effect::Orbit);controls.page=Controls::Page::Edit;controls.setting=7;
+  reset(Appearance::Effect::Orbit);controls.page=Controls::Page::Edit;controls.setting=unsigned(Controls::Setting::Sound);
   requestSound(Appearance::Effect::Sparkles,Appearance::Sound::Low,false);
   const auto target=upcomingEffect;tickSound(Snapshot{AnalogTachometer::Phase::Launch});
   assert(!soundRequest.active && !soundPlayer.prepared(Appearance::Effect::Sparkles) && upcomingEffect==target);
@@ -204,7 +206,7 @@ int main() {
   controls.page=Controls::Page::Settings;tickSound(Snapshot{});
   assert(!soundPlayer.playing() && !soundPlayer.powered());
   // The actual Sound editor helper uses the draft level and saved effect.
-  reset(Appearance::Effect::Lightning);controls.page=Controls::Page::Edit;controls.setting=7;
+  reset(Appearance::Effect::Lightning);controls.page=Controls::Page::Edit;controls.setting=unsigned(Controls::Setting::Sound);
   controls.draft=unsigned(Appearance::Sound::High);previewSound();
   assert(soundRequest.active && soundRequest.level==Appearance::Sound::High);
   for(unsigned i=0;soundRequest.active && i<200;++i){hostUs+=10000;tickSound(Snapshot{});}
@@ -219,10 +221,37 @@ int main() {
   assert(!soundRequest.active && M5.Speaker.plays==0);
   reset();appearance.sound=Appearance::Sound::Off;accepted(6100);captured();presentFrame();
   assert(upcomingEffect!=bestEffect.effect() && M5.Speaker.plays==0);
+  // Milestones: a pull's effect is known only when it ends, so idle passes
+  // render every effect the table can play; the milestone's sound then starts
+  // with its first frame, and Random's next pick is left for the next best.
+  {
+    using Appearance::Effect;
+    reset(Appearance::Effect::Random);assert(milestones.select(Milestones::Mode::Both));
+    unsigned passes=0;
+    auto ready=[&]{for(unsigned i=0;i<milestones.count();++i)if(!soundPlayer.prepared(milestones.row(i).effect))return false;return soundPlayer.prepared(soundTarget());};
+    while(!ready() && passes<2000){tickSound(Snapshot{});++passes;}
+    assert(ready() && passes<2000);
+    const auto pick=upcomingEffect;const unsigned rng=randomCalls;
+    accepted(15500);captured();tickSound(Snapshot{});presentFrame();
+    assert(bestEffect.effect()==Effect::Slash && bestEffect.milestone()==15000 && M5.Speaker.plays==1);checkClip(Effect::Slash);
+    assert(upcomingEffect==pick && randomCalls==rng);
+    // Every table effect plays at once from its own buffer, one after another.
+    const Effect expected[]={Effect::Sparkles,Effect::Orbit,Effect::Flames,Effect::Shockwave,Effect::Lightning};
+    const float rpms[]={9100,11200,12100,13300,14800};
+    for(unsigned i=0;i<5;++i) {
+      M5.Speaker.playing=false;tickSound(Snapshot{});
+      accepted(rpms[i]);captured();tickSound(Snapshot{});presentFrame();
+      assert(bestEffect.effect()==expected[i] && M5.Speaker.plays==2+i);checkClip(expected[i]);
+    }
+    // With New best only, idle passes leave the milestone effects unrendered.
+    reset(Appearance::Effect::Orbit);
+    for(unsigned i=0;i<2000;++i)tickSound(Snapshot{});
+    assert(soundPlayer.prepared(Effect::Orbit) && !soundPlayer.prepared(Effect::Slash) && !soundPlayer.prepared(Effect::Sparkles));
+  }
   // These buffers live for the firmware lifetime; release fake allocations
   // here so the host harness can also use leak detection.
   for(auto p:allocations)std::free(p);
-  std::cout<<"PASS: production Random/PB/hidden/cancel selection, first-frame cues, five USB preview sounds, actual Best effect/Sound editor helpers, real sliced synth/speaker buffer, pull/close cancellation, late deadline and timer wrap\n";
+  std::cout<<"PASS: production Random/PB/hidden/cancel selection, first-frame cues, six USB preview sounds, milestone sounds rendered ahead, actual Best effect/Sound editor helpers, real sliced synth/speaker buffer, pull/close cancellation, late deadline and timer wrap\n";
 }
 '''
 names = ["upcoming", "celebrationEffect", "soundTarget", "requestSound", "tickSound", "prepareMotion", "previewBestEffect", "previewEffect", "previewSound"]

@@ -9,30 +9,39 @@ namespace Appearance {
 // Persisted IDs 0..3 and their original colors stay unchanged.
 // The palette names are Beyblade-inspired, rather than a usage ranking.
 enum class Theme:uint8_t {Classic=0,Mint=1,Amber=2,Violet=3,GolemGreen=4,PhoenixRed=5,CobaltBlue=6,SharkPink=7,ValkyrieWhite=8,TyrannoOrange=9};
-// Stored values: Random was added last so older records keep their meaning.
-enum class Effect:uint8_t {Orbit,Flames,Sparkles,Shockwave,Lightning,Off,Random};
+// Stored values: each effect keeps its number, so older records keep their
+// meaning. Random came after Off, and Slash after Random.
+enum class Effect:uint8_t {Orbit,Flames,Sparkles,Shockwave,Lightning,Off,Random,Slash};
 // Celebration sound level; Off by default. The speaker is powered only while a sound plays.
 enum class Sound:uint8_t {Off,Low,High};
-// The first DRAWN effects animate; Off and Random do not themselves.
-constexpr unsigned THEMES=10,EFFECTS=7,DRAWN=5,SOUNDS=3;
+// DRAWN effects animate: Orbit..Lightning and Slash. Off and Random do not themselves.
+constexpr unsigned THEMES=10,EFFECTS=8,DRAWN=6,SOUNDS=3;
 // Theme IDs THEMES.. select the user's custom theme slots (theme_library.h).
 // Firmware without custom themes rejects such a record and falls back to its
 // other slot or the defaults, as it does for any newer record.
 constexpr unsigned CUSTOM_THEMES=4,ALL_THEMES=THEMES+CUSTOM_THEMES;
 inline bool custom(Theme t){return unsigned(t)>=THEMES && unsigned(t)<ALL_THEMES;}
-inline bool drawn(unsigned e){return e<DRAWN;}
+inline bool drawn(unsigned e){return e<5 || e==unsigned(Effect::Slash);}
+// The drawn effects in escalating order, 0..DRAWN-1, and back.
+inline Effect drawnEffect(unsigned i){return i<5?Effect(i):Effect::Slash;}
+inline unsigned drawnIndex(Effect e){return e==Effect::Slash?5:unsigned(e);}
 inline const char *label(Theme t){static const char *s[]={"Pegasus Cyan","Wolf Mint","Wizard Gold","Meteor Purple","Golem Green","Phoenix Red","Cobalt Blue","Shark Pink","Valkyrie White","Tyranno Orange"};return unsigned(t)<THEMES?s[unsigned(t)]:s[0];}
-inline const char *label(Effect e){static const char *s[]={"Orbit","Flames","Sparkles","Shockwave","Lightning","Off","Random"};return unsigned(e)<EFFECTS?s[unsigned(e)]:s[0];}
-// Settings order: Random first, then each effect, Off last.
-inline Effect nextChoice(Effect e){return e==Effect::Random?Effect::Orbit:e==Effect::Off?Effect::Random:Effect(unsigned(e)+1);}
+inline const char *label(Effect e){static const char *s[]={"Orbit","Flames","Sparkles","Shockwave","Lightning","Off","Random","Slash"};return unsigned(e)<EFFECTS?s[unsigned(e)]:s[0];}
+// Settings order: Random first, then each drawn effect, Off last.
+inline Effect nextChoice(Effect e) {
+  if(e==Effect::Random)return Effect::Orbit;
+  if(e==Effect::Off)return Effect::Random;
+  if(e==Effect::Slash)return Effect::Off;
+  return drawnEffect(drawnIndex(e)+1);
+}
 // A Random pick: any drawn effect except the previous one.
 inline Effect pick(uint32_t bits,Effect previous) {
-  if(!drawn(unsigned(previous)))return Effect(bits%DRAWN);
-  const unsigned e=bits%(DRAWN-1);return Effect(e>=unsigned(previous)?e+1:e);
+  if(!drawn(unsigned(previous)))return drawnEffect(bits%DRAWN);
+  const unsigned e=bits%(DRAWN-1);return drawnEffect(e>=drawnIndex(previous)?e+1:e);
 }
 inline const char *label(Sound s){static const char *n[]={"Off","Low","High"};return unsigned(s)<SOUNDS?n[unsigned(s)]:n[0];}
 inline uint16_t accent(Theme t){static constexpr uint16_t c[]={0x07ff,0x8ff9,0xff10,0xc5bf,0x77e6,0xfa8a,0x5c7f,0xfb9f,0xffff,0xfd00};return unsigned(t)<THEMES?c[unsigned(t)]:c[0];}
-inline uint32_t duration(Effect e){static constexpr uint16_t ms[]={1600,1800,1600,1300,1500,0,0};return unsigned(e)<EFFECTS?ms[unsigned(e)]:0;}
+inline uint32_t duration(Effect e){static constexpr uint16_t ms[]={1600,1800,1600,1300,1500,0,0,1700};return unsigned(e)<EFFECTS?ms[unsigned(e)]:0;}
 inline uint32_t hash(const uint8_t *p,size_t n){uint32_t h=2166136261u;while(n--){h^=*p++;h*=16777619u;}return h;}
 inline uint32_t get32(const uint8_t *p){return uint32_t(p[0])|uint32_t(p[1])<<8|uint32_t(p[2])<<16|uint32_t(p[3])<<24;}
 inline void put32(uint8_t *p,uint32_t v){for(unsigned i=0;i<4;++i)p[i]=uint8_t(v>>(8*i));}
@@ -78,11 +87,14 @@ struct Bests {
   }
 };
 // A result owns one presentation token for the effect chosen when it was
-// queued. Replay/navigation cannot re-arm it.
+// queued. Replay/navigation cannot re-arm it. It is a personal best, an RPM
+// milestone (the threshold reached) or both; the recap's label says which.
 class Celebration {
 public:
   void clear(){*this=Celebration{};}
-  void queue(bool beat,uint32_t number,Effect effect){clear();pending_=beat;number_=number;effect_=effect;}
+  void queue(bool show,uint32_t number,Effect effect,bool best=true,uint16_t milestone=0) {
+    clear();pending_=show;number_=number;effect_=effect;best_=best;milestone_=milestone;
+  }
   void captured(uint32_t number){if(pending_ && number==number_){pending_=false;badge_=true;}}
   void presented(uint32_t now){if(badge_ && !started_){started_=true;cue_=true;at_=now;}}
   // True once, right after the effect starts: the moment to start its sound.
@@ -90,9 +102,12 @@ public:
   bool badge()const{return badge_;}
   bool started()const{return started_;}
   Effect effect()const{return effect_;}
+  bool best()const{return best_;}
+  uint16_t milestone()const{return milestone_;}
   uint32_t elapsed(uint32_t now)const{return started_?uint32_t(now-at_):0;}
   bool moving(uint32_t now)const{return badge_ && started_ && elapsed(now)<duration(effect_);}
 private:
-  uint32_t number_=0,at_=0;Effect effect_=Effect::Off;bool pending_=false,badge_=false,started_=false,cue_=false;
+  uint32_t number_=0,at_=0;Effect effect_=Effect::Off;bool pending_=false,badge_=false,started_=false,cue_=false,best_=true;
+  uint16_t milestone_=0;
 };
 }

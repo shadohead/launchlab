@@ -3,6 +3,7 @@
 #include "rpm_estimator.h"
 #include "sensor_profile.h"
 #include "appearance.h"
+#include "milestones.h"
 #include "palette.h"
 #include "theme_library.h"
 #include "mount_orientation.h"
@@ -11,11 +12,13 @@
 namespace ControlsUI {
 static constexpr const char *MENU[]={"History","New session","Battery","Settings","Tournament","Back"};
 static constexpr const char *HISTORY[]={"Launches","Pull trend","Session trend","Back"};
-static constexpr const char *SETTINGS[]={"Sleep after","RPM method","Brightness","Flip display","Sensor profile","Theme","Best effect","Sound","Mounting","Wipe all","Back"};
-// Set by the UI owner before rendering: the visible theme's colors, and the
-// names the Theme row shows (custom themes; the built-in names otherwise).
+static constexpr const char *SETTINGS[]={"Sleep after","RPM method","Brightness","Flip display","Sensor profile","Theme","Best effect","Celebrate","Sound","Mounting","Wipe all","Back"};
+// Set by the UI owner before rendering: the visible theme's colors, the
+// names the Theme row shows (custom themes; the built-in names otherwise)
+// and the milestone table the Celebrate editor summarizes.
 static Palette::Colors colors=Themes::builtIn(Themes::FALLBACK);
 static const char *(*themeLabel)(Appearance::Theme)=nullptr;
+static const Milestones::Config *milestones=nullptr;
 inline void footer(lgfx::LGFXBase &g,const char *label) {
   g.fillRect(0,229,g.width(),11,colors.background);
   g.setTextDatum(top_center);g.setTextColor(colors.muted,colors.background);
@@ -44,6 +47,7 @@ inline void value(char *out,unsigned length,unsigned setting,unsigned value) {
     case Controls::Setting::Sensor:snprintf(out,length,"%s",StickS3SensorProfile::label(StickS3SensorProfile::Mode(value)));break;
     case Controls::Setting::Theme:snprintf(out,length,"%s",themeLabel?themeLabel(Appearance::Theme(value)):Appearance::label(Appearance::Theme(value)));break;
     case Controls::Setting::BestEffect:snprintf(out,length,"%s",Appearance::label(Appearance::Effect(value)));break;
+    case Controls::Setting::Celebrate:snprintf(out,length,"%s",Milestones::label(Milestones::Mode(value)));break;
     case Controls::Setting::Sound:snprintf(out,length,"%s",Appearance::label(Appearance::Sound(value)));break;
     case Controls::Setting::Mount:snprintf(out,length,"%s",MountOrientation::label(MountOrientation::Mode(value)));break;
     case Controls::Setting::WipeAll:snprintf(out,length,"Erase device data");break;
@@ -51,7 +55,8 @@ inline void value(char *out,unsigned length,unsigned setting,unsigned value) {
 }
 inline void settings(lgfx::LGFXBase &g,const Controls::State &state,const uint8_t *values) {
   heading(g,"Settings");char text[24];
-  const unsigned first=state.setting<5?0:5,last=first?Controls::SETTING_COUNT:4;
+  // Pages of five rows: general, appearance, then Wipe all and Back.
+  const unsigned first=state.setting<5?0:state.setting<10?5:10,last=std::min(first+4,Controls::SETTING_COUNT);
   for(unsigned i=first;i<=last;++i) {
     const int y=33+int(i-first)*31;
     if(i==state.setting)g.drawRoundRect(4,y-3,g.width()-8,30,4,colors.accent);
@@ -59,7 +64,7 @@ inline void settings(lgfx::LGFXBase &g,const Controls::State &state,const uint8_
     g.drawString(SETTINGS[i],g.width()/2,y,2);
     if(i<Controls::SETTING_COUNT){value(text,sizeof(text),i,i<Controls::EDITABLE_SETTING_COUNT?values[i]:0);g.drawString(text,g.width()/2,y+18,1);}
   }
-  if(!first){g.setTextColor(colors.muted,colors.background);g.drawString("B Next: appearance",g.width()/2,194,1);}
+  if(first<10){g.setTextColor(colors.muted,colors.background);g.drawString(first?"B Next: wipe all":"B Next: appearance",g.width()/2,194,1);}
   footer(g,state.setting==unsigned(Controls::Setting::WipeAll)?"A Open  B Next":state.setting<Controls::SETTING_COUNT?"A Edit  B Next":"A Back  B Next");
 }
 inline void editor(lgfx::LGFXBase &g,const Controls::State &state,bool failed,bool changedMetric) {
@@ -80,6 +85,20 @@ inline void editor(lgfx::LGFXBase &g,const Controls::State &state,bool failed,bo
     g.setTextColor(colors.text,colors.background);
     g.drawString("Next pull starts",g.width()/2,154,1);
     g.drawString("a new session",g.width()/2,169,1);
+  }
+  if(state.setting==unsigned(Controls::Setting::Celebrate)) {
+    // What the choice celebrates; the milestone table is edited on the web.
+    const auto mode=Milestones::Mode(state.draft);char line[28];
+    g.setTextColor(colors.text,colors.background);
+    if(!Milestones::milestones(mode) || !milestones){g.drawString("Each new personal",g.width()/2,154,1);g.drawString("best celebrates",g.width()/2,169,1);}
+    else {
+      const auto &m=*milestones;char low[12],high[12];
+      Milestones::rpmText(low,sizeof(low),m.row(0).rpm);Milestones::rpmText(high,sizeof(high),m.row(m.count()-1).rpm);
+      if(m.count()==1)snprintf(line,sizeof(line),"1 milestone, %s",low);
+      else snprintf(line,sizeof(line),"%u steps %s to %s",m.count(),low,high);
+      g.drawString(line,g.width()/2,154,1);
+      g.drawString(mode==Milestones::Mode::Both?"and new bests":"Edit table online",g.width()/2,169,1);
+    }
   }
   if(state.setting==unsigned(Controls::Setting::Mount)) {
     g.setTextColor(colors.text,colors.background);

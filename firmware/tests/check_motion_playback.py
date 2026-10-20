@@ -66,6 +66,7 @@ def main():
     frame_time = re.search(r"const uint32_t replayFrameElapsed=[^;]+;", source)[0]
     header = (
         function(source, "static bool visibleDisplayFlipped()") + "\n"
+        + function(source, "static const char *celebrationBadge()") + "\n"
         + function(source, "static void drawLiveLevel(") + "\n"
         + "static uint32_t drawActualFeedback(lgfx::LGFXBase &view){const Palette::Colors colors=ui();" + frame_time + call + ";return replayFrameElapsed;}\n"
         "static void drawExpectedFeedback(lgfx::LGFXBase &view,float expectedProgress){const Palette::Colors colors=ui();" + expected_call + ";}\n"

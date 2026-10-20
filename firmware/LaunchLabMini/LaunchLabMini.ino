@@ -35,6 +35,7 @@
 #include "motion_ui.h"
 #include "launch_feedback.h"
 #include "appearance_store.h"
+#include "milestones.h"
 #include "best_effect_ui.h"
 #include "screens_ui.h"
 #include "theme_store.h"
@@ -52,11 +53,11 @@
 #define LOOP_HELPER __attribute__((noinline))
 #if LAUNCHLAB_HIL
 // Test-only hardware-in-the-loop build; never a release. See tools/hil.
-static constexpr char VERSION[] = "0.14.0-sticks3-themes-hil-pm";
+static constexpr char VERSION[] = "0.15.0-sticks3-milestone-hil-pm";
 #elif LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = "0.14.0-sticks3-themes-pm";
+static constexpr char VERSION[] = "0.15.0-sticks3-milestone-pm";
 #else
-static constexpr char VERSION[] = "0.14.0-sticks3-themes";
+static constexpr char VERSION[] = "0.15.0-sticks3-milestone";
 #endif
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ
@@ -80,6 +81,10 @@ static AppearanceStore<Appearance::Bests> bestStore;
 // The user's custom themes (theme IDs THEMES..), beside the appearance record.
 static Themes::Library themeLibrary;
 static ThemeStore themeStore;
+// The Celebrate mode and the RPM milestone table, one record beside them. A
+// damaged record shows the defaults and is replaced by the next change.
+static Milestones::Config milestones;
+static AppearanceStore<Milestones::Config> milestoneStore;
 static Appearance::Celebration bestEffect;
 // The Best effect editor previews the draft around its value card.
 static Appearance::Celebration editorEffect;
@@ -162,6 +167,7 @@ static struct {bool active=false,celebration=false;Appearance::Effect effect=App
 // A celebration sound that cannot start within this long after its effect is dropped.
 static constexpr uint32_t SOUND_LATE_MS=300;
 static void requestSound(Appearance::Effect effect,Appearance::Sound level,bool celebration);
+static const char *milestoneStoreName();
 static Appearance::Effect celebrationEffect();static Appearance::Effect soundTarget();
 static constexpr size_t USB_TX_BUFFER_BYTES=8192;
 static constexpr uint32_t MOTION_INIT_RETRY_MS=5000,MOTION_DATA_TIMEOUT_MS=250;
@@ -175,6 +181,8 @@ static MotionStore motionStore;
 static DeviceBackup::Receiver restoreRx;
 // One framed custom theme request (USB `T`).
 static DeviceBackup::LineReceiver<(Themes::Request::BYTES+2)/3*4> themeRx;
+// One framed milestone request (USB `U`).
+static DeviceBackup::LineReceiver<(Milestones::Request::BYTES+2)/3*4> milestoneRx;
 static LaunchMotion::Trace latestMotion,referenceMotion,demoMotion;
 static bool motionPending=false,referenceError=false,motionDemo=false;
 static uint64_t motionStart=0,motionEnd=0,lastLevelSampleUs=0;
@@ -372,6 +380,8 @@ LOOP_HELPER static void status() {
   Serial.printf("SETTINGS_SAVE_STATUS pending=0x%03x failed=%d saves=%lu errors=%lu refusals=%lu\n",unsigned(settingsSave.pending()),
     settingsSave.failed(),(unsigned long)settingsSave.saves(),(unsigned long)settingsSave.errors(),(unsigned long)settingsSave.refusals());
   Serial.printf("TOURNAMENT_STATUS enabled=%d display=%s persistent=wake\n",tournamentMode,tournamentViewName());
+  Serial.printf("MILESTONE_STATUS mode=%s rows=%u revision=%lu store=%s\n",Milestones::name(milestones.mode()),milestones.count(),
+    (unsigned long)milestones.revision,milestoneStoreName());
   soundPlayer.status(appearance.sound);
   Serial.printf("UI_STATUS page=%u menu=%u history=%u setting=%u draft=%u recording=%s\n",
     unsigned(controls.page),controls.menu,controls.history,controls.setting,controls.draft,
@@ -543,8 +553,27 @@ static void drawBattery(lgfx::LGFXBase &g,uint32_t now) {
   ControlsUI::battery(g,battery.valid(now),battery.percent,battery.millivolts,battery.chargeKnown,battery.charging);
 }
 
+// The applied value of each editable Settings row, in Controls::Setting order.
+static uint8_t settingValue(unsigned row) {
+  using S=Controls::Setting;
+  switch(S(row)) {
+    case S::Sleep:return inactivity.minutes();
+    case S::Rpm:return uint8_t(rpmEstimator);
+    case S::Brightness:return brightnessPercent;
+    case S::Flip:return uint8_t(displayFlipped);
+    case S::Sensor:return uint8_t(sensorProfile);
+    case S::Theme:return uint8_t(themeLibrary.effective(appearance.theme));
+    case S::BestEffect:return uint8_t(appearance.effect);
+    case S::Celebrate:return uint8_t(milestones.mode());
+    case S::Sound:return uint8_t(appearance.sound);
+    case S::Mount:return uint8_t(mountMode);
+    case S::WipeAll:break;
+  }
+  return 0;
+}
 static void drawSettings(lgfx::LGFXBase &g) {
-  const uint8_t values[]={inactivity.minutes(),uint8_t(rpmEstimator),brightnessPercent,uint8_t(displayFlipped),uint8_t(sensorProfile),uint8_t(themeLibrary.effective(appearance.theme)),uint8_t(appearance.effect),uint8_t(appearance.sound),uint8_t(mountMode)};
+  uint8_t values[Controls::EDITABLE_SETTING_COUNT];
+  for(unsigned i=0;i<Controls::EDITABLE_SETTING_COUNT;++i)values[i]=settingValue(i);
   ControlsUI::settings(g,controls,values);
 }
 
@@ -568,10 +597,18 @@ static void drawLiveLevel(lgfx::LGFXBase &view,int cx) {
   ScreensUI::level(view,ui(),cx,drawnLevel);
 }
 
+// The recap's label: NEW BEST for a personal best, otherwise the milestone
+// the pull reached; null when the recap celebrates nothing.
+static const char *celebrationBadge() {
+  static char text[24];
+  if(motionDemo || !bestEffect.badge())return nullptr;
+  if(bestEffect.best())return "NEW BEST";
+  Milestones::milestoneText(text,sizeof(text),bestEffect.milestone());return text;
+}
 LOOP_HELPER static void draw(const Snapshot &s) {
   const int64_t started=esp_timer_get_time();
   const Palette::Colors colors=ui();
-  ControlsUI::colors=colors;ControlsUI::themeLabel=[](Appearance::Theme t){return themeLibrary.label(t);};
+  ControlsUI::colors=colors;ControlsUI::themeLabel=[](Appearance::Theme t){return themeLibrary.label(t);};ControlsUI::milestones=&milestones;
   const uint32_t replayFrameElapsed=launchFeedback.replayElapsed(millis());
   const bool replayWasStarted=launchFeedback.replayStarted();
   auto &view=screenReady?static_cast<lgfx::LGFXBase &>(screen):static_cast<lgfx::LGFXBase &>(M5.Display);
@@ -598,7 +635,7 @@ LOOP_HELPER static void draw(const Snapshot &s) {
         (controls.setting==1 && controls.draft!=uint8_t(rpmEstimator)) ||
         (controls.setting==4 && controls.draft!=uint8_t(sensorProfile)));
         // The previewed effect frames the value text inside its card.
-        if(screenReady && controls.setting==6 && editorEffect.badge()) {
+        if(screenReady && controls.setting==unsigned(Controls::Setting::BestEffect) && editorEffect.badge()) {
           const int64_t effectStarted=esp_timer_get_time();BestEffectUI::Renderer::Anchor card;
           card.top=72;card.bottom=128;card.left=8;card.right=view.width()-9;
           bestEffectRenderer.draw({static_cast<uint16_t *>(screen.getBuffer()),screen.width(),screen.height()},
@@ -614,7 +651,7 @@ LOOP_HELPER static void draw(const Snapshot &s) {
   } else if(launchFeedback.shown()) {
     view.fillScreen(colors.background);
     MotionUI::feedback(view,motionDemo?demoMotion:latestMotion,
-      motionPending && !motionDemo,motionDemo,MotionReplay::playbackProgress(motionDemo?demoMotion:latestMotion,replayFrameElapsed),visibleDisplayFlipped(),colors,!motionDemo && bestEffect.badge());
+      motionPending && !motionDemo,motionDemo,MotionReplay::playbackProgress(motionDemo?demoMotion:latestMotion,replayFrameElapsed),visibleDisplayFlipped(),colors,celebrationBadge());
     ControlsUI::footer(view,"A Main  B Menu");
     // Direct-draw fallback stays functional without reading the hardware LCD.
     if(screenReady && !motionDemo && !motionPending && bestEffect.badge()) {
@@ -649,12 +686,15 @@ LOOP_HELPER static void draw(const Snapshot &s) {
   if(!tournamentMode && !diagnostics && !historyPage && launchFeedback.shown() && !motionDemo && !motionPending)
     bestEffect.presented(millis());
   // The sound starts with the effect's first presented frame.
-  if(controls.page==Controls::Page::Edit && controls.setting==6)editorEffect.presented(millis());
+  if(controls.page==Controls::Page::Edit && controls.setting==unsigned(Controls::Setting::BestEffect))editorEffect.presented(millis());
   if(bestEffect.takeCue()) {
+    Serial.printf("CELEBRATION_START launch=%lu effect=%s milestone=%u best=%d\n",(unsigned long)latestMotion.number,
+      Appearance::label(bestEffect.effect()),unsigned(bestEffect.milestone()),bestEffect.best());
     requestSound(bestEffect.effect(),appearance.sound,true);
     // Keep this pick's clip ready until its first frame has started playback.
-    // Only a presented celebration consumes Random's next pick.
-    if(appearance.effect==Appearance::Effect::Random)upcomingEffect=Appearance::pick(esp_random(),bestEffect.effect());
+    // Only a presented Best effect consumes Random's next pick; a milestone
+    // plays its own effect.
+    if(appearance.effect==Appearance::Effect::Random && !bestEffect.milestone())upcomingEffect=Appearance::pick(esp_random(),bestEffect.effect());
   }
   if(editorEffect.takeCue())requestSound(editorEffect.effect(),appearance.sound,false);
   launchFeedback.replayPresented(millis(),!tournamentMode && !diagnostics && !historyPage &&
@@ -730,8 +770,14 @@ LOOP_HELPER static void prepareMotion(const Snapshot &event) {
   if(motionPending)++motionDrops;
   latestMotion={};latestMotion.number=practice.recent()->number;latestMotion.rpm=event.resultRpm;
   const bool beat=bestStore.ready() && personalBests.observe(unsigned(event.sensorProfile),unsigned(event.estimator),event.valid,event.resultRpm);
-  const bool celebrate=beat && !tournamentMode && !historyPage && !diagnostics;
-  bestEffect.queue(celebrate,latestMotion.number,celebrate?celebrationEffect():Appearance::Effect::Off);
+  // The selected estimator's RPM is the pull's RPM, for milestones as for bests.
+  const bool visible=!tournamentMode && !historyPage && !diagnostics;
+  const auto decision=visible?Milestones::decide(milestones,event.valid,event.resultRpm,beat,
+    beat && milestones.mode()!=Milestones::Mode::Milestones?celebrationEffect():Appearance::Effect::Off):Milestones::Decision{};
+  bestEffect.queue(decision.show,latestMotion.number,decision.effect,decision.best,decision.milestone);
+  Serial.printf("CELEBRATION launch=%lu rpm=%.1f shown_rpm=%ld valid=%d mode=%s best=%d milestone=%u effect=%s celebrate=%d\n",(unsigned long)latestMotion.number,
+    event.resultRpm,Milestones::shown(event.resultRpm),event.valid,Milestones::name(milestones.mode()),beat,unsigned(decision.milestone),
+    decision.show?Appearance::label(decision.effect):"none",decision.show);
   motionStart=event.burstStartHostUs;motionEnd=event.burstEndHostUs;motionPending=true;
   // Update the recording regardless of navigation, without stealing an edit
   // or revealing results in tournament. Main/recap alone follows new pulls.
@@ -881,6 +927,7 @@ static void writeSettings() {
     if(current && MountOrientationSetting::save(prefs,mountMode))saved|=SettingsSave::Mount;
   }
   if((items&SettingsSave::Appearance) && appearanceStore.save(appearance))saved|=SettingsSave::Appearance;
+  if((items&SettingsSave::Milestones) && milestoneStore.save(milestones))saved|=SettingsSave::Milestones;
   if((items&SettingsSave::Pin) && prefs.putUChar("ao_pin",live.pin)==1)saved|=SettingsSave::Pin;
   if((items&SettingsSave::ExtPower) && prefs.putBool("ext5v",extPower)==1)saved|=SettingsSave::ExtPower;
   settingsSave.wrote(saved);dirty=true;
@@ -926,13 +973,21 @@ static void commitSetting() {
     case Controls::Setting::Theme:case Controls::Setting::BestEffect:case Controls::Setting::Sound: {
       // An unreadable stored look cannot be replaced; keep showing it rather
       // than a choice that would silently revert at the next boot.
+      using S=Controls::Setting;const auto row=S(controls.setting);
       auto next=appearance;
-      applied=appearanceStore.ready() && (controls.setting!=5 || themeLibrary.available(Appearance::Theme(value))) &&
-        next.select(controls.setting==5?Appearance::Theme(value):appearance.theme,
-                      controls.setting==6?Appearance::Effect(value):appearance.effect,
-                      controls.setting==7?Appearance::Sound(value):appearance.sound);
+      applied=appearanceStore.ready() && (row!=S::Theme || themeLibrary.available(Appearance::Theme(value))) &&
+        next.select(row==S::Theme?Appearance::Theme(value):appearance.theme,
+                      row==S::BestEffect?Appearance::Effect(value):appearance.effect,
+                      row==S::Sound?Appearance::Sound(value):appearance.sound);
       changed=applied && next.generation()!=appearance.generation();
       if(changed)appearance=next;
+      break;
+    }
+    case Controls::Setting::Celebrate: {
+      auto next=milestones;
+      applied=milestoneStore.ready() && next.select(Milestones::Mode(value));
+      changed=applied && next.generation()!=milestones.generation();
+      if(changed)milestones=next;
       break;
     }
     case Controls::Setting::WipeAll:applied=false;break; // Erasure never uses Apply or draft values.
@@ -967,15 +1022,12 @@ static void navigate(Controls::Effect effect,Controls::Page previous) {
     case Controls::Effect::Recap:toggleFeedback();break;
     case Controls::Effect::BeginEdit:
       settingsSaveError=false;
-      controls.draft=controls.setting==0?inactivity.minutes():controls.setting==1?uint8_t(rpmEstimator):controls.setting==2?brightnessPercent:
-        controls.setting==3?uint8_t(displayFlipped):controls.setting==4?uint8_t(sensorProfile):
-        controls.setting==5?uint8_t(themeLibrary.effective(appearance.theme)):controls.setting==6?uint8_t(appearance.effect):
-        controls.setting==7?uint8_t(appearance.sound):uint8_t(mountMode);
-      if(controls.setting==6)previewEffect();
+      controls.draft=settingValue(controls.setting);
+      if(controls.setting==unsigned(Controls::Setting::BestEffect))previewEffect();
       break;
     case Controls::Effect::Preview:settingsSaveError=false;previewSetting();
-      if(controls.setting==6)previewEffect();
-      if(controls.setting==7)previewSound();
+      if(controls.setting==unsigned(Controls::Setting::BestEffect))previewEffect();
+      if(controls.setting==unsigned(Controls::Setting::Sound))previewSound();
       break;
     case Controls::Effect::Apply:commitSetting();break;
     case Controls::Effect::CancelEdit:cancelSettingEdit();break;
@@ -1294,10 +1346,11 @@ LOOP_HELPER static void exportBackup() {
   contents->hasMotion=referenceMotion.valid();if(contents->hasMotion)contents->motion=referenceMotion;
   contents->settings={inactivity.minutes(),brightnessPercent,rpmEstimator,sensorProfile,displayFlipped,mountMode};
   contents->hasThemes=!themeLibrary.empty();contents->themes=themeLibrary;
+  contents->hasMilestones=!milestones.isDefault();contents->milestones=milestones;
   const size_t n=DeviceBackup::encode(*contents,VERSION,*buffer);
   if(!n){Serial.println("BACKUP_ERROR out_of_memory");return;}
-  Serial.printf("BACKUP_BEGIN format=%lu bytes=%u records=%u sessions=%u motion=%d themes=%d runtime=%s\n",
-    (unsigned long)contents->format(),unsigned(n),practice.size(),practice.sessions(),contents->hasMotion,contents->hasThemes,VERSION);
+  Serial.printf("BACKUP_BEGIN format=%lu bytes=%u records=%u sessions=%u motion=%d themes=%d milestones=%d runtime=%s\n",
+    (unsigned long)contents->format(),unsigned(n),practice.size(),practice.sessions(),contents->hasMotion,contents->hasThemes,contents->hasMilestones,VERSION);
   DeviceBackup::base64Lines(buffer->data(),n,96,[](const char *line){Serial.print("BACKUP_DATA ");Serial.println(line);});
   Serial.println("BACKUP_END");
 }
@@ -1312,21 +1365,22 @@ LOOP_HELPER static void finishRestore(const Snapshot &s) {
   if(!restoreRx.take(buffer->data(),buffer->size(),n) || !DeviceBackup::decode(buffer->data(),n,*contents)) {
     Serial.println("RESTORE_ERROR reason=invalid_backup written=0");return;
   }
-  Serial.printf("RESTORE_VALID records=%u sessions=%u motion=%d themes=%d from=%s\n",contents->practice.size(),
-    contents->practice.sessions(),contents->hasMotion,contents->hasThemes,contents->runtime);
+  Serial.printf("RESTORE_VALID records=%u sessions=%u motion=%d themes=%d milestones=%d from=%s\n",contents->practice.size(),
+    contents->practice.sessions(),contents->hasMotion,contents->hasThemes,contents->hasMilestones,contents->runtime);
   if(motionPending || s.phase==AnalogTachometer::Phase::Launch || !acquisition.request(Action::IdleCheckpointBegin,s.launches)) {
     Serial.println("RESTORE_ERROR reason=busy written=0");return;
   }
   contents->practice.supersede(practice.generation());
   contents->look.revision=appearance.revision+1;contents->bests.revision=personalBests.revision+1;
-  contents->themes.revision=themeLibrary.revision+1;
+  contents->themes.revision=themeLibrary.revision+1;contents->milestones.revision=milestones.revision+1;
   const auto &settings=contents->settings;
   const bool saved=practiceStore.save(contents->practice) && appearanceStore.save(contents->look) &&
     bestStore.save(contents->bests) && (!contents->hasMotion || motionStore.save(contents->motion)) &&
     prefs.putUChar("sleep_min",settings.sleepMinutes)==1 && prefs.putUChar("bright_pct",settings.brightness)==1 &&
     RpmEstimatorSetting::save(prefs,settings.rpmMethod) && SensorProfileSetting::save(prefs,settings.sensorProfile) &&
     DisplayFlipSetting::save(prefs,settings.flipped) && MountOrientationSetting::save(prefs,settings.mount) &&
-    (!contents->hasThemes || themeStore.save(contents->themes,true));
+    (!contents->hasThemes || themeStore.save(contents->themes,true)) &&
+    (!contents->hasMilestones || milestoneStore.save(contents->milestones));
   if(!saved) {
     if(!acquisition.request(Action::CheckpointEnd))Serial.println("RESTORE_ERROR ADC checkpoint resume failed");
     // Earlier records may already hold the restored values; restoring again is safe.
@@ -1450,6 +1504,79 @@ LOOP_HELPER static void pollThemeRequest(const Snapshot &s) {
       case DeviceBackup::Receiver::Event::Complete:finishThemeRequest(s);break;
       case DeviceBackup::Receiver::Event::Error:Serial.printf("THEME_ERROR reason=%s written=0\n",themeRx.error());themeReply();break;
       case DeviceBackup::Receiver::Event::None:break;
+    }
+  }
+}
+
+// ---- USB milestones -----------------------------------------------------------
+// `M` lists the Celebrate mode and the table; `U` takes one framed,
+// checksummed request (set or reset) like a theme request. A request is
+// checked whole and saved inside an idle checkpoint, or nothing changes.
+static void milestoneReply(){UsbTx::drain(100);}
+static const char *milestoneStoreName(){return !milestoneStore.ready()?"unavailable":milestoneStore.damaged()?"damaged":"ok";}
+// An upload must leave room for a history rewrite in the 20 KB NVS.
+static constexpr unsigned MILESTONE_NEEDED_ENTRIES=NvsBudget::blobEntries(Milestones::Config::IMAGE_BYTES)+
+  NvsBudget::blobEntries(PracticeHistory::IMAGE_BYTES);
+LOOP_HELPER static void listMilestones() {
+  unsigned available=0;const bool known=nvsAvailable(available);
+  Milestones::Config::Image image;milestones.encode(image);
+  char data[(Milestones::Config::IMAGE_BYTES+2)/3*4+1]={};
+  DeviceBackup::base64Lines(image.data(),image.size(),96,[&](const char *line){strncpy(data,line,sizeof(data)-1);});
+  Serial.printf("MILESTONE_LIST mode=%s rows=%u max_rows=%u min_rpm=%u max_rpm=%u revision=%lu store=%s default=%d nvs_available=%d nvs_needed=%u data=%s\n",
+    Milestones::name(milestones.mode()),milestones.count(),Milestones::MAX_ROWS,unsigned(Milestones::MIN_RPM),unsigned(Milestones::MAX_RPM),
+    (unsigned long)milestones.revision,milestoneStoreName(),milestones.isDefault(),known?int(available):-1,MILESTONE_NEEDED_ENTRIES,data);
+  for(unsigned i=0;i<milestones.count();++i)
+    Serial.printf("MILESTONE_ROW index=%u rpm=%u effect=%s effect_id=%u\n",i,unsigned(milestones.row(i).rpm),
+      Appearance::label(milestones.row(i).effect),unsigned(milestones.row(i).effect));
+  Serial.println("MILESTONE_LIST_END");milestoneReply();
+}
+LOOP_HELPER static void finishMilestoneRequest(const Snapshot &s) {
+  uint8_t bytes[Milestones::Request::BYTES];size_t n=0;
+  Milestones::Request request;Milestones::Problem problem=Milestones::Problem::None;unsigned row=0;
+  if(!milestoneRx.take(bytes,sizeof(bytes),n) || !request.decode(bytes,n,problem,row)) {
+    Serial.println("MILESTONE_ERROR reason=invalid_request written=0");milestoneReply();return;
+  }
+  const char *op=Milestones::Request::name(request.op);
+  if(problem!=Milestones::Problem::None) {
+    Serial.printf("MILESTONE_ERROR op=%s reason=invalid_table problem=%s row=%u written=0\n",op,Milestones::problemName(problem),row);
+    milestoneReply();return;
+  }
+  auto fail=[&](const char *reason){Serial.printf("MILESTONE_ERROR op=%s reason=%s written=0\n",op,reason);milestoneReply();};
+  if(!milestoneStore.ready())return fail("storage_unavailable");
+  auto next=milestones;
+  if(request.op==Milestones::Request::Op::Reset)next.reset();
+  else next.set(request.mode,request.rows,request.count);
+  // A damaged record is replaced even by the table it already shows.
+  if(next.generation()==milestones.generation() && !milestoneStore.damaged()) {
+    Serial.printf("MILESTONE_OK op=%s revision=%lu unchanged=1\n",op,(unsigned long)milestones.revision);milestoneReply();return;
+  }
+  if(next.generation()==milestones.generation())++next.revision;
+  unsigned available=0;
+  if(!nvsAvailable(available) || available<MILESTONE_NEEDED_ENTRIES) {
+    Serial.printf("MILESTONE_ERROR op=%s reason=nvs_space available_entries=%u needed_entries=%u written=0\n",op,available,MILESTONE_NEEDED_ENTRIES);
+    milestoneReply();return;
+  }
+  if(motionPending || s.phase==AnalogTachometer::Phase::Launch || !acquisition.request(Action::IdleCheckpointBegin,s.launches))return fail("busy");
+  const bool ok=milestoneStore.save(next);
+  if(!acquisition.request(Action::CheckpointEnd))Serial.println("MILESTONE_NOTICE adc_checkpoint_resume_failed");
+  if(!ok){Serial.printf("MILESTONE_ERROR op=%s reason=write_failed written=unknown\n",op);milestoneReply();dirty=true;return;}
+  milestones=next;
+  // A Celebrate editor open on the device shows a draft of the old mode.
+  if(controls.page==Controls::Page::Edit && controls.setting==unsigned(Controls::Setting::Celebrate))cancelSettingEdit();
+  syncNavigation();
+  Serial.printf("MILESTONE_OK op=%s revision=%lu mode=%s rows=%u\n",op,(unsigned long)milestones.revision,
+    Milestones::name(milestones.mode()),milestones.count());milestoneReply();
+}
+LOOP_HELPER static void pollMilestoneRequest(const Snapshot &s) {
+  const uint32_t now=millis();
+  if(milestoneRx.timedOut(now)){milestoneRx.cancel();Serial.println("MILESTONE_ERROR reason=timeout written=0");milestoneReply();return;}
+  for(unsigned n=0;n<256 && milestoneRx.active() && Serial.available();++n) {
+    inactivity.touch(now);
+    switch(milestoneRx.feed(Serial.read(),now)) {
+      case DeviceBackup::TransferEvent::Chunk:Serial.printf("MILESTONE_CHUNK chars=%u\n",milestoneRx.received());milestoneReply();break;
+      case DeviceBackup::TransferEvent::Complete:finishMilestoneRequest(s);break;
+      case DeviceBackup::TransferEvent::Error:Serial.printf("MILESTONE_ERROR reason=%s written=0\n",milestoneRx.error());milestoneReply();break;
+      case DeviceBackup::TransferEvent::None:break;
     }
   }
 }
@@ -1654,6 +1781,8 @@ void setup() {
   if(!appearanceStore.begin(appearance,"ll-appearance","cfg0","cfg1"))Serial.println("APPEARANCE_NOTICE invalid_record_retained_using_defaults");
   if(!bestStore.begin(personalBests,"ll-bests","best0","best1"))Serial.println("BEST_NOTICE invalid_record_retained_celebration_disabled");
   if(themeStore.begin(themeLibrary)==ThemeStore::Status::Unreadable)Serial.println("THEME_NOTICE invalid_record_retained_using_default_colors");
+  if(!milestoneStore.begin(milestones,"ll-appearance","mile0","mile1",true))
+    Serial.println(milestoneStore.damaged()?"MILESTONE_NOTICE invalid_record_using_defaults":"MILESTONE_NOTICE storage_unavailable_using_defaults");
   controls.customThemes=themeLibrary.validMask();
   if(!themeLibrary.available(appearance.theme))Serial.printf("THEME_NOTICE selected_theme_unavailable theme=%u showing=%u\n",unsigned(appearance.theme),unsigned(Themes::FALLBACK));
   uint8_t pin=prefs.getUChar("ao_pin",1);
@@ -1697,7 +1826,7 @@ void setup() {
   Serial.printf("BOOT %s ppr=1 min_rpm=1000 min_mark=%.0f edge_fraction=%.2f sample_hz=50000 task_core=0\n",VERSION,
     StickS3SensorProfile::minMark(sensorProfile),StickS3SensorProfile::EDGE_SWING_FRACTION);
   Serial.printf("RPM_SETTING_BOOT selected=%s default=three_turn_peak legacy_history=retained_metric_not_encoded\n",RpmEstimator::name(rpmEstimator));
-  Serial.println("READY commands: p status, P power log, C CPU power profiling, a/c tap A, h tap B, o hold A, b hold B, d diagnostics, n new session, u history export, K backup export, R backup restore, L custom themes, T theme request, e motion export, q synthetic recap, E<0-4> best effect preview, t synthetic history, y/z storage check, v screen, w recorder export, x ext5V, g<N> GPIO, s stress, j UI stall");
+  Serial.println("READY commands: p status, P power log, C CPU power profiling, a/c tap A, h tap B, o hold A, b hold B, d diagnostics, n new session, u history export, K backup export, R backup restore, L custom themes, T theme request, M milestones, U milestone request, e motion export, q synthetic recap, E<0-4,7> best effect preview, t synthetic history, y/z storage check, v screen, w recorder export, x ext5V, g<N> GPIO, s stress, j UI stall");
 #if LAUNCHLAB_HIL
   hilBoot();
 #endif
@@ -1707,8 +1836,10 @@ void setup() {
 // the codec powers down once silent and no pull is being measured.
 LOOP_HELPER static void tickSound(const Snapshot &s) {
   const bool measuring=s.phase==AnalogTachometer::Phase::Launch;
-  const bool celebrating=bestEffect.badge(),editing=controls.page==Controls::Page::Edit && (controls.setting==6 || controls.setting==7);
-  if(editorEffect.badge() && !(controls.page==Controls::Page::Edit && controls.setting==6)){editorEffect.clear();dirty=true;}
+  using S=Controls::Setting;
+  const bool effectEditor=controls.page==Controls::Page::Edit && controls.setting==unsigned(S::BestEffect);
+  const bool celebrating=bestEffect.badge(),editing=effectEditor || (controls.page==Controls::Page::Edit && controls.setting==unsigned(S::Sound));
+  if(editorEffect.badge() && !effectEditor){editorEffect.clear();dirty=true;}
   if(measuring || (celebrationSound && !celebrating) || (soundPreview && !editing)) {
     soundPlayer.stop();celebrationSound=soundPreview=false;
   }
@@ -1719,14 +1850,21 @@ LOOP_HELPER static void tickSound(const Snapshot &s) {
   if(measuring || motionPending)return;
   // Render a slice per idle pass (1/64 s of audio, a few ms): a waiting
   // request first, else the chosen effect, ready before the next best or the
-  // first preview while the Sound editor is open.
+  // first preview while the Sound editor is open, then every effect the
+  // milestone table can play, since a milestone is known only once its pull ends.
   constexpr size_t SLICE=BestEffectSound::RATE/64;
   if(soundRequest.active) {
     if(soundPlayer.prepare(soundRequest.effect,SLICE))requestSound(soundRequest.effect,soundRequest.level,soundRequest.celebration);
     return;
   }
   const bool wanted=appearance.sound!=Appearance::Sound::Off || editing;
-  if(wanted && !soundPlayer.prepared(soundTarget()))soundPlayer.prepare(soundTarget(),SLICE);
+  if(!wanted)return;
+  if(!soundPlayer.prepared(soundTarget())){soundPlayer.prepare(soundTarget(),SLICE);return;}
+  if(appearance.sound==Appearance::Sound::Off || !Milestones::milestones(milestones.mode()))return;
+  for(unsigned i=0;i<milestones.count();++i) {
+    const auto effect=milestones.row(i).effect;
+    if(!soundPlayer.prepared(effect)){soundPlayer.prepare(effect,SLICE);return;}
+  }
 }
 
 // USB only: replay the last recap with a celebration to check an effect on the
@@ -1837,6 +1975,8 @@ LOOP_HELPER static void runUsbCommand(const char *command,const Snapshot &s) {
   else if(c=='R'){restoreRx.start(millis());Serial.printf("RESTORE_READY max_chars=%u\n",DeviceBackup::TEXT_BYTES);}
   else if(c=='L')listThemes();
   else if(c=='T'){themeRx.start(millis());Serial.printf("THEME_READY max_chars=%u\n",unsigned((Themes::Request::BYTES+2)/3*4));themeReply();}
+  else if(c=='M')listMilestones();
+  else if(c=='U'){milestoneRx.start(millis());Serial.printf("MILESTONE_READY max_chars=%u\n",unsigned((Milestones::Request::BYTES+2)/3*4));milestoneReply();}
   else if(c=='t')previewHistory();
   else if(c=='y')checkStorage();
   else if(c=='z')checkMotionStorage();
@@ -1860,16 +2000,17 @@ LOOP_HELPER static void pollCommands(const Snapshot &s) {
   // run state-changing letters: see usb_command_guard.h.
   auto &guard=usbCommands;char command[UsbCommandGuard::MAX+1];
   if(controls.page==Controls::Page::Wipe || wipeBlocked) {
-    restoreRx.cancel();themeRx.cancel();guard.cancel();
+    restoreRx.cancel();themeRx.cancel();milestoneRx.cancel();guard.cancel();
   } else {
     if(restoreRx.active())pollRestore(s);
     if(themeRx.active())pollThemeRequest(s);
+    if(milestoneRx.active())pollMilestoneRequest(s);
     // Quiet is the receive queue seen empty, not a slow pass.
     if(!Serial.available())guard.idle(millis());
     if(guard.due(millis(),command))runUsbCommand(command,s);
   }
   // Bound incoming work; an unending USB stream cannot starve button/draw work.
-  for(unsigned n=0;n<32 && !restoreRx.active() && !themeRx.active() && Serial.available();++n) {
+  for(unsigned n=0;n<32 && !restoreRx.active() && !themeRx.active() && !milestoneRx.active() && Serial.available();++n) {
     const char c=Serial.read();const uint32_t now=millis();
     // Wipe confirmations and the final hold belong to physical buttons.
     // Read-only status and cancellation cannot advance the confirmation.

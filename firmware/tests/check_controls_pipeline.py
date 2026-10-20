@@ -35,6 +35,7 @@ prefix=r'''
 #include "launch_feedback.h"
 #include "wipe_confirmation.h"
 #include "settings_save.h"
+#include "milestones.h"
 #include <cassert>
 #include <iostream>
 '''
@@ -46,6 +47,7 @@ prefix+=practice_ui[practice_ui.index('namespace PracticeUI {'):practice_ui.inde
 prefix+=r'''
 static Appearance::Config appearance;static Appearance::Bests personalBests;static Themes::Library themeLibrary;
 static AppearanceStore<Appearance::Bests> bestStore;static AppearanceStore<Appearance::Config> appearanceStore;static Appearance::Celebration bestEffect;
+static Milestones::Config milestones;static AppearanceStore<Milestones::Config> milestoneStore;
 static uint32_t clockMs=10000;static uint32_t millis(){return clockMs;}
 static unsigned soundPreviews=0,effectPreviews=0;static void previewSound(){++soundPreviews;}static void previewEffect(){++effectPreviews;}
 using Controls::Page;
@@ -134,6 +136,7 @@ static void reset(){
   clockMs=10000;settingsSave={};extPower=directWrites=false;
   Preferences::data.clear();Preferences::zeroLengthKeys.clear();Preferences::failWrite=Preferences::shortRead=false;Preferences::beforeWrite=writeGuard;
   assert(prefs.begin("controls-test",false));assert(appearanceStore.begin(appearance,"controls-appearance","cfg0","cfg1"));
+  milestones={};milestoneStore={};assert(milestoneStore.begin(milestones,"controls-appearance","mile0","mile1",true));
 }
 static void retry(uint32_t ms){clockMs+=ms;saveSettings(millis(),acquisition.snapshot());}
 static uint8_t stored(const char *key){uint8_t value=0;assert(prefs.getBytes(key,&value,1)==1);return value;}
@@ -244,15 +247,15 @@ int main(){
   reset();const auto untouched=practice.generation();edit(5);buttonB();assert(controls.draft==1 && appearance.theme==Appearance::Theme::Classic);holdB();assert(appearance.theme==Appearance::Theme::Classic);
   edit(5);buttonB();buttonA();assert(appearance.theme==Appearance::Theme::Mint && practice.generation()==untouched && !acquisition.estimatorChanges && !acquisition.profileChanges && !settingsSave.pending());
   // Random is the default and comes first; B steps to Orbit and previews it.
-  edit(6);assert(controls.draft==uint8_t(Appearance::Effect::Random));const unsigned shown=effectPreviews;buttonB();assert(effectPreviews==shown+1);
+  edit(unsigned(Controls::Setting::BestEffect));assert(controls.draft==uint8_t(Appearance::Effect::Random));const unsigned shown=effectPreviews;buttonB();assert(effectPreviews==shown+1);
   Preferences::failWrite=true;buttonA();assert(!settingsSaveError && appearance.effect==Appearance::Effect::Orbit && controls.page==Page::Settings && settingsSave.failed());
   Preferences::failWrite=false;retry(SettingsSave::FAILED_RETRY_MS);assert(!settingsSave.pending());
   Appearance::Config restored;AppearanceStore<Appearance::Config> reader;assert(reader.begin(restored,"controls-appearance","cfg0","cfg1") && restored.theme==appearance.theme && restored.effect==appearance.effect);
   // Sound: each B previews the draft level; only Apply saves it, with the theme and effect intact.
-  edit(7);assert(controls.draft==0);const unsigned previews=soundPreviews;buttonB();buttonB();
+  edit(unsigned(Controls::Setting::Sound));assert(controls.draft==0);const unsigned previews=soundPreviews;buttonB();buttonB();
   assert(controls.draft==2 && soundPreviews==previews+2 && appearance.sound==Appearance::Sound::Off);
   holdB();assert(appearance.sound==Appearance::Sound::Off);
-  edit(7);buttonB();buttonA();assert(appearance.sound==Appearance::Sound::Low && controls.page==Page::Settings);
+  edit(unsigned(Controls::Setting::Sound));buttonB();buttonA();assert(appearance.sound==Appearance::Sound::Low && controls.page==Page::Settings);
   {Appearance::Config again;AppearanceStore<Appearance::Config> reread;assert(reread.begin(again,"controls-appearance","cfg0","cfg1") &&
     again.sound==Appearance::Sound::Low && again.theme==Appearance::Theme::Mint && again.effect==Appearance::Effect::Orbit);}
   // An unreadable stored look cannot be replaced: Apply says so and keeps the
@@ -266,10 +269,10 @@ int main(){
   // Flip are preserved.
   reset();assert(practice.accept(1,true,6000,millis()));const auto mountSession=practice.session()->number;
   level.feed(.1f,0,1,millis());drawnLevel=level.reading(millis());lastLevelSampleUs=12345;
-  edit(8);assert(controls.draft==0);buttonB();
+  edit(unsigned(Controls::Setting::Mount));assert(controls.draft==0);buttonB();
   assert(controls.draft==1 && mountMode==MountOrientation::Mode::Top && !prefs.writes && !imuAcquisition.changes);
   holdB();assert(mountMode==MountOrientation::Mode::Top && !prefs.writes && !imuAcquisition.changes);
-  edit(8);buttonB();acquisition.state.phase=AnalogTachometer::Phase::Launch;buttonA();
+  edit(unsigned(Controls::Setting::Mount));buttonB();acquisition.state.phase=AnalogTachometer::Phase::Launch;buttonA();
   assert(controls.page==Page::Settings && !settingsSaveError && mountMode==MountOrientation::Mode::Sidecar);
   assert(liveMount==MountOrientation::Mode::Top && !prefs.writes && !imuAcquisition.changes && lastLevelSampleUs==12345);
   acquisition.state.phase=AnalogTachometer::Phase::Ready;motionPending=true;retry(20);
@@ -281,9 +284,9 @@ int main(){
   assert(practice.accept(2,true,6100,millis()) && practice.session()->number==mountSession && practice.size()==2);
   MountOrientation::Mode mountSaved;assert(MountOrientationSetting::load(prefs,mountSaved) && mountSaved==mountMode);
   const auto mountBytes=Preferences::data;const auto mountChanges=imuAcquisition.changes;
-  edit(8);buttonA();assert(Preferences::data==mountBytes && imuAcquisition.changes==mountChanges);
+  edit(unsigned(Controls::Setting::Mount));buttonA();assert(Preferences::data==mountBytes && imuAcquisition.changes==mountChanges);
   // A busy IMU owner keeps the old frame and record until it can switch.
-  edit(8);buttonB();imuAcquisition.fail=true;buttonA();
+  edit(unsigned(Controls::Setting::Mount));buttonB();imuAcquisition.fail=true;buttonA();
   assert(controls.page==Page::Settings && mountMode==MountOrientation::Mode::Top && liveMount==MountOrientation::Mode::Sidecar && settingsSave.failed());
   assert(MountOrientationSetting::load(prefs,mountSaved) && mountSaved==MountOrientation::Mode::Sidecar);
   imuAcquisition.fail=false;Preferences::failWrite=true;retry(SettingsSave::FAILED_RETRY_MS);
@@ -291,6 +294,30 @@ int main(){
   Preferences::failWrite=false;retry(SettingsSave::FAILED_RETRY_MS);
   assert(!settingsSave.pending() && MountOrientationSetting::load(prefs,mountSaved) && mountSaved==mountMode && imuAcquisition.changes==mountChanges+1);
   assert(acquisition.begins==acquisition.ends);
+  // Celebrate: drafts change nothing; Apply takes the mode at once and saves
+  // it with the milestone table, inside a checkpoint, leaving the table and
+  // the look alone.
+  {
+    using Milestones::Mode;const auto row=unsigned(Controls::Setting::Celebrate);
+    reset();const unsigned effects=effectPreviews,sounds=soundPreviews;edit(row);assert(controls.draft==uint8_t(Mode::Best));buttonB();
+    assert(controls.draft==uint8_t(Mode::Milestones) && milestones.mode()==Mode::Best && !prefs.writes && effectPreviews==effects && soundPreviews==sounds);
+    holdB();assert(milestones.mode()==Mode::Best && !prefs.writes);
+    edit(row);buttonB();buttonB();assert(controls.draft==uint8_t(Mode::Both));buttonB();assert(controls.draft==uint8_t(Mode::Best));
+    buttonB();buttonB();acquisition.state.phase=AnalogTachometer::Phase::Launch;buttonA();
+    assert(controls.page==Page::Settings && milestones.mode()==Mode::Both && settingsSave.pending()==SettingsSave::Milestones && !prefs.writes);
+    acquisition.state.phase=AnalogTachometer::Phase::Ready;retry(20);
+    assert(!settingsSave.pending() && acquisition.begins==acquisition.ends);
+    Milestones::Config reread;AppearanceStore<Milestones::Config> reader;
+    assert(reader.begin(reread,"controls-appearance","mile0","mile1",true) && reread.mode()==Mode::Both && reread.same(milestones));
+    assert(appearance.theme==Appearance::Theme::Classic && appearance.effect==Appearance::Effect::Random);
+    // A damaged record shows the defaults and the next Apply replaces it.
+    reset();Preferences::data["controls-appearancemile0"]={1,2,3};Preferences::data["controls-appearancemile1"]={4,5,6};milestoneStore={};
+    assert(!milestoneStore.begin(milestones,"controls-appearance","mile0","mile1",true) && milestoneStore.damaged() && milestoneStore.ready());
+    assert(milestones.isDefault());
+    edit(row);buttonB();buttonA();assert(controls.page==Page::Settings && !settingsSaveError && milestones.mode()==Mode::Milestones && !settingsSave.pending());
+    Milestones::Config fixed;AppearanceStore<Milestones::Config> again;
+    assert(again.begin(fixed,"controls-appearance","mile0","mile1",true) && !again.damaged() && fixed.mode()==Mode::Milestones);
+  }
   reset();holdA();assert(tournamentMode && tournamentView==TournamentView::RecordingOnly);
   buttonA();holdB();assert(tournamentMode && !launchFeedback.shown());buttonB();assert(tournamentView==TournamentView::Rpm);
   holdA();assert(!tournamentMode && controls.page==Page::Main);
@@ -307,6 +334,15 @@ int main(){
   std::cout<<"PASS: actual control handlers; menu/back, recap, preview rollback, Apply never refused by a busy signal, queued checkpoint-only writes with bounded retry, active-pull/capture guard, metric/session boundary at the switch, sound preview/apply and tournament lock\n";
 }
 '''
+def definition(signature):
+    start=source.index(signature)
+    cursor=source.index('{',start)+1
+    depth=1
+    while depth:
+        depth+=(source[cursor]=='{')-(source[cursor]=='}')
+        cursor+=1
+    return source[start:cursor]
+prefix+=definition('static uint8_t settingValue(unsigned row)')+'\n'
 names=['syncNavigation','toggleFeedback','previewSetting','beginWipe','cancelWipe','cancelSettingEdit','writeSettings','saveSettings','commitSetting','newSession','browseOlder','navigate','buttonA','buttonB','holdA','holdB']
 with tempfile.TemporaryDirectory(prefix='launchlab-controls-') as directory:
     directory=Path(directory);cpp=directory/'test.cpp';exe=directory/'test'

@@ -7,8 +7,8 @@
 namespace Controls {
 enum class Page:uint8_t {Main,Menu,HistoryMenu,History,Battery,Settings,Edit,NewSession,Tournament,Wipe};
 enum class Effect:uint8_t {None,Recap,BeginEdit,Preview,Apply,CancelEdit,Older,NewSession,Tournament,BeginWipe,ConfirmWipe,CancelWipe};
-enum class Setting:uint8_t {Sleep,Rpm,Brightness,Flip,Sensor,Theme,BestEffect,Sound,Mount,WipeAll};
-static constexpr unsigned EDITABLE_SETTING_COUNT=9,SETTING_COUNT=10;
+enum class Setting:uint8_t {Sleep,Rpm,Brightness,Flip,Sensor,Theme,BestEffect,Celebrate,Sound,Mount,WipeAll};
+static constexpr unsigned EDITABLE_SETTING_COUNT=10,SETTING_COUNT=11;
 struct State {
   Page page=Page::Main;
   uint8_t menu=0,history=0,setting=0,draft=0;
@@ -60,6 +60,7 @@ struct State {
             while(draft>=Appearance::THEMES && !((customThemes>>(draft-Appearance::THEMES))&1u));
             break;
           case Setting::BestEffect:draft=uint8_t(Appearance::nextChoice(Appearance::Effect(draft)));break;
+          case Setting::Celebrate:draft=(draft+1)%3;break;
           case Setting::Sound:draft=(draft+1)%3;break;
           case Setting::WipeAll:return Effect::None;
         }return Effect::Preview;
@@ -103,8 +104,10 @@ struct Gesture {
 // settings in 4 bits (9-12), view at bit 13. 0.13 adds Mount; distinguish
 // its schema so the old Back row still opens Back instead of the new editor.
 // Adding Wipe uses another schema and never resumes a destructive dialog.
+// 0.15 inserts Celebrate after Best effect: older rows from Sound on move
+// down one.
 static constexpr uint32_t LEGACY_WAKE_MAGIC=0x4e560000,WAKE7_MAGIC=0x4e570000,
-  WAKE8_MAGIC=0x4e580000,WAKE9_MAGIC=0x4e590000,WAKE_MAGIC=0x4e5a0000;
+  WAKE8_MAGIC=0x4e580000,WAKE9_MAGIC=0x4e590000,WAKE10_MAGIC=0x4e5a0000,WAKE_MAGIC=0x4e5b0000;
 inline uint32_t encodeWake(State state,uint8_t tournamentView) {
   if(state.page==Page::Edit || state.page==Page::Wipe)state.page=Page::Settings;
   return WAKE_MAGIC|uint32_t(state.page)|(uint32_t(state.menu)<<4)|
@@ -112,20 +115,23 @@ inline uint32_t encodeWake(State state,uint8_t tournamentView) {
 }
 inline bool decodeWake(uint32_t value,State &out,uint8_t &tournamentView) {
   State state;state.page=Page(value&15);state.menu=(value>>4)&7;state.history=(value>>7)&3;
+  // Each layout's Back row is the one after its last setting.
+  unsigned setting=0,back=0;
   const auto wideMagic=value&0xffffc000;
-  if(wideMagic==WAKE_MAGIC || wideMagic==WAKE8_MAGIC || wideMagic==WAKE9_MAGIC) {
-    state.setting=(value>>9)&15;tournamentView=(value>>13)&1;
-    if(wideMagic==WAKE8_MAGIC){if(state.setting>8)return false;if(state.setting==8)state.setting=SETTING_COUNT;}
-    if(wideMagic==WAKE9_MAGIC){if(state.setting>9)return false;if(state.setting==9)state.setting=SETTING_COUNT;}
+  if(wideMagic==WAKE_MAGIC || wideMagic==WAKE10_MAGIC || wideMagic==WAKE9_MAGIC || wideMagic==WAKE8_MAGIC) {
+    setting=(value>>9)&15;tournamentView=(value>>13)&1;
+    back=wideMagic==WAKE8_MAGIC?8:wideMagic==WAKE9_MAGIC?9:wideMagic==WAKE10_MAGIC?10:SETTING_COUNT;
   }
   else {
     const auto magic=value&0xffffe000;
     if(magic!=WAKE7_MAGIC && magic!=LEGACY_WAKE_MAGIC)return false;
-    const unsigned rows=magic==LEGACY_WAKE_MAGIC?5:7;
-    state.setting=(value>>9)&7;tournamentView=(value>>12)&1;
-    if(state.setting>rows)return false;
-    if(state.setting==rows)state.setting=SETTING_COUNT;
+    back=magic==LEGACY_WAKE_MAGIC?5:7;
+    setting=(value>>9)&7;tournamentView=(value>>12)&1;
   }
+  if(setting>back)return false;
+  if(setting==back)setting=SETTING_COUNT;
+  else if(wideMagic!=WAKE_MAGIC && setting>=unsigned(Setting::Celebrate))++setting;
+  state.setting=uint8_t(setting);
   if(uint8_t(state.page)>uint8_t(Page::Wipe) || state.page==Page::Edit || state.page==Page::Wipe || state.menu>=6 || state.setting>SETTING_COUNT)return false;
   out=state;return true;
 }

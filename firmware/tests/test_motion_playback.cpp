@@ -35,6 +35,7 @@ private:
 }
 #include "../LaunchLabMini/motion_ui.h"
 #include "../LaunchLabMini/appearance.h"
+#include "../LaunchLabMini/milestones.h"
 #include "../LaunchLabMini/theme_library.h"
 #include "../LaunchLabMini/screens_ui.h"
 static Appearance::Celebration bestEffect;static Palette::Colors ui(){return Themes::builtIn(Appearance::Theme::Classic);}

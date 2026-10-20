@@ -36,11 +36,11 @@ int main() {
   using namespace Controls;unsigned renders=0;
   for(unsigned row=0;row<6;++row){lgfx::LGFXBase g;ControlsUI::list(g,"Menu",ControlsUI::MENU,6,row);assert(g.footers==1);++renders;}
   for(unsigned row=0;row<4;++row){lgfx::LGFXBase g;ControlsUI::list(g,"History",ControlsUI::HISTORY,4,row);assert(g.footers==1);++renders;}
-  uint8_t values[]={10,0,100,1,0,0,0,2,0};
+  uint8_t values[]={10,0,100,1,0,0,0,2,2,0};
   for(unsigned row=0;row<=SETTING_COUNT;++row){lgfx::LGFXBase g;State state;state.setting=row;ControlsUI::settings(g,state,values);assert(g.footers==1);++renders;}
   // Lowest and highest draft for each setting. A named array keeps the values
   // alive for the loop; a conditional initializer_list would dangle.
-  const unsigned extremes[][2]={{1,10},{0,1},{10,100},{0,1},{0,1},{0,Appearance::THEMES-1},{0,6},{0,2},{0,1}};
+  const unsigned extremes[][2]={{1,10},{0,1},{10,100},{0,1},{0,1},{0,Appearance::THEMES-1},{0,Appearance::EFFECTS-1},{0,2},{0,2},{0,1}};
   static_assert(sizeof(extremes)/sizeof(extremes[0])>=EDITABLE_SETTING_COUNT,"one range per editable setting");
   for(unsigned row=0;row<EDITABLE_SETTING_COUNT;++row)for(unsigned value:extremes[row]) {
     lgfx::LGFXBase g;State state;state.setting=row;state.draft=value;
@@ -83,6 +83,23 @@ int main() {
     assert(editor.valueEdges[0]>=8 && editor.valueEdges[1]<=127);++renders;
   }
   ControlsUI::themeLabel=nullptr;values[unsigned(Setting::Theme)]=0;
+  // The Celebrate editor summarizes the milestone table: the defaults, one
+  // row, and the widest thresholds the table allows, all inside the screen.
+  {
+    using Milestones::Row;using Appearance::Effect;
+    Milestones::Config defaults,one,wide;
+    const Row single[]={{12500,Effect::Slash}};assert(one.set(Milestones::Mode::Both,single,1)==Milestones::Problem::None);
+    Row rows[Milestones::MAX_ROWS];for(unsigned i=0;i<Milestones::MAX_ROWS;++i)rows[i]={uint16_t(10001+2857*i),Effect::Orbit};
+    assert(wide.set(Milestones::Mode::Milestones,rows,Milestones::MAX_ROWS)==Milestones::Problem::None);
+    for(const Milestones::Config *table:{(const Milestones::Config *)nullptr,(const Milestones::Config *)&defaults,(const Milestones::Config *)&one,(const Milestones::Config *)&wide})for(unsigned mode=0;mode<Milestones::MODES;++mode) {
+      ControlsUI::milestones=table;
+      State state;state.setting=unsigned(Setting::Celebrate);state.draft=mode;values[state.setting]=mode;
+      lgfx::LGFXBase row;ControlsUI::settings(row,state,values);assert(row.footers==1);++renders;
+      lgfx::LGFXBase editor;ControlsUI::editor(editor,state,false,false);
+      assert(editor.footers==1 && editor.cycleHints==1 && editor.valueEdges.size()==2);++renders;
+    }
+    ControlsUI::milestones=nullptr;
+  }
   for(bool start:{false,true}){lgfx::LGFXBase g;ControlsUI::session(g,start);assert(g.footers==1);++renders;}
   for(const char *label:{"Enter tournament","Exit tournament","Cancel change","Back"})for(unsigned elapsed:{0u,999u,1000u,10000u}) {
     lgfx::LGFXBase g;ControlsUI::hold(g,label,elapsed,1000);assert(g.footers==1);++renders;

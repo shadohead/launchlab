@@ -65,6 +65,9 @@ def main():
     # Sketches that schedule by IMU stillness: the launcher is set down.
     still = "static HistoryCheckpoint::Stillness imuStill{true,0};\n" if "imuStill" in source else ""
     header = constants + "\n" + still + "\n".join(function(source, name) for name in ["prepareMotion", "finishMotion", "toggleFeedback", "saveHistory"])
+    if "celebrationBadge()" in source:
+        start = source.index("static const char *celebrationBadge()")
+        header = source[start:close(source, source.index("{", start), "{", "}") + 1] + "\n" + header
     header += "\nstatic int actualSourceTime(const LaunchMotion::Trace &trial,float progress){using namespace MotionReplay;return " + pose_time + ";}\n"
     header += "static float actualProgress(uint32_t replayFrameElapsed){return " + progress + ";}\n"
     header += "static void draw(const Snapshot &s){const Palette::Colors colors=ui();" + frame_time + "lgfx::LGFXBase view;if(launchFeedback.shown() && !tournamentMode && !diagnostics && !historyPage){" + call + ";}recordFrame(view,replayFrameElapsed);advance(drawCostUs);" + hook + "}\n"

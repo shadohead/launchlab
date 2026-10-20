@@ -9,7 +9,7 @@ int main() {
   using Appearance::Effect;
   assert(BestEffectSound::samples(Effect::Off)==0 && BestEffectSound::samples(Effect::Random)==0);
   for(unsigned e=0;e<Appearance::DRAWN;++e) {
-    const auto effect=Effect(e);const size_t n=BestEffectSound::samples(effect);
+    const auto effect=Appearance::drawnEffect(e);const size_t n=BestEffectSound::samples(effect);
     assert(n==Appearance::duration(effect)*BestEffectSound::RATE/1000);
     std::vector<int16_t> a(n),b(n);
     BestEffectSound::render(effect,a.data(),n);BestEffectSound::render(effect,b.data(),n);
@@ -28,5 +28,5 @@ int main() {
     // A shorter buffer is filled exactly, never overrun (ASan checks the bound).
     std::vector<int16_t> part(n/3);BestEffectSound::render(effect,part.data(),part.size());
   }
-  std::cout<<"PASS: five deterministic effect sounds at effect length, soft-limited, audible, click-free, resumable slices, bounded writes\n";
+  std::cout<<"PASS: six deterministic effect sounds at effect length, soft-limited, audible, click-free, resumable slices, bounded writes\n";
 }

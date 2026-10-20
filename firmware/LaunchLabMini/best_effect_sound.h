@@ -151,6 +151,48 @@ struct Lightning {
     return v+spark.next()*tick.next(x,.7f);
   }
 };
+// A whoosh as the blade crosses, a bright inharmonic ring as it cuts, a low
+// knock as the halves part with spark ticks, and a short click when they
+// close again.
+struct Slash {
+  static constexpr int PARTIALS=4;
+  Noise noise{0x27d4eb2fu};Smooth low,wide,tick;Osc ring[PARTIALS],knock,click;Decay shing[PARTIALS],thud,spark,snap;
+  uint32_t ringStep[PARTIALS];bool cut=false,parted=false,closed=false;
+  uint32_t slot=~0u;float at=0;bool live=false,fired=false;
+  Slash() {
+    static constexpr float hz[]={1873.0f,2741.0f,3919.0f,5233.0f},rate[]={7,9,12,16};
+    for(int k=0;k<PARTIALS;++k){ringStep[k]=Osc::step(hz[k]);shing[k].set(rate[k]);}
+    thud.set(22);spark.set(1100);snap.set(90);
+  }
+  float next(float t) {
+    const float x=noise.next();float v=0;
+    // Whoosh: band-passed noise swelling over the swing, brighter as it ends.
+    if(t<.2f) {
+      const float swell=smooth(t*(1/.1f))*(1-smooth((t-.1f)*(1/.1f)));
+      v+=.6f*swell*(wide.next(x,.18f+.5f*clamp01(t*(1/.12f)))-low.next(x,.04f));
+    }
+    if(t>=.1f) {
+      static constexpr float level[]={.34f,.26f,.18f,.12f};
+      if(!cut){for(int k=0;k<PARTIALS;++k)shing[k].trigger(level[k]);cut=true;}
+      const float attack=smooth((t-.1f)*(1/.003f));
+      for(int k=0;k<PARTIALS;++k)v+=attack*shing[k].next()*ring[k].advance(ringStep[k]);
+    }
+    if(t>=.16f) {
+      if(!parted){thud.trigger(.55f);parted=true;}
+      const float hz=260-90*clamp01((t-.16f)*(1/.08f));
+      v+=thud.next()*knock.next(hz);
+    }
+    const uint32_t now=uint32_t(t*40);
+    if(now!=slot){slot=now;at=(slot+rnd(slot,5))*(1/40.0f);live=t>.16f && t<.7f && rnd(slot,6)<.65f;fired=false;}
+    if(live && !fired && t>=at){spark.trigger(.32f);fired=true;}
+    v+=spark.next()*tick.next(x,.75f);
+    if(t>=1.24f) {
+      if(!closed){snap.trigger(.4f);closed=true;}
+      v+=snap.next()*(.6f*click.next(3150)+.4f*x);
+    }
+    return v;
+  }
+};
 }
 
 // Synthesizes one effect's sound, resumable: run() continues where the last
@@ -175,6 +217,7 @@ private:
       case Effect::Sparkles:return sparkles_.next(t);
       case Effect::Shockwave:return shockwave_.next(t);
       case Effect::Lightning:return lightning_.next(t);
+      case Effect::Slash:return slash_.next(t);
       default:return 0;
     }
   }
@@ -188,7 +231,7 @@ private:
     return int16_t((v<0?-limited:limited)*32767);
   }
   Appearance::Effect effect_;size_t n_,index_=0;
-  detail::Orbit orbit_;detail::Flames flames_;detail::Sparkles sparkles_;detail::Shockwave shockwave_;detail::Lightning lightning_;
+  detail::Orbit orbit_;detail::Flames flames_;detail::Sparkles sparkles_;detail::Shockwave shockwave_;detail::Lightning lightning_;detail::Slash slash_;
 };
 
 // Renders the effect's sound into out[0..n), normally n=samples(e).

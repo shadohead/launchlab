@@ -2,14 +2,15 @@
 // updater's parser tests (site tests/launchlab/fixtures/backup-export.txt).
 // Build like the native suites, then: ./backup_fixture > backup-export.txt
 // With `themes`, two custom themes, one selected: a format 2 backup
-// (backup-export-themes.txt).
+// (backup-export-themes.txt). With `milestones`, Celebrate Both and a
+// three-row table: a format 3 backup (backup-export-milestones.txt).
 #include "../LaunchLabMini/device_backup.h"
 #include <cstdio>
 
 #include <cstring>
 
 int main(int argc,char **argv) {
-  const bool themes=argc>1 && !std::strcmp(argv[1],"themes");
+  const bool themes=argc>1 && !std::strcmp(argv[1],"themes"),milestones=argc>1 && !std::strcmp(argv[1],"milestones");
   DeviceBackup::Contents c;
   for(uint32_t i=1;i<=40;++i)c.practice.accept(i,true,5000+i*37,i*20000);
   c.practice.newSession();c.practice.accept(41,true,9100,900000);
@@ -26,11 +27,18 @@ int main(int argc,char **argv) {
     c.hasThemes=c.themes.put(0,custom("Dragoon Storm",0x2d7f)) && c.themes.put(2,custom("Ember Night",0xfb20));
     c.look.select(Themes::slotTheme(2),Appearance::Effect::Lightning);
   }
-  DeviceBackup::Buffer buffer;const size_t n=DeviceBackup::encode(c,"0.11.0-sticks3-themes-backup",buffer);
+  if(milestones) {
+    const Milestones::Row rows[]={{9000,Appearance::Effect::Sparkles},{12500,Appearance::Effect::Lightning},{15000,Appearance::Effect::Slash}};
+    c.hasMilestones=c.milestones.set(Milestones::Mode::Both,rows,3)==Milestones::Problem::None;
+  }
+  const char *runtime=milestones?"0.15.0-sticks3-milestone-pm":"0.11.0-sticks3-themes-backup";
+  DeviceBackup::Buffer buffer;const size_t n=DeviceBackup::encode(c,runtime,buffer);
   // Unrelated log lines interleave with a real export; the parser must skip them.
   std::printf("RPM_STATE state=ready t_us=1 contrast=900.0 noise=4.0\n");
-  std::printf("BACKUP_BEGIN format=%lu bytes=%u records=%u sessions=%u motion=%d themes=%d runtime=%s\n",(unsigned long)c.format(),
-    unsigned(n),c.practice.size(),c.practice.sessions(),c.hasMotion,c.hasThemes,"0.11.0-sticks3-themes-backup");
+  if(milestones)std::printf("BACKUP_BEGIN format=%lu bytes=%u records=%u sessions=%u motion=%d themes=%d milestones=%d runtime=%s\n",(unsigned long)c.format(),
+    unsigned(n),c.practice.size(),c.practice.sessions(),c.hasMotion,c.hasThemes,c.hasMilestones,runtime);
+  else std::printf("BACKUP_BEGIN format=%lu bytes=%u records=%u sessions=%u motion=%d themes=%d runtime=%s\n",(unsigned long)c.format(),
+    unsigned(n),c.practice.size(),c.practice.sessions(),c.hasMotion,c.hasThemes,runtime);
   DeviceBackup::base64Lines(buffer.data(),n,96,[](const char *line){std::printf("BACKUP_DATA %s\n",line);});
   std::printf("BATTERY_STATUS percent=80\nBACKUP_END\n");
 }

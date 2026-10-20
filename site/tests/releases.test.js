@@ -51,9 +51,11 @@ test('withdrawn 0.12.1 cannot be selected through the updater index',async()=>{
 });
 
 const withBeta=()=>{const i=structuredClone(index);i.betaReleases=[{version:'0.14.0',catalog:'firmware/0.14.0/catalog.json',channel:'beta'}];i.beta='0.14.0';return i;};
-test('stable releases stay stable, latest stays 0.13.9 and 0.14.0 is the published beta',()=>{
+test('stable releases stay stable, latest stays 0.13.9 and beta is the newest published beta',()=>{
   assert.ok(index.releases.every(r=>r.channel==='stable'));assert.equal(index.latest,'0.13.9');
-  assert.equal(index.beta,'0.14.0');assert.deepEqual(index.betaReleases.map(r=>[r.version,r.channel]),[['0.14.0','beta']]);
+  assert.ok(index.betaReleases.every(r=>r.channel==='beta'));
+  const versions=index.betaReleases.map(r=>r.version);assert.deepEqual([...versions].sort((x,y)=>-x.localeCompare(y,undefined,{numeric:true})),versions,'betas are listed newest first');
+  assert.equal(index.beta,index.betaReleases[0].version);assert.ok(index.betaReleases.some(r=>r.version==='0.14.0'));
 });
 test('a newer beta sits beside latest, which older readers keep following',()=>{
   const i=validateReleaseIndex(withBeta());

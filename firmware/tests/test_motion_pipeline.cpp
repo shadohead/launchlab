@@ -32,6 +32,7 @@ public:
 #include "../LaunchLabMini/theme_library.h"
 #include "../LaunchLabMini/launch_feedback.h"
 #include "../LaunchLabMini/appearance_store.h"
+#include "../LaunchLabMini/milestones.h"
 #include "../LaunchLabMini/rpm_estimator.h"
 #include "../LaunchLabMini/sensor_profile.h"
 #include "../LaunchLabMini/history_checkpoint.h"
@@ -83,6 +84,7 @@ namespace PracticeUI {enum class View {Other,Battery};}
 static PracticeUI::View historyView=PracticeUI::View::Other;
 static LaunchFeedback launchFeedback;
 static Appearance::Config appearance;static Appearance::Bests personalBests;static AppearanceStore<Appearance::Bests> bestStore;static Appearance::Celebration bestEffect,editorEffect;static bool effectWasMoving=false;
+static Milestones::Config milestones;
 // Random's pick is device-side (esp_random); a fixed pick keeps the fixture deterministic.
 static Appearance::Effect celebrationEffect(){return appearance.effect==Appearance::Effect::Random?Appearance::Effect::Orbit:appearance.effect;}
 static Palette::Colors ui(){return Themes::builtIn(appearance.theme);}
@@ -112,18 +114,19 @@ static void tickSound(const Snapshot&){}
 static void saveSettings(uint32_t,const Snapshot&){}static void releaseOrphanCheckpoint(uint32_t,const Snapshot&){}
 static int actualSourceTime(const LaunchMotion::Trace&,float);
 static float actualProgress(uint32_t);
-struct Frame {uint64_t drawnUs,presentedUs;int sourceMs;bool replay,pending,unavailable;std::string reason;std::vector<int> body;};
+struct Frame {uint64_t drawnUs,presentedUs;int sourceMs;bool replay,pending,unavailable;std::string reason;std::vector<int> body;std::string label;};
 static std::vector<Frame> frames;
 static void recordFrame(const lgfx::LGFXBase &g,uint32_t replayFrameElapsed) {
   const bool unavailable=g.contains("No tilt data") || g.contains("Tilt warming up") || g.contains("Tilt incomplete") || g.contains("Tilt out of range") || g.contains("Pull too long");
   std::string reason;for(const char *label:{"Tilt warming up","Tilt incomplete","Tilt out of range","Pull too long","No tilt data"})if(g.contains(label))reason=label;
-  frames.push_back({hostUs,hostUs+drawCostUs,actualSourceTime(latestMotion,actualProgress(replayFrameElapsed)),g.contains("Tilt replay"),g.contains("Capturing"),unavailable,reason,g.body});
+  frames.push_back({hostUs,hostUs+drawCostUs,actualSourceTime(latestMotion,actualProgress(replayFrameElapsed)),g.contains("Tilt replay"),g.contains("Capturing"),unavailable,reason,g.body,g.text.empty()?"":g.text.front()});
 }
 #include "motion_pipeline_wiring.h"
 static unsigned failures=0,cases=0;
 static void require(bool ok,const char *s){if(!ok){++failures;std::cerr<<"FAIL: "<<s<<'\n';}}
 static void reset(uint64_t startUs=5000000) {
   hostUs=startUs;acquisition={};launchFeedback={};bestEffect={};personalBests={};bestStore={};effectWasMoving=false;completedTrace=pipelineTrace();latestMotion={};practiceStore={};
+  milestones={};appearance={};
   motionPending=motionDemo=historyPage=diagnostics=demo=tournamentMode=dirty=stress=saveError=false;screenReady=true;
   drawCostUs=24000;lastDraw=millis();lastSaveTry=maxSaveUs=saveCount=saveErrors=motionDrops=newSessionAt=lastAcceptedAt=historyPendingSince=0;frames.clear();
 }
@@ -251,6 +254,42 @@ int main() {
   const auto failedAt=lastSaveTry;require(saveError && bestStore.pending(personalBests),"PB write failure retains pending RAM best");
   advance(4000000);saveHistory(millis(),acquisition.snapshot());require(lastSaveTry==failedAt,"PB retry obeys existing five-second failure backoff");
   Preferences::failWrite=false;advance(1000000);saveHistory(millis(),acquisition.snapshot());require(!saveError && !bestStore.pending(personalBests),"PB write recovers at guarded quiet checkpoint");++cases;
+  // RPM milestones through the same production handlers: the highest
+  // threshold reached plays its effect and labels the recap; a personal best
+  // keeps NEW BEST; one animation per pull; every pull that reaches one.
+  {
+    using Appearance::Effect;using Milestones::Mode;
+    struct Pull {float rpm;bool shown;bool best;Effect effect;const char *label;};
+    auto play=[&](float rpm){auto e=event();e.resultRpm=rpm;prepareMotion(e);advance(300000);productionStep();};
+    auto check=[&](const Pull &p,const char *mode){
+      char what[96];snprintf(what,sizeof(what),"%s: %.0f RPM",mode,p.rpm);
+      require(bestEffect.badge()==p.shown,what);
+      if(!p.shown){require(frames.back().label=="Last launch",what);return;}
+      require(bestEffect.best()==p.best && bestEffect.effect()==p.effect,what);
+      require(p.label && frames.back().label==p.label,what);
+    };
+    for(Mode mode:{Mode::Best,Mode::Milestones,Mode::Both}) {
+      reset();Preferences::data.clear();assert(bestStore.begin(personalBests,"pipeline-mile","best0","best1"));
+      appearance.effect=Effect::Orbit;assert(milestones.select(mode));
+      play(8000); // The first pull only sets the personal-best baseline.
+      require(!bestEffect.badge(),"baseline pull is silent");
+      const bool m=mode!=Mode::Best,b=mode!=Mode::Milestones;
+      const Pull pulls[]={
+        {8500,true,true,b?Effect::Orbit:Effect::Off,"NEW BEST"},          // a best below every milestone
+        {8400,false,false,Effect::Off,nullptr},                           // neither
+        {9000,true,true,m?Effect::Sparkles:Effect::Orbit,"NEW BEST"},      // both: the milestone's effect, the best's label
+        {12300,true,true,m?Effect::Flames:Effect::Orbit,"NEW BEST"},       // the highest reached is 12K
+        {9600,m,false,Effect::Sparkles,"MILESTONE 9K"},                   // a milestone again, not a best
+        {15500,true,true,m?Effect::Slash:Effect::Orbit,"NEW BEST"},       // the top milestone
+        {14999.4f,m,false,Effect::Lightning,"MILESTONE 14K"},              // shows 14999: not yet 15K
+        {14999.5f,m,false,Effect::Slash,"MILESTONE 15K"},                 // shows 15000, rounding half to even
+      };
+      for(const auto &p:pulls){play(p.rpm);check(p,Milestones::name(mode));}
+      // Hidden pages never celebrate, milestone or not.
+      tournamentMode=true;play(16000);require(!bestEffect.badge(),"tournament hides milestones");tournamentMode=false;
+      ++cases;
+    }
+  }
   std::cout<<(failures?"FAIL":"PASS")<<": "<<cases<<" production pending/finish/NVS/draw scenarios, optical="<<completedTrace.durationMs<<"ms/context="<<completedTrace.points[completedTrace.count-1].ms-completedTrace.points[0].ms<<"ms, 178432us writes, 24ms draw, next-frame write, 700ms stall, manual A, new pull, wrap, hidden/invalid/timeout; failures="<<failures<<'\n';
   return failures?1:0;
 }

@@ -12,7 +12,9 @@
 // owner polls, so they run under its gate, and end() never runs during a
 // measured pull. Playback is the speaker's DMA task, pinned to the UI core
 // and fed from a PSRAM buffer rendered once per effect, so UI frame timing
-// cannot disturb it and acquisition on core 0 is untouched.
+// cannot disturb it and acquisition on core 0 is untouched. Each effect has
+// its own buffer, kept once rendered: a milestone's effect is only known
+// when its pull ends, so every effect it may play is rendered ahead.
 class BestEffectSpeaker {
 public:
   explicit BestEffectSpeaker(StickS3MotionAcquisition &imu):imu_(imu){}
@@ -21,26 +23,26 @@ public:
     auto c=M5.Speaker.config();c.task_pinned_core=1;M5.Speaker.config(c);
     configured_=M5.Speaker.isEnabled();
   }
-  // Renders up to `slice` more samples of the effect's sound, restarting if
-  // another effect was in progress. A whole sound takes far longer than a UI
-  // frame at 80 MHz, so the sketch renders a slice per idle loop pass.
+  // Renders up to `slice` more samples of the effect's sound into its own
+  // buffer, restarting if another effect was in progress. A whole sound
+  // takes far longer than a UI frame at 80 MHz, so the sketch renders a
+  // slice per idle loop pass. Another effect's buffer may be playing.
   bool prepare(Appearance::Effect e,size_t slice=SIZE_MAX) {
     if(!configured_ || !Appearance::drawn(unsigned(e)))return false;
     if(prepared(e))return true;
-    if(playing())return false;
-    if(!buffer_) {
-      size_t most=0;for(unsigned i=0;i<Appearance::DRAWN;++i)most=std::max(most,BestEffectSound::samples(Appearance::Effect(i)));
-      buffer_=static_cast<int16_t *>(heap_caps_malloc(most*sizeof(int16_t),MALLOC_CAP_SPIRAM));
-      if(!buffer_)return false;
+    const unsigned i=Appearance::drawnIndex(e);
+    if(!buffers_[i]) {
+      buffers_[i]=static_cast<int16_t *>(heap_caps_malloc(BestEffectSound::samples(e)*sizeof(int16_t),MALLOC_CAP_SPIRAM));
+      if(!buffers_[i])return false;
     }
-    if(target_!=e){target_=e;samples_=BestEffectSound::samples(e);synth_=BestEffectSound::Synth(e,samples_);rendered_=Appearance::Effect::Off;renderUs_=0;}
+    if(target_!=e){target_=e;synth_=BestEffectSound::Synth(e,BestEffectSound::samples(e));renderUs_=0;}
     const int64_t started=esp_timer_get_time();
-    synth_.run(buffer_+synth_.index(),std::min(slice,samples_-synth_.index()));
+    synth_.run(buffers_[i]+synth_.index(),std::min(slice,BestEffectSound::samples(e)-synth_.index()));
     const uint32_t spent=uint32_t(esp_timer_get_time()-started);renderUs_+=spent;maxSliceUs_=std::max(maxSliceUs_,spent);
-    if(synth_.done())rendered_=e;
+    if(synth_.done()){rendered_|=1u<<i;target_=Appearance::Effect::Off;}
     return prepared(e);
   }
-  bool prepared(Appearance::Effect e)const{return e==rendered_ && e!=Appearance::Effect::Off;}
+  bool prepared(Appearance::Effect e)const{return Appearance::drawn(unsigned(e)) && ((rendered_>>Appearance::drawnIndex(e))&1u);}
   bool play(Appearance::Effect e,Appearance::Sound level) {
     // Rendering is the sketch's job, a slice per idle pass; play only what is ready.
     if(level==Appearance::Sound::Off || !prepared(e))return false;
@@ -54,7 +56,7 @@ public:
       begun_=true;
     }
     M5.Speaker.setVolume(level==Appearance::Sound::High?HIGH_VOLUME:LOW_VOLUME);
-    if(!M5.Speaker.playRaw(buffer_,samples_,BestEffectSound::RATE,false,1,0,true))return false;
+    if(!M5.Speaker.playRaw(buffers_[Appearance::drawnIndex(e)],BestEffectSound::samples(e),BestEffectSound::RATE,false,1,0,true))return false;
     ++plays_;return true;
   }
   // Silence now: no bus traffic, safe during a measured pull.
@@ -70,16 +72,20 @@ public:
   bool powered()const{return begun_;}
   bool playing()const{return begun_ && M5.Speaker.isPlaying();}
   void status(Appearance::Sound level) {
-    Serial.printf("SOUND_STATUS level=%s configured=%d buffer=%d rendered=%s powered=%d playing=%d plays=%lu stops=%lu lock_misses=%lu render_us=%lu max_slice_us=%lu max_begin_us=%lu max_end_us=%lu\n",
-      Appearance::label(level),configured_,buffer_!=nullptr,rendered_!=Appearance::Effect::Off?Appearance::label(rendered_):"none",begun_,playing(),
+    unsigned buffers=0;for(const auto *b:buffers_)buffers+=b!=nullptr;
+    char rendered[64]="none";size_t used=0;
+    for(unsigned i=0;i<Appearance::DRAWN;++i)if((rendered_>>i)&1u)
+      used+=snprintf(rendered+used,sizeof(rendered)-used,"%s%s",used?",":"",Appearance::label(Appearance::drawnEffect(i)));
+    Serial.printf("SOUND_STATUS level=%s configured=%d buffers=%u rendered=%s powered=%d playing=%d plays=%lu stops=%lu lock_misses=%lu render_us=%lu max_slice_us=%lu max_begin_us=%lu max_end_us=%lu\n",
+      Appearance::label(level),configured_,buffers,rendered,begun_,playing(),
       (unsigned long)plays_,(unsigned long)stops_,(unsigned long)lockMisses_,(unsigned long)renderUs_,(unsigned long)maxSliceUs_,(unsigned long)beginUs_,(unsigned long)endUs_);
   }
 private:
   static constexpr uint8_t LOW_VOLUME=72,HIGH_VOLUME=160;
   StickS3MotionAcquisition &imu_;
-  int16_t *buffer_=nullptr;size_t samples_=0;
+  int16_t *buffers_[Appearance::DRAWN]={};uint32_t rendered_=0;
   BestEffectSound::Synth synth_{Appearance::Effect::Off,0};
-  Appearance::Effect target_=Appearance::Effect::Off,rendered_=Appearance::Effect::Off;
+  Appearance::Effect target_=Appearance::Effect::Off;
   bool configured_=false,begun_=false;
   uint32_t plays_=0,stops_=0,lockMisses_=0,renderUs_=0,maxSliceUs_=0,beginUs_=0,endUs_=0;
 };

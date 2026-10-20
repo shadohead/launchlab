@@ -508,6 +508,15 @@
       "md5": "a6806c9718b09545ec59d0843a683f40",
       "elfSha256": "00a3ee75439516406bb31f3728f9b1e1d6251763b79180021196fa0c133c127c",
       "sensor": "qre1113"
+    },
+    {
+      "version": "0.15.0",
+      "runtime": "0.15.0-sticks3-milestone-pm",
+      "size": 863408,
+      "sha256": "48b827825ee721ac42a4c1ebdcc4abdddd6d690b8cd5c090b791aa378726a99e",
+      "md5": "65a835b561e0752eb722d217ac607b59",
+      "elfSha256": "060421164e6257cf59620874ab51f93ad3da5951cc7d72afb98e80c3a9c7d8b7",
+      "sensor": "qre1113"
     }
   ],
   "published_channel": "beta"

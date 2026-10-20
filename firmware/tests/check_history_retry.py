@@ -37,6 +37,7 @@ prefix = r'''
 #include "sensor_profile.h"
 #include "practice_store.h"
 #include "appearance_store.h"
+#include "milestones.h"
 #include "rpm_estimator.h"
 #include "orientation_estimator.h"
 #include "power_status.h"
@@ -53,6 +54,7 @@ static Controls::State controls;
 static bool wipeBlocked=false;
 static Appearance::Config appearance;static Appearance::Bests personalBests;
 static AppearanceStore<Appearance::Bests> bestStore;static AppearanceStore<Appearance::Config> appearanceStore;static Appearance::Celebration bestEffect;
+static Milestones::Config milestones;
 static Appearance::Effect celebrationEffect(){return appearance.effect==Appearance::Effect::Random?Appearance::Effect::Orbit:appearance.effect;}
 static uint64_t clockUs=1000000;
 static uint32_t millis(){return uint32_t(clockUs/1000);}

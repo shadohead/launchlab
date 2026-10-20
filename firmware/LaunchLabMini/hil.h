@@ -333,6 +333,18 @@ LOOP_HELPER static void hilCommand(char *line) {
     }
     Hil::reply("HIL_OK themecorrupt ok=%d\n",ok);return;
   }
+  if(!strcmp(cmd,"milecorrupt")) {
+    // Damages both stored milestone slots, inside an ADC checkpoint; the next
+    // boot must fall back to the default mode and table.
+    const auto s=acquisition.snapshot();bool ok=false;
+    if(acquisition.request(Action::IdleCheckpointBegin,s.launches)) {
+      Preferences store;uint8_t junk[Milestones::Config::IMAGE_BYTES];std::memset(junk,0x5a,sizeof(junk));
+      ok=store.begin("ll-appearance",false) && store.putBytes("mile0",junk,sizeof(junk))==sizeof(junk) &&
+        store.putBytes("mile1",junk,sizeof(junk))==sizeof(junk);store.end();
+      acquisition.request(Action::CheckpointEnd);
+    }
+    Hil::reply("HIL_OK milecorrupt ok=%d\n",ok);return;
+  }
   if(!strcmp(cmd,"home")) {
     if(controls.page==Controls::Page::Edit)cancelSettingEdit();
     controls.page=Controls::Page::Main;syncNavigation();

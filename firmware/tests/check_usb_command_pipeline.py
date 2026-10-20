@@ -94,6 +94,24 @@ static void pollThemeRequest(const Snapshot &) {
     themeRx.receiving=false;++themeRx.errors;
   }
 }
+// Milestone requests: the same framing again.
+namespace Milestones {struct Request {static constexpr unsigned BYTES=40;};}
+static struct MilestoneReceiver {
+  bool receiving=false;std::string text;unsigned received=0,errors=0;
+  bool active()const{return receiving;}void cancel(){receiving=false;}
+  void start(uint32_t){receiving=true;text.clear();act("milestone_start");}
+}milestoneRx;
+static void milestoneReply(){}
+static void listMilestones(){act("milestone_list");}
+static void pollMilestoneRequest(const Snapshot &) {
+  while(milestoneRx.active() && Serial.available()) {
+    const char c=Serial.read();
+    const bool b64=(c>='A' && c<='Z')||(c>='a' && c<='z')||(c>='0' && c<='9')||c=='+'||c=='/'||c=='=';
+    if(c=='.'){milestoneRx.receiving=false;++milestoneRx.received;continue;}
+    if(b64 || c=='\n'){milestoneRx.text+=c;continue;}
+    milestoneRx.receiving=false;++milestoneRx.errors;
+  }
+}
 static void pollRestore(const Snapshot &) {
   while(restoreRx.active() && Serial.available()) {
     const char c=Serial.read();
@@ -136,7 +154,7 @@ static uint32_t loopRng=11;
 static void pass(){pollCommands(Snapshot{});loopRng=loopRng*1664525u+1013904223u;clockMs+=5+(loopRng>>24)%31;}
 static void send(const std::string &bytes){for(char c:bytes)Serial.input.push_back(c);while(Serial.available())pass();}
 static void idle(unsigned ms){for(unsigned t=0;t<ms;t+=5)pass();}
-static void reset(){acted.clear();Serial.input.clear();Serial.output.clear();restoreRx={};themeRx={};idle(100);}
+static void reset(){acted.clear();Serial.input.clear();Serial.output.clear();restoreRx={};themeRx={};milestoneRx={};idle(100);}
 static unsigned harmful() {
   unsigned n=0;
   for(auto &[what,count]:acted)
@@ -150,15 +168,15 @@ int main() {
     reset();
     for(unsigned burst=0;burst<12;++burst) {
       std::string bytes;
-      if(burst%3==1)bytes+="OSxgiaodhceQEqbnutyzvwjsLT"[next()%26];
+      if(burst%3==1)bytes+="OSxgiaodhceQEqbnutyzvwjsLTMU"[next()%28];
       bytes+=char(0x80|next());
       for(unsigned i=0;i<2048;++i) {
         const uint8_t r=next();
-        if(r<10)bytes+=std::string("OOSSxxnnggaa\n")+"OSxgiaodhceQEqbnutyzvwjsLT"[next()%26]+"\n";
-        else if(r<18)bytes+=std::string(1,"PpKC"[r%4])+"OSxgiaodhceQEqbnutyzvwjsLT"[next()%26]+"\n";
+        if(r<10)bytes+=std::string("OOSSxxnnggaa\n")+"OSxgiaodhceQEqbnutyzvwjsLTMU"[next()%28]+"\n";
+        else if(r<18)bytes+=std::string(1,"PpKC"[r%4])+"OSxgiaodhceQEqbnutyzvwjsLTMU"[next()%28]+"\n";
         else bytes+=char(next());
       }
-      if(burst%3==2)bytes+=std::string("\n")+"OSxgiaodhceQEqbnutyzvwjsLT"[next()%26];
+      if(burst%3==2)bytes+=std::string("\n")+"OSxgiaodhceQEqbnutyzvwjsLTMU"[next()%28];
       send(bytes);idle(60+next());
     }
     if(harmful()){for(auto &[w,n]:acted)std::cerr<<w<<"="<<n<<"\n";}
@@ -175,6 +193,11 @@ int main() {
   send("TExRAQEA\n.\n");idle(50);assert(!themeRx.active() && themeRx.received==1 && themeRx.text=="TExRAQEA\n" && !themeRx.errors);
   // Inside a burst neither runs.
   reset();send("xxLxxTxx");idle(50);assert(!acted.count("theme_list") && !acted.count("theme_start"));
+  // The milestone editor: M lists, U takes one framed request, the same way.
+  reset();send("M\n");idle(50);assert(acted["milestone_list"]==1);
+  reset();send("U\n");idle(50);assert(acted["milestone_start"]==1 && milestoneRx.active());
+  send("TExVAQAA\n.\n");idle(50);assert(!milestoneRx.active() && milestoneRx.received==1 && milestoneRx.text=="TExVAQAA\n" && !milestoneRx.errors);
+  reset();send("xxMxxUxx");idle(50);assert(!acted.count("milestone_list") && !acted.count("milestone_start"));
   std::cout<<"updater: K backup and R restore lines intact\n";
   // Tools: a bare letter after a pause, scripted lines, typed keys.
   reset();send("w");idle(30);assert(acted["export"]==1);

@@ -1,6 +1,6 @@
 {
   "latest": "0.13.9",
-  "beta": "0.14.0",
+  "beta": "0.15.0",
   "releases": [
     {
       "version": "0.13.9",
@@ -69,6 +69,11 @@
     }
   ],
   "betaReleases": [
+    {
+      "version": "0.15.0",
+      "catalog": "firmware/0.15.0/catalog.json",
+      "channel": "beta"
+    },
     {
       "version": "0.14.0",
       "catalog": "firmware/0.14.0/catalog.json",

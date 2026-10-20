@@ -78,10 +78,11 @@ inline void spatial(lgfx::LGFXBase &g,const LaunchMotion::Trace &trial,
 
 inline void feedback(lgfx::LGFXBase &g,const LaunchMotion::Trace &trial,
                      bool capturing,bool demo=false,float progress=1,bool flipEnabled=false,
-                     const Palette::Colors &c=Palette::builtIn(0x07ff,true),bool best=false) {
+                     const Palette::Colors &c=Palette::builtIn(0x07ff,true),const char *badge=nullptr) {
   const int cx=g.width()/2;char text[64];
   g.setTextDatum(top_center);
-  g.setTextColor(demo?c.warning:best?c.accent:c.muted,c.background);g.drawString(demo?"DEMO":best?"NEW BEST":"Last launch",cx,2,1);
+  // A celebrated pull's label: NEW BEST, or the milestone it reached.
+  g.setTextColor(demo?c.warning:badge?c.accent:c.muted,c.background);g.drawString(demo?"DEMO":badge?badge:"Last launch",cx,2,1);
   snprintf(text,sizeof(text),"%.0f RPM",trial.rpm);g.setTextColor(c.accent,c.background);
   g.drawString(text,cx,17,g.textWidth(text,&fonts::Font4)<=g.width()-6?4:2);
   if(trial.valid() && trial.fused && !capturing) {

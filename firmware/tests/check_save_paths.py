@@ -135,6 +135,9 @@ static uint8_t backlightValue(){return (unsigned(brightnessPercent)*255+50)/100;
 static void syncNavigation(){dirty=true;}
 // Custom theme requests (USB T): the real receiver and store; free NVS entries are set by the test.
 static ThemeStore themeStore;static DeviceBackup::LineReceiver<(Themes::Request::BYTES+2)/3*4> themeRx;
+// Milestone requests (USB U): the real receiver, record and store.
+static Milestones::Config milestones;static AppearanceStore<Milestones::Config> milestoneStore;
+static DeviceBackup::LineReceiver<(Milestones::Request::BYTES+2)/3*4> milestoneRx;
 static unsigned freeEntries=158;static bool nvsAvailable(unsigned &available){available=freeEntries;return true;}
 static void cancelSettingEdit(){if(controls.page==Controls::Page::Edit)controls.page=Controls::Page::Settings;}
 static void prepareMotion(const Snapshot&){lastAcceptedAt=millis();}static void logLaunchMetrics(const Snapshot&){}
@@ -269,7 +272,7 @@ static void shutdownFlush() {
   // Pending settings are written in the shutdown checkpoint, and the live
   // metric and IMU frame switch there too: a power-off cancelled afterwards
   // (USB attached, sleep refused) resumes with live state matching the records.
-  boot();imuAcquisition.veto=true;apply(2,70);apply(8,uint8_t(MountOrientation::Mode::Sidecar));
+  boot();imuAcquisition.veto=true;apply(2,70);apply(unsigned(Controls::Setting::Mount),uint8_t(MountOrientation::Mode::Sidecar));
   apply(1,uint8_t(RpmEstimator::Mode::SingleTurn));
   assert(settingsSave.pending()==(SettingsSave::Brightness|SettingsSave::Mount|SettingsSave::Rpm));imuAcquisition.veto=false;
   assert(flushForShutdown(millis(),snap())==ShutdownFlush::Ready);
@@ -337,6 +340,67 @@ static void themeRequests() {
   std::cout<<"PASS: theme uploads, deletes and clears write inside a checkpoint only; busy, short of NVS, invalid or unreadable requests write nothing; select and fallback save like Apply\n";
 }
 
+// One framed milestone request through the receiver, as the USB loop feeds it.
+static void milestoneBytes(const uint8_t *bytes) {
+  std::string line;DeviceBackup::base64Lines(bytes,Milestones::Request::BYTES,96,[&](const char *text){line+=text;});
+  milestoneRx.start(millis());auto event=DeviceBackup::TransferEvent::None;
+  for(char c:line+"\n.\n")event=milestoneRx.feed(c,millis());
+  assert(event==DeviceBackup::TransferEvent::Complete);
+  finishMilestoneRequest(snap());
+}
+static void milestoneRequest(Milestones::Request::Op op,const Milestones::Config *table=nullptr) {
+  uint8_t bytes[Milestones::Request::BYTES];Milestones::Request::encode(op,table,bytes);milestoneBytes(bytes);
+}
+static bool storedTable(Milestones::Config &out){AppearanceStore<Milestones::Config> reader;return reader.begin(out,"ll-appearance","mile0","mile1",true);}
+static void milestoneRequests() {
+  using Op=Milestones::Request::Op;using Milestones::Row;using Appearance::Effect;
+  boot();milestones={};milestoneStore={};freeEntries=158;assert(milestoneStore.begin(milestones,"ll-appearance","mile0","mile1",true));
+  Milestones::Config table;const Row rows[]={{8000,Effect::Orbit},{10500,Effect::Lightning},{13000,Effect::Slash}};
+  assert(table.set(Milestones::Mode::Milestones,rows,3)==Milestones::Problem::None);
+  // A table is written in its own checkpoint with the IMU quiet, then the ADC runs again.
+  milestoneRequest(Op::Set,&table);
+  assert(milestones.same(table) && guardedWrites==1 && running());
+  {Milestones::Config stored;assert(storedTable(stored) && stored.same(table) && stored.revision==milestones.revision);}
+  // The same table again writes nothing.
+  milestoneRequest(Op::Set,&table);assert(guardedWrites==1);
+  // Busy (a pull, a vetoed IMU barrier) or short of NVS: refused, nothing written.
+  Milestones::Config other;assert(other.select(Milestones::Mode::Both));
+  for(unsigned turn=0;turn<6;++turn){optical(5000,1100);optical(5000);}
+  assert(snap().phase==D::Phase::Launch);milestoneRequest(Op::Set,&other);
+  assert(milestones.same(table) && guardedWrites==1);
+  passes(1700);assert(running());
+  imuAcquisition.veto=true;milestoneRequest(Op::Set,&other);imuAcquisition.veto=false;
+  assert(milestones.same(table) && guardedWrites==1 && running());
+  freeEntries=MILESTONE_NEEDED_ENTRIES-1;milestoneRequest(Op::Set,&other);freeEntries=158;
+  assert(milestones.same(table) && guardedWrites==1);
+  // Invalid tables are refused before any checkpoint, whatever the checksum.
+  const unsigned windows=imuAcquisition.windows;
+  auto invalid=[&](void (*damage)(uint8_t *)) {
+    uint8_t bytes[Milestones::Request::BYTES];Milestones::Request::encode(Op::Set,&other,bytes);damage(bytes);
+    Appearance::put32(bytes+Milestones::Request::BYTES-4,Appearance::hash(bytes,Milestones::Request::BYTES-4));milestoneBytes(bytes);
+    assert(milestones.same(table) && guardedWrites==1 && imuAcquisition.windows==windows);
+  };
+  invalid([](uint8_t *b){b[8+4+3]=b[8+4];b[8+4+4]=b[8+4+1];});      // two rows at the same RPM
+  invalid([](uint8_t *b){b[8+4]=0xe7;b[8+5]=0x03;});                 // 999 RPM
+  invalid([](uint8_t *b){b[8+4+2]=uint8_t(Effect::Random);});        // not a drawn effect
+  invalid([](uint8_t *b){b[8]=3;});                                  // no such mode
+  invalid([](uint8_t *b){b[8+1]=0;});                                // no rows
+  {uint8_t bytes[Milestones::Request::BYTES];Milestones::Request::encode(Op::Set,&other,bytes);bytes[20]^=1;milestoneBytes(bytes);
+   assert(milestones.same(table) && guardedWrites==1 && imuAcquisition.windows==windows);}
+  // Reset returns to the defaults, saved.
+  milestoneRequest(Op::Reset);passes(100);
+  assert(milestones.isDefault() && guardedWrites==2 && running());
+  {Milestones::Config stored;assert(storedTable(stored) && stored.isDefault());}
+  // A damaged record shows the defaults; a request replaces it, even with the defaults.
+  Preferences::data["ll-appearancemile0"][9]^=1;Preferences::data["ll-appearancemile1"][9]^=1;
+  milestones={};milestoneStore={};assert(!milestoneStore.begin(milestones,"ll-appearance","mile0","mile1",true) && milestoneStore.damaged());
+  assert(milestones.isDefault() && !std::strcmp(milestoneStoreName(),"damaged"));
+  milestoneRequest(Op::Reset);
+  assert(!milestoneStore.damaged() && guardedWrites==3 && !std::strcmp(milestoneStoreName(),"ok"));
+  {Milestones::Config stored;AppearanceStore<Milestones::Config> reader;assert(reader.begin(stored,"ll-appearance","mile0","mile1",true) && !reader.damaged() && stored.isDefault());}
+  std::cout<<"PASS: milestone tables and resets write inside a checkpoint only; busy, short of NVS, corrupt or invalid requests write nothing; a damaged record is replaced\n";
+}
+
 static void sensorFaultHistory() {
   // After a pull, the sensor signal drops to the low rail (CHECK SENSOR). The
   // detector holds in Hold indefinitely; history still flushes once quiet.
@@ -352,7 +416,7 @@ static void sensorFaultHistory() {
 
 main = r'''
 int main() {
-  freshEdgeAtApply();imuVeto();applyDuringPull();lostReplies();usbDeviceSettings();shutdownFlush();themeRequests();sensorFaultHistory();
+  freshEdgeAtApply();imuVeto();applyDuringPull();lostReplies();usbDeviceSettings();shutdownFlush();themeRequests();milestoneRequests();sensorFaultHistory();
 }
 '''
 
@@ -361,6 +425,8 @@ functions = '\n'.join([
     function('saveSettings'), function('commitSetting'), function('saveHistory'),
     function('releaseOrphanCheckpoint'), shutdown_flush(),
     function('themeReply'), function('themesChanged'), function('selectTheme'), function('finishThemeRequest'),
+    function('milestoneReply'), function('*milestoneStoreName', 'const char'), statement('static constexpr unsigned MILESTONE_NEEDED_ENTRIES'),
+    function('finishMilestoneRequest'),
 ])
 with tempfile.TemporaryDirectory(prefix='launchlab-save-paths-') as temp:
     build = pathlib.Path(temp)

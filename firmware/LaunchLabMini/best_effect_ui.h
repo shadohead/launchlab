@@ -10,9 +10,11 @@
 // UI and before it is pushed. Decoration lands only on background pixels (the
 // theme's background color; black for the built-ins) at
 // least HALO px from every UI pixel, so it reads as a layer behind the UI and
-// each label, digit and replay line keeps its pixels and a dark outline. The
-// glint is the one exception: it brightens existing header glyph pixels
-// toward white without changing their shape.
+// each label, digit and replay line keeps its pixels and a dark outline. Two
+// exceptions: the glint brightens existing header glyph pixels toward white
+// without changing their shape, and Slash cuts the anchor's ink in two,
+// slides the halves apart along the cut and puts them back, so its last
+// frames show the readout exactly as drawn.
 // Each frame is a pure function of elapsed time with fixed seeds: no heap,
 // delay, random input or second framebuffer. The ink mask is the only state.
 // Budget: at most about 10 ms per frame at 80 MHz (measured on the device
@@ -75,6 +77,7 @@ public:
       case Effect::Sparkles:bottom_=h_-1;sparkles(t);break;
       case Effect::Shockwave:bottom_=h_-1;shockwave(t);break;
       case Effect::Lightning:bottom_=h_-1;lightning(t);break;
+      case Effect::Slash:bottom_=h_-1;slash(t);break;
       default:break;
     }
   }
@@ -432,6 +435,124 @@ private:
       bolt(xs[from],ys[from],xs[from]+dx*.35f+side*dy*.25f,ys[from]+dy*.35f-side*dx*.12f,seed+500,k*.55f,4);
     }
   }
+  // ---- Slash: a blade streak cuts the readout, the halves slide apart and back
+  // The cut rises to the right through the anchor's centre: direction
+  // (C,-S), the upper half on the side of normal (-S,-C), tan = 0.3.
+  // Fixed point: S8/C8 in Q8, side values in half pixels times Q8.
+  static constexpr int S8=73,C8=245;
+  static constexpr float SLOPE=.3f,COS=C8/256.0f,SIN=S8/256.0f;
+  float cutY(float x)const{return number_.cy()-(x-number_.cx())*SLOPE;}
+  void slash(float t) {
+    constexpr float SWING=.12f,SPLIT=.16f,OPEN=.3f,CLOSE=.95f,SHUT=.35f,FUSE=.18f;
+    const float shut=CLOSE+SHUT;
+    // Halves: easeOut apart, a slow drift while open, smooth back together.
+    // They part across the cut more than they slide along it, so the
+    // readout stays on screen and reads as cut in two.
+    float along=0;
+    if(t>=SPLIT && t<shut) {
+      const float open=easeOut((t-SPLIT)/OPEN)*(1+.08f*std::min(1.0f,(t-SPLIT)/(CLOSE-SPLIT)));
+      along=5*open*(t<CLOSE?1:1-smooth((t-CLOSE)/SHUT));
+    }
+    const float apart=std::min(3.5f,along*.9f);
+    // The blade's head crosses the screen along the cut line, fast.
+    const float sweep=easeOut(t/SWING),head=-24+(w_+48)*sweep;
+    // Hot edges: glyph pixels along the cut glow behind the blade and cool
+    // down; when the halves meet again the seam flashes once.
+    int heat=t<.4f?q8(1-smooth((t-.1f)/.3f)):0;
+    if(t>=shut-.06f && t<shut+FUSE)heat=q8(.55f*(1-smooth((t-shut+.06f)/(FUSE+.06f))));
+    if(heat>0 || along>0)cut(along,apart,heat,t<SWING?roundi(head):w_);
+    blade(t,head);
+    streak(t,head,SWING);
+    // Sparks fly off both edges of the cut while the halves open.
+    const Rgb gold=rgb8(255,214,110),colors[]={WHITE,accent_,gold};
+    for(unsigned i=0;i<26;++i) {
+      const float birth=SPLIT-.06f+.22f*rnd(i,91),age=t-birth,life=.35f+.3f*rnd(i,92);
+      if(age<0 || age>=life)continue;
+      const float x0=number_.x0+(number_.x1-number_.x0)*rnd(i,93),y0=cutY(x0),side=i%2?1:-1;
+      // Out along the normal, with some of the blade's direction and gravity.
+      const float speed=70+110*rnd(i,94),drift=40+90*rnd(i,95);
+      const float vx=-side*SIN*speed+COS*drift,vy=-side*COS*speed-SIN*drift;
+      const float x=x0+vx*age,y=y0+vy*age+120*age*age,k=1-age/life;
+      const Rgb c=colors[i%3];
+      plot(x-vx*.025f,y-vy*.025f-6*age,c,k*.45f);
+      spark(x,y,c,k*1.3f,1.8f);
+    }
+  }
+  // The blade's line across the readout itself, over its glyphs: white behind
+  // the head, then fading in the opening cut.
+  void blade(float t,float head) {
+    if(t>=.3f)return;
+    const int k=q8(t<.18f?1:1-smooth((t-.18f)/.12f));
+    for(int x=std::max(0,number_.x0-2);x<=std::min({w_-1,number_.x1+2,int(head)});++x) {
+      const int y=roundi(cutY(float(x)));if(y<0 || y>=h_)continue;
+      uint16_t &p=px_[y*w_+x];p=heated(p,WHITE_INK,k);++plots_;
+    }
+  }
+  // The streak: a white core with an accent glow along the cut line, fading
+  // toward its tail, then an afterimage across the screen.
+  void streak(float t,float head,float swing) {
+    const float fade=t<swing?1:1-smooth((t-swing)/.22f);
+    if(fade<=0)return;
+    const float tail=t<swing?head-70:-24;
+    const Ink core=WHITE_INK,edge=inkOf(accent_),halo=inkOf(mixed(accent_,WHITE,.3f));
+    for(int x=std::max(0,int(tail));x<=std::min(w_-1,int(head));++x) {
+      const float u=t<swing?(head-x)/70.0f:0;
+      const float k=fade*(1-u)*(1-u)*(t<swing?1:.65f);
+      const int kq=q8(k),y=roundi(cutY(float(x)));
+      addw(x,y,core,kq);addw(x,y-1,edge,(kq*150)>>8);addw(x,y+1,edge,(kq*150)>>8);
+      addw(x,y-2,halo,(kq*50)>>8);addw(x,y+2,halo,(kq*50)>>8);
+    }
+  }
+  // Cuts the anchor's ink along the line: the upper half moves by
+  // along*(C,-S)+apart*(-S,-C), the lower half the opposite way. In place:
+  // each half is copied in the order that reads every source pixel before
+  // it can be overwritten, and only onto its own side of the cut (or
+  // outside the anchor, where only ink is copied). Glyph pixels within two
+  // pixels of the cut, left of `reach`, are pulled toward a hot white.
+  void cut(float along,float apart,int heat,int reach) {
+    const int dx=roundi(along*COS-apart*SIN),dy=roundi(-along*SIN-apart*COS);
+    const Ink hot=inkOf(mixed(WHITE,accent_,.3f));
+    move(dx,dy,true,hot,heat,reach);move(-dx,-dy,false,hot,heat,reach);
+  }
+  void move(int dx,int dy,bool upper,const Ink &hot,int heat,int reach) {
+    const Box &b=number_;
+    const int cx2=b.x0+b.x1,cy2=b.y0+b.y1;
+    const int top=std::max(0,std::min(b.y0,b.y0+dy)),bottom=std::min(h_-1,std::max(b.y1,b.y1+dy));
+    const int left=std::max(0,std::min(b.x0,b.x0+dx)),right=std::min(w_-1,std::max(b.x1,b.x1+dx));
+    // A source row below its destination is read first going down, and so on.
+    const int ystep=dy<0?1:-1,xstep=dx>0?-1:1;
+    const int shift=2*(dx*S8+dy*C8);
+    for(int y=ystep>0?top:bottom;y>=top && y<=bottom;y+=ystep) {
+      const int sy=y-dy;const bool rowIn=y>=b.y0 && y<=b.y1,srcRow=sy>=b.y0 && sy<=b.y1;
+      // Only this half's columns: the destination on its side, or a source
+      // on its side. The cut crosses x where (2x-cx2)*S8 = -(2y-cy2)*C8.
+      const int cutX=(cx2*S8-(2*y-cy2)*C8)/(2*S8),srcCutX=(cx2*S8-(2*sy-cy2)*C8)/(2*S8)+dx;
+      const int edge=std::max(cutX,srcCutX);
+      const int from=upper?left:std::max(left,std::min(cutX,srcCutX)-1),to=upper?std::min(right,edge+1):right;
+      for(int x=xstep>0?from:to;x>=from && x<=to;x+=xstep) {
+        const int side=(2*x-cx2)*S8+(2*y-cy2)*C8,sx=x-dx;
+        // Upper half: side < 0; lower: side >= 0. The source is side-shift.
+        const bool destIn=rowIn && x>=b.x0 && x<=b.x1,destMine=upper?side<0:side>=0;
+        const int was=side-shift;
+        const bool source=srcRow && sx>=b.x0 && sx<=b.x1 && (upper?was<0:was>=0);
+        uint16_t &p=px_[y*w_+x];
+        if(source) {
+          uint16_t v=px_[sy*w_+sx];
+          if(v!=bg_ && heat>0 && sx<=reach) {
+            const int d=std::abs(was);
+            if(d<1024)v=heated(v,hot,(heat*(256-(d>>2)))>>8);
+          }
+          if(destIn?destMine:v!=bg_){p=v;++plots_;}
+        } else if(destIn && destMine && p!=bg_){p=bg_;++plots_;}
+      }
+    }
+  }
+  static uint16_t heated(uint16_t stored,const Ink &c,int k) {
+    const unsigned v=load(stored);const int r=v>>11,g=(v>>5)&63,b=v&31;
+    const int tr=c.r>>8,tg=c.g>>8,tb=c.b>>8;
+    return store(uint16_t((r+(((tr-r)*k)>>8))<<11|(g+(((tg-g)*k)>>8))<<5|(b+(((tb-b)*k)>>8))));
+  }
+
   // White core with a glow on the two sides across the stroke.
   void segment(float x0,float y0,float x1,float y1,const Rgb &glowColor,float k) {
     const float dx=x1-x0,dy=y1-y0;const bool steep=std::fabs(dy)>std::fabs(dx);

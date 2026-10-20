@@ -125,7 +125,7 @@ struct Receiver {
   bool receiving=false;unsigned cancellations=0;
   bool active()const{return receiving;}void cancel(){receiving=false;++cancellations;}
   void start(uint32_t){receiving=true;normal();}
-}restoreRx,themeRx;
+}restoreRx,themeRx,milestoneRx;
 enum class Action{IdleCheckpointBegin,CheckpointEnd,Pin,Reset};
 struct Snapshot {
   AnalogTachometer::Phase phase=AnalogTachometer::Phase::Ready;
@@ -175,6 +175,9 @@ static void toggleFeedback(){normal();}static void browseOlder(){normal();}stati
 static void pollRestore(const Snapshot &){normal();restoreRx.receiving=false;}
 static void pollThemeRequest(const Snapshot &){normal();themeRx.receiving=false;}
 static void listThemes(){normal();}static void themeReply(){}
+static void pollMilestoneRequest(const Snapshot &){normal();milestoneRx.receiving=false;}
+static void listMilestones(){normal();}static void milestoneReply(){}
+static uint8_t settingValue(unsigned){return 0;}
 static void exportPowerLog(){normal();}static void toggleHistory(){normal();}static void nextView(){normal();}
 static void exportMotion(){normal();}static void exportHistory(){normal();}static void exportBackup(){normal();}
 static void previewHistory(){normal();}static void checkStorage(){normal();}static void checkMotionStorage(){normal();}
@@ -259,10 +262,10 @@ static void usbBlocked() {
   const auto stage=wipeConfirmation.stage();const auto writes=normalWrites;
   // A transfer can also become active externally after the dialog opens.
   // The entry guard must cancel it before pollRestore, not just ignore R.
-  restoreRx.receiving=true;
-  Serial.feed("aaoooRgxE0SyzwntqcdhPuKei\npp");
+  restoreRx.receiving=true;themeRx.receiving=true;milestoneRx.receiving=true;
+  Serial.feed("aaoooRgxE0SyzwntqcdhPuKeiMU\npp");
   while(Serial.available())pollCommands(acquisition.snapshot());
-  assert(!restoreRx.active() && wipeConfirmation.stage()==stage && normalWrites==writes && statusReads>=2);
+  assert(!restoreRx.active() && !themeRx.active() && !milestoneRx.active() && wipeConfirmation.stage()==stage && normalWrites==writes && statusReads>=2);
   noErase();
 }
 static void pendingUsbPrefix() {

@@ -63,16 +63,17 @@ int main() {
   {
     auto themed=original;themed.hasThemes=true;
     assert(themed.themes.put(1,custom("Dragoon Storm",0x5c7f)) && themed.themes.put(3,custom("Ember",0xfb20)));
-    assert(themed.look.select(Themes::slotTheme(3),Appearance::Effect::Orbit) && themed.format()==FORMAT);
+    assert(themed.look.select(Themes::slotTheme(3),Appearance::Effect::Orbit) && themed.format()==THEMES_FORMAT);
     Buffer encoded;const size_t length=encode(themed,"0.14.0-sticks3-test",encoded);
-    assert(get32(encoded.data()+4)==FORMAT && length==n+8+Themes::Library::IMAGE_BYTES);
+    assert(get32(encoded.data()+4)==THEMES_FORMAT && length==n+8+Themes::Library::IMAGE_BYTES);
     Contents restored;assert(decode(encoded.data(),length,restored) && same(themed,restored));
     assert(restored.hasThemes && restored.themes==themed.themes && restored.themes.state(1)==Themes::SlotState::Valid);
     Palette::Custom back;assert(restored.themes.get(3,back) && !std::strcmp(back.name,"Ember") && restored.look.theme==Themes::slotTheme(3));
     // Every corruption of a format 2 backup is rejected too.
     for(size_t i=0;i<length;i+=5){auto bad=encoded;bad[i]^=0x20;Contents ignored;assert(!decode(bad.data(),length,ignored));}
-    // Format 1 cannot carry the themes section, and no other format is read.
-    for(uint32_t format:{LEGACY_FORMAT,FORMAT+1}) {
+    // Format 1 cannot carry the themes section, format 3 needs milestones,
+    // and no other format is read.
+    for(uint32_t format:{LEGACY_FORMAT,FORMAT,FORMAT+1}) {
       auto bad=encoded;put32(bad.data()+4,format);put32(bad.data()+length-4,checksum(bad.data(),length-4));
       Contents ignored;assert(!decode(bad.data(),length,ignored));
     }
@@ -87,8 +88,51 @@ int main() {
   // never a format 1 backup older firmware would half-read.
   {
     auto orphan=original;assert(orphan.look.select(Themes::slotTheme(0),Appearance::Effect::Off) && !orphan.hasThemes);
-    Buffer encoded;const size_t length=encode(orphan,"x",encoded);assert(get32(encoded.data()+4)==FORMAT);
+    Buffer encoded;const size_t length=encode(orphan,"x",encoded);assert(get32(encoded.data()+4)==THEMES_FORMAT);
     Contents restored;assert(decode(encoded.data(),length,restored) && restored.hasThemes && restored.themes.empty());
+  }
+
+  // The default milestones add nothing: format 1 stays byte for byte (above).
+  // A changed mode or table makes format 3, with or without custom themes.
+  {
+    using Milestones::Row;using Appearance::Effect;
+    assert(original.milestones.isDefault() && !original.hasMilestones);
+    auto modeOnly=original;assert(modeOnly.milestones.select(Milestones::Mode::Both));modeOnly.hasMilestones=true;
+    auto table=original;const Row rows[]={{8000,Effect::Orbit},{12500,Effect::Lightning},{16000,Effect::Slash}};
+    assert(table.milestones.set(Milestones::Mode::Milestones,rows,3)==Milestones::Problem::None);table.hasMilestones=true;
+    auto both=table;both.hasThemes=true;assert(both.themes.put(0,custom("Dragoon Storm",0x5c7f)));
+    for(const auto *c:{&modeOnly,&table,&both}) {
+      assert(c->format()==FORMAT);
+      Buffer encoded;const size_t length=encode(*c,"0.15.0-sticks3-test",encoded);
+      assert(get32(encoded.data()+4)==FORMAT && length==n+8+Milestones::Config::IMAGE_BYTES+(c->hasThemes?8+Themes::Library::IMAGE_BYTES:0));
+      Contents restored;assert(decode(encoded.data(),length,restored) && same(*c,restored));
+      assert(restored.hasMilestones && restored.milestones.same(c->milestones) && restored.milestones.revision==c->milestones.revision);
+      assert(restored.hasThemes==c->hasThemes && (!c->hasThemes || restored.themes==c->themes));
+      for(size_t i=0;i<length;i+=5){auto bad=encoded;bad[i]^=0x20;Contents ignored;assert(!decode(bad.data(),length,ignored));}
+      // Older formats cannot carry the milestones section.
+      for(uint32_t format:{LEGACY_FORMAT,THEMES_FORMAT,FORMAT+1}) {
+        auto bad=encoded;put32(bad.data()+4,format);put32(bad.data()+length-4,checksum(bad.data(),length-4));
+        Contents ignored;assert(!decode(bad.data(),length,ignored));
+      }
+    }
+    // A checksummed record with an invalid table is rejected whole.
+    {
+      Buffer encoded;const size_t length=encode(table,"x",encoded);
+      const size_t body=length-4-Milestones::Config::IMAGE_BYTES;
+      assert(encoded[body-8]==MilestoneTable && encoded[body+8+1]==3);
+      auto bad=encoded;bad[body+8+4+3]=bad[body+8+4];bad[body+8+4+4]=bad[body+8+4+1]; // row 1 rpm = row 0 rpm
+      put32(bad.data()+body+Milestones::Config::IMAGE_BYTES-4,Appearance::hash(bad.data()+body,Milestones::Config::IMAGE_BYTES-4));
+      put32(bad.data()+length-4,checksum(bad.data(),length-4));
+      Contents ignored;assert(!decode(bad.data(),length,ignored));
+    }
+    // A restore writes the backup's milestones over whatever the device
+    // holds, a damaged record included; a backup without them leaves them.
+    Preferences::data.clear();Preferences::data["ll-appearancemile0"]={9,9,9};
+    Milestones::Config device;AppearanceStore<Milestones::Config> store;
+    assert(!store.begin(device,"ll-appearance","mile0","mile1",true) && store.damaged() && device.isDefault());
+    auto incoming=table.milestones;incoming.revision=device.revision+1;assert(store.save(incoming));
+    Milestones::Config reloaded;AppearanceStore<Milestones::Config> reader;
+    assert(reader.begin(reloaded,"ll-appearance","mile0","mile1",true) && !reader.damaged() && reloaded.same(table.milestones));
   }
 
   // Expanded accents travel through the complete USB backup, including the
@@ -135,8 +179,10 @@ int main() {
   assert(same(rejected,untouched));
   assert(!decode(buffer.data(),n-1,rejected) && !decode(buffer.data(),HEADER_BYTES,rejected));
   {
-    // Format 2 without its themes section is not a backup either.
-    auto bad=buffer;put32(bad.data()+4,FORMAT);put32(bad.data()+n-4,checksum(bad.data(),n-4));assert(!decode(bad.data(),n,rejected));
+    // Format 2 without its themes section is not a backup either, nor format 3 without milestones.
+    for(uint32_t format:{THEMES_FORMAT,FORMAT}) {
+      auto bad=buffer;put32(bad.data()+4,format);put32(bad.data()+n-4,checksum(bad.data(),n-4));assert(!decode(bad.data(),n,rejected));
+    }
   }
   {
     // A valid checksum cannot rescue an invalid setting.
