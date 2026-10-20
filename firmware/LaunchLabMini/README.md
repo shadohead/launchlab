@@ -1,16 +1,16 @@
 # LaunchLab for M5StickS3
 
-This source is **0.15.0-sticks3-milestone-pm** (beta). The recommended release is still **0.13.9-sticks3-rpm-guard-pm**. Both are for **M5StickS3 K150 (ESP32-S3, 8 MB flash / 8 MB OPI PSRAM)**.
+Current revision: **0.15.0-sticks3-milestone-pm**, the recommended stable release, for **M5StickS3 K150 (ESP32-S3, 8 MB flash / 8 MB OPI PSRAM)**.
 One application supports analog QRE1113 and TCRT5000 through the saved Sensor profile setting.
-See the beta [build context](../../docs/FIRMWARE_0.15.0.md) and [release notes](../releases/0.15.0-sticks3-milestone-pm/README.md), or the stable [build context](../../docs/FIRMWARE_0.13.9.md).
+See [build context](../../docs/FIRMWARE_0.15.0.md) and [release notes](../releases/0.15.0-sticks3-milestone-pm/README.md).
 
 Tilt replay is reliable on hard pulls: the accelerometer uses its ±16 g range, and every IMU sample is read from the BMI270 FIFO, so the live level and recordings no longer drop out at rest or during saves. A pull that reaches the gyro's 2000 °/s limit keeps its replay, marked **Tilt approx.**
 A single click of the side power key saves pending pulls and powers off.
 RPM detection treats the cord rewind after a pull as part of that pull, confirms sharp pulls and rides through a missed mark. State-changing USB letters run only when sent on their own, so stray serial data cannot power off the device or change settings; backup and restore work as before.
 
 Filtered movement renews the 30-second unused shake-wake timer. Stillness also enables RESTING, which pauses ADC sampling until movement or a button resumes it. The shared sensor supply remains powered. USB keeps the device awake.
-RPM milestone celebrations (0.15.0 beta) play an escalating effect at each milestone a pull reaches, 9K to 15K by default ending with the new Slash effect; choose Settings > Celebrate and edit the ladder in the [website celebrations editor](https://launchlab.beywatch.gg/celebrations).
-Custom color themes made in the [website theme editor](https://launchlab.beywatch.gg/themes) can be uploaded over USB and chosen under Settings > Theme (0.14.0 beta); the ten built-in themes are unchanged.
+RPM milestone celebrations play an escalating effect at each milestone a pull reaches, 9K to 15K by default ending with the new Slash effect; choose Settings > Celebrate and edit the ladder in the [website celebrations editor](https://launchlab.beywatch.gg/celebrations).
+Custom color themes made in the [website theme editor](https://launchlab.beywatch.gg/themes) can be uploaded over USB and chosen under Settings > Theme; the ten built-in themes are unchanged.
 Settings adds saved Top/Sidecar mounting and a guarded Wipe all flow. Themes, personal-best effects, optional sound, history and USB backup/restore remain available.
 Battery display uses filtered voltage readings, idle screen updates are reduced, and PM1 access uses checked wake/retry handling.
 

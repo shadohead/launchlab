@@ -1,5 +1,7 @@
 # Firmware 0.13.9 build context
 
+Superseded by [0.15.0](FIRMWARE_0.15.0.md); this document describes the preserved 0.13.9 release.
+
 The shipping runtime is `0.13.9-sticks3-rpm-guard-pm`, application SHA-256 `ec9f09ae41577bf96aefc1b308953480dd2fad5ab746afe2ade53faafd6cae6c`. The compiled source snapshot is frozen in the [release directory](../firmware/releases/0.13.9-sticks3-rpm-guard-pm/). It uses the same PM SDK, toolchain, bootloader and partition table as [0.13.5](FIRMWARE_0.13.5.md). Use the [USB updater](https://launchlab.beywatch.gg/update) for the shipping image.
 
 ## Build from source

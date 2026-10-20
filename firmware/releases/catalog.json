@@ -813,7 +813,7 @@
     "release": "0.15.0-sticks3-milestone-pm",
     "runtime_version": "0.15.0-sticks3-milestone-pm",
     "board": "M5StickS3 K150",
-    "date": "2026-10-21",
+    "date": "2026-10-20",
     "binary": "LaunchLabMini.ino.bin",
     "binary_bytes": 863408,
     "sha256": "48b827825ee721ac42a4c1ebdcc4abdddd6d690b8cd5c090b791aa378726a99e",
@@ -822,6 +822,7 @@
       "qre1113",
       "tcrt5000"
     ],
-    "published_channel": "beta"
+    "published_channel": "beta",
+    "channel_note": "published as beta, promoted to stable 2026-10-20"
   }
 ]

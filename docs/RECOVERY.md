@@ -47,7 +47,7 @@ For [LaunchLab support](https://github.com/shadohead/launchlab/issues), include 
 
 ## Release validation limits
 
-Use the [LaunchLab USB updater](https://launchlab.beywatch.gg/update) and check its selected release. The preserved [0.13.9 release](../firmware/releases/0.13.9-sticks3-rpm-guard-pm/README.md) and [build context](FIRMWARE_0.13.9.md) describe that image and layout; a newer release does not establish physical browser recovery, stock reinstall or rollback.
+Use the [LaunchLab USB updater](https://launchlab.beywatch.gg/update) and check its selected release. The preserved [0.15.0 release](../firmware/releases/0.15.0-sticks3-milestone-pm/README.md) and [build context](FIRMWARE_0.15.0.md) describe that image and layout; a newer release does not establish physical browser recovery, stock reinstall or rollback.
 
 ### Historical 0.11.1 prototype checks
 
