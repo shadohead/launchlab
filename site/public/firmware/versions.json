@@ -1,57 +1,72 @@
 {
   "latest": "0.13.9",
+  "beta": null,
   "releases": [
     {
       "version": "0.13.9",
-      "catalog": "firmware/0.13.9/catalog.json"
+      "catalog": "firmware/0.13.9/catalog.json",
+      "channel": "stable"
     },
     {
       "version": "0.13.8",
-      "catalog": "firmware/0.13.8/catalog.json"
+      "catalog": "firmware/0.13.8/catalog.json",
+      "channel": "stable"
     },
     {
       "version": "0.13.7",
-      "catalog": "firmware/0.13.7/catalog.json"
+      "catalog": "firmware/0.13.7/catalog.json",
+      "channel": "stable"
     },
     {
       "version": "0.13.5",
-      "catalog": "firmware/0.13.5/catalog.json"
+      "catalog": "firmware/0.13.5/catalog.json",
+      "channel": "stable"
     },
     {
       "version": "0.12.2",
-      "catalog": "firmware/0.12.2/catalog.json"
+      "catalog": "firmware/0.12.2/catalog.json",
+      "channel": "stable"
     },
     {
       "version": "0.11.2",
-      "catalog": "firmware/0.11.2/catalog.json"
+      "catalog": "firmware/0.11.2/catalog.json",
+      "channel": "stable"
     },
     {
       "version": "0.11.1",
-      "catalog": "firmware/0.11.1/catalog.json"
+      "catalog": "firmware/0.11.1/catalog.json",
+      "channel": "stable"
     },
     {
       "version": "0.10.22",
-      "catalog": "firmware/0.10.22/catalog.json"
+      "catalog": "firmware/0.10.22/catalog.json",
+      "channel": "stable"
     },
     {
       "version": "0.10.21",
-      "catalog": "firmware/0.10.21/catalog.json"
+      "catalog": "firmware/0.10.21/catalog.json",
+      "channel": "stable"
     },
     {
       "version": "0.10.14",
-      "catalog": "firmware/0.10.14/catalog.json"
+      "catalog": "firmware/0.10.14/catalog.json",
+      "channel": "stable"
     },
     {
       "version": "0.10.11",
-      "catalog": "firmware/0.10.11/catalog.json"
+      "catalog": "firmware/0.10.11/catalog.json",
+      "channel": "stable"
     },
     {
       "version": "0.10.7",
-      "catalog": "firmware/0.10.7/catalog.json"
+      "catalog": "firmware/0.10.7/catalog.json",
+      "channel": "stable"
     },
     {
       "version": "0.10.1",
-      "catalog": "firmware/0.10.1/catalog.json"
+      "catalog": "firmware/0.10.1/catalog.json",
+      "channel": "stable"
     }
-  ]
+  ],
+  "betaReleases": []
 }

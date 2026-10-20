@@ -28,10 +28,22 @@ for p in root.rglob('*.3mf'):
         assert z.testzip() is None,p
         assert '[Content_Types].xml' in z.namelist(),p
 index=json.loads((root/'site/public/firmware/versions.json').read_text())
+# Channels: latest and releases are stable only (all an older reader sees); betas sit in
+# betaReleases, and beta names the newest one while it is newer than latest.
+key=lambda v: tuple(map(int,v.split('.')))
+assert all(e['channel']=='stable' for e in index['releases']) and all(e['channel']=='beta' for e in index['betaReleases'])
+assert index['latest']==max((e['version'] for e in index['releases']),key=key)
+newest=max((e['version'] for e in index['betaReleases']),key=key,default=None)
+assert index['beta']==(newest if newest and key(newest)>key(index['latest']) else None)
 assert catalog['version']==index['latest']
 assert catalog==json.loads((root/f"site/public/firmware/{index['latest']}/catalog.json").read_text())
-for entry in index['releases']:
-    assert json.loads((root/'site/public'/entry['catalog']).read_text())['version']==entry['version']
+for entry in index['releases']+index['betaReleases']:
+    listed=json.loads((root/'site/public'/entry['catalog']).read_text())
+    assert listed['version']==entry['version']
+    # A beta was published as one: its catalog and frozen manifest say so.
+    if entry['channel']=='beta':
+        assert listed.get('published_channel')=='beta',entry
+        assert json.loads((root/'firmware/releases'/listed['release']/'manifest.json').read_text()).get('published_channel')=='beta',entry
 # Withdrawal changes the recommendation, not the preserved source or payloads.
 # Verify every versioned catalog, including releases removed from the picker.
 for catalog_path in (root/'site/public/firmware').glob('*/catalog.json'):

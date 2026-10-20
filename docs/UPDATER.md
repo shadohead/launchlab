@@ -4,6 +4,19 @@ Use the [LaunchLab USB updater](https://launchlab.beywatch.gg/update). It is the
 
 Ordinary Update blocks downgrades and unknown or incomplete applications. Repair / rollback and First install require their own explicit confirmations. Current byte verification does not establish physical rollback, stock reinstall or reliable pull measurement. Follow the procedures below and keep private backups.
 
+## Stable and beta firmware
+
+Every release is published in one of two channels.
+A **beta** has passed the automated gates: the host test suite and the hardware-in-the-loop suite on real M5StickS3 devices.
+A **stable** release has also been hand-tested by the maintainer against a fixed checklist (real pulls, tilt replay, browser install, backup and restore, settings across a reboot, battery sleep, wake and power off, and every new feature).
+The updater installs stable by default.
+Its **Beta** checkbox, remembered in that browser, offers the newest beta while one is newer than stable.
+Moving from a beta to a newer stable is an ordinary Update; going back from a beta to an older stable is a deliberate Repair / rollback, which writes only the application and keeps your data.
+Beta GitHub releases are marked as pre-releases.
+
+[`site/public/firmware/versions.json`](../site/public/firmware/versions.json) records the channels: `latest` and `releases` list stable releases only, `betaReleases` lists betas, and `beta` names the newest beta while it is newer than `latest`.
+A release's frozen manifest and catalog record the channel it was first published in as `published_channel`; a beta that is later promoted moves to `releases` without changing its frozen files.
+
 ## Historical 0.12.1 investigation
 
 Firmware **0.12.1 was placed under investigation** after owner-reported unusually high readings and intermittent missed pulls.
