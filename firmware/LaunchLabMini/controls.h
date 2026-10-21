@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include "appearance.h"
+#include "effect_set.h"
 
 // Navigation never starts/stops measurement. Effects are handled by the sketch
 // after the visible state changes; setting writes only happen on Apply.
@@ -16,6 +17,9 @@ struct State {
   // Valid custom theme slots (bit i: theme THEMES+i), kept current by the
   // sketch; Theme cycles through the built-ins and then these.
   uint8_t customThemes=0;
+  // The effect set (effect_set.h), kept current by the sketch; Best effect
+  // cycles through Random, these and Off.
+  EffectSet::Mask offeredEffects=EffectSet::DEFAULT_MASK;
   bool autoRecap()const{return page==Page::Main;}
   Effect tapA() {
     switch(page) {
@@ -59,7 +63,7 @@ struct State {
             do draft=(draft+1)%Appearance::ALL_THEMES;
             while(draft>=Appearance::THEMES && !((customThemes>>(draft-Appearance::THEMES))&1u));
             break;
-          case Setting::BestEffect:draft=uint8_t(Appearance::nextChoice(Appearance::Effect(draft)));break;
+          case Setting::BestEffect:draft=uint8_t(EffectSet::next(Appearance::Effect(draft),offeredEffects));break;
           case Setting::Celebrate:draft=(draft+1)%3;break;
           case Setting::Sound:draft=(draft+1)%3;break;
           case Setting::WipeAll:return Effect::None;

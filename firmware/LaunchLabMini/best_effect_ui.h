@@ -92,7 +92,16 @@ public:
       case Effect::Quickdraw:bottom_=h_-1;quickdraw(t);break;
       case Effect::Leaves:bottom_=h_-1;leaves(t);break;
       case Effect::Bloom:bottom_=h_-1;bloom(t);break;
-      default:break;
+      default: {
+        // The anime-inspired sets: five per series, each drawn by its own header.
+        const unsigned e=unsigned(effect);bottom_=h_-1;
+        if(e>=unsigned(Effect::Crimson) && e<=unsigned(Effect::Prism))eva(e-unsigned(Effect::Crimson),t);
+        if(e>=unsigned(Effect::Sunwheel) && e<=unsigned(Effect::Butterfly))slayer(e-unsigned(Effect::Sunwheel),t);
+        if(e>=unsigned(Effect::Birdsong) && e<=unsigned(Effect::Summon))ninja(e-unsigned(Effect::Birdsong),t);
+        if(e>=unsigned(Effect::Breach) && e<=unsigned(Effect::Glitch))nier(e-unsigned(Effect::Breach),t);
+        if(e>=unsigned(Effect::Rupture) && e<=unsigned(Effect::Ravage))sorcery(e-unsigned(Effect::Rupture),t);
+        break;
+      }
     }
   }
   // Pixels written by the last draw; a portable cost measure for previews.
@@ -803,6 +812,87 @@ private:
   void leaves(float t);
   void bloom(float t);
 
+  // ---- Evangelion-inspired effects, defined in best_effect_eva.h: Crimson..Prism --------
+  void eva(unsigned which,float t);
+  void evaSphere(float t);
+  void evaBarrier(float t);
+  void evaCross(float t);
+  void evaAlert(float t);
+  void evaBeam(float t);
+  void evaStroke(float x0,float y0,float x1,float y1,const Ink &c,int kq,bool clip=false);
+  void evaOctagon(float cx,float cy,float r,const Ink &c,int kq,bool clip=false);
+  void evaTriangle(float x0,float y0,float x1,float y1,float x2,float y2,const Ink &c,int kq);
+  void evaLighten(int x,int y,int k8);
+  void evaHazard(int y,int x0,int x1,int scroll,const Ink &stripe,int kq);
+  void evaText(const char *text,int x,int y,const Ink &c,int kq);
+  bool evaHidden(int x,int y)const;
+  void evaAdd(int x,int y,const Ink &c,int w);
+  void evaPlot(float x,float y,const Rgb &c,float k);
+  void evaDot(float x,float y,const Rgb &c,float k);
+  void evaVdot(int x,float y,const Ink &c,int kq);
+  void evaSpark(float x,float y,const Rgb &c,float k,float radius);
+  void evaEllipse(float cx,float cy,float rx,float ry,const Rgb &c,float k,float density);
+  void evaTwinkle(float x,float y,const Rgb &c,float k,int arm);
+
+  // ---- Demon Slayer-inspired effects, defined in best_effect_slayer.h: Sunwheel..Butterfly --------
+  void slayer(unsigned which,float t);
+  void sunwheel(float t);
+  void torrent(float t);
+  void blitz(float t);
+  void tigerclaw(float t);
+  void butterfly(float t);
+  // A woodblock brush: each band strokes the knot polyline offset across it.
+  struct Band {float offset;Ink ink;int k;};
+  void lit(int x,int y,const Ink &c,int w);
+  void inkLine(int x0,int y0,int x1,int y1,const Ink &c,int k0,int k1);
+  void brush(const float *x,const float *y,const float *hw,const int *k,int n,const Band *bands,int nb);
+  void tongue(float x,float y,float angle,float length,float width,float hook,int k,const Band *bands,int nb);
+  void band(float cx,float cy,float r,float width,float from,float sweep,const Ink *zones,int nz,int k);
+
+  // ---- Naruto-inspired effects, defined in best_effect_ninja.h: Birdsong..Summon --------
+  void ninja(unsigned which,float t);
+  void ninjaCharge(float t);
+  void ninjaSpiral(float t);
+  void ninjaEye(float t);
+  void ninjaGates(float t);
+  void ninjaSummon(float t);
+  void ninjaArc(float x0,float y0,float x1,float y1,uint32_t seed,const Rgb &glow,float k,int depth,float rough);
+  void ninjaOrb(float cx,float cy,float r,float squash,float spin,float k);
+  void ninjaGlow(float cx,float cy,float r,const Rgb &c,float k);
+  void ninjaIris(int ex,int ey,float open,float slit,float phi,float m,float u,int flash);
+
+  // ---- NieR:Automata-inspired effects, defined in best_effect_nier.h: Breach..Glitch --------
+  void nier(unsigned which,float t);
+  void nierBreach(float t);
+  void nierFlurry(float t);
+  void nierMoon(float t);
+  void nierBarrage(float t);
+  void nierGlitch(float t);
+  void nierAdd(int x,int y,const Ink &c,int w);
+  void nierRing(float cx,float cy,float rx,float ry,const Ink &c,int kq);
+  void nierOrb(float x,float y,const Ink &c,int kq);
+  void nierSquare(int x,int y,int half,const Ink &c,int kq,bool filled);
+  void nierLine(int x0,int y0,int x1,int y1,const Ink &c,int kq,int yMin,int yMax);
+  void nierCrescent(const float *arc,float h,float tail,float width,float k,const Ink &edge,const Ink &body,float dx,float dy);
+  void nierPetal(float fx,float fy,float phi,float length,float width,float rise,float curl,const Ink &edge,const Ink &body,int kq);
+  void nierTear(int y0,int y1,int shift);
+
+  // ---- Jujutsu Kaisen-inspired effects, defined in best_effect_sorcery.h: Rupture..Ravage --------
+  void sorcery(unsigned which,float t);
+  void sorcRupture(float t);
+  void sorcBoundless(float t);
+  void sorcPrecision(float t);
+  void sorcUmbra(float t);
+  void sorcRavage(float t);
+  void sorcLine(float x0,float y0,float x1,float y1,const Ink &c,int k0,int k1);
+  void sorcRimBolt(float x0,float y0,float x1,float y1,uint32_t seed,const Ink &rim,const Ink &outer,int k,int depth);
+  void sorcShiftRow(int y,int d);
+  void sorcPrime(int y0,int y1);
+  void sorcHeatLine(float x0,float y0,float x1,float y1,const Ink &target,int k8);
+  void sorcHeat(int x,int y,const Ink &target,int k8);
+  uint16_t sorcShade(unsigned v,const Ink &target,int k8)const;
+  void sorcRing(float s,const Ink &c,int kq,bool split);
+
   // White core with a glow on the two sides across the stroke.
   void segment(float x0,float y0,float x1,float y1,const Rgb &glowColor,float k) {
     const float dx=x1-x0,dy=y1-y0;const bool steep=std::fabs(dy)>std::fabs(dx);
@@ -819,3 +909,8 @@ private:
 }
 #include "best_effect_elemental.h"
 #include "best_effect_physical.h"
+#include "best_effect_eva.h"
+#include "best_effect_slayer.h"
+#include "best_effect_ninja.h"
+#include "best_effect_nier.h"
+#include "best_effect_sorcery.h"

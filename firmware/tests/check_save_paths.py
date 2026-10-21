@@ -138,6 +138,9 @@ static ThemeStore themeStore;static DeviceBackup::LineReceiver<(Themes::Request:
 // Milestone requests (USB U): the real receiver, record and store.
 static Milestones::Config milestones;static AppearanceStore<Milestones::Config> milestoneStore;
 static DeviceBackup::LineReceiver<(Milestones::Request::BYTES+2)/3*4> milestoneRx;
+// Effect set requests (USB U op 3): the same receiver, the real record and store.
+static EffectSet::Config effectSet;static AppearanceStore<EffectSet::Config> effectSetStore;
+static Appearance::Effect upcomingEffect=Appearance::Effect::Off;
 static unsigned freeEntries=158;static bool nvsAvailable(unsigned &available){available=freeEntries;return true;}
 static void cancelSettingEdit(){if(controls.page==Controls::Page::Edit)controls.page=Controls::Page::Settings;}
 static void prepareMotion(const Snapshot&){lastAcceptedAt=millis();}static void logLaunchMetrics(const Snapshot&){}
@@ -412,6 +415,74 @@ static void milestoneRequests() {
   std::cout<<"PASS: milestone tables and resets write inside a checkpoint only; busy, short of NVS, corrupt or invalid requests write nothing; a damaged record is replaced\n";
 }
 
+// A completed U transfer as pollMilestoneRequest dispatches it.
+static void uTransfer(const uint8_t *bytes,size_t n=EffectSet::Request::BYTES) {
+  std::string line;DeviceBackup::base64Lines(bytes,n,96,[&](const char *text){line+=text;});
+  milestoneRx.start(millis());auto event=DeviceBackup::TransferEvent::None;
+  for(char c:line+"\n.\n")event=milestoneRx.feed(c,millis());
+  assert(event==DeviceBackup::TransferEvent::Complete);
+  const auto s=snap();if(!finishEffectSetRequest(s))finishMilestoneRequest(s);
+}
+static void effectSetRequest(EffectSet::Mask mask){uint8_t bytes[EffectSet::Request::BYTES];EffectSet::Request::encode(mask,bytes);uTransfer(bytes);}
+static bool storedSet(EffectSet::Config &out){AppearanceStore<EffectSet::Config> reader;return reader.begin(out,"ll-appearance","eset0","eset1",true) && !reader.damaged();}
+static void effectSetRequests() {
+  using Appearance::Effect;using EffectSet::flag;
+  boot();effectSet={};effectSetStore={};milestones={};milestoneStore={};freeEntries=158;upcomingEffect=Effect::Orbit;
+  assert(effectSetStore.begin(effectSet,"ll-appearance","eset0","eset1",true) && milestoneStore.begin(milestones,"ll-appearance","mpool0","mpool1",true));
+  assert(!std::strcmp(effectSetFields()," effect_set=0000000000000000000000000003ff9f effect_set_store=ok effect_set_default=1"));
+  const EffectSet::Mask mine=flag(Effect::Slash)|flag(Effect::Crimson)|flag(Effect::Ravage);
+  // A Best effect editor open on the device closes: it cycles the old set.
+  controls.page=Controls::Page::Edit;controls.setting=unsigned(Controls::Setting::BestEffect);
+  // A set is written in its own checkpoint with the IMU quiet, then the ADC runs again.
+  effectSetRequest(mine);
+  assert(effectSet.mask()==mine && guardedWrites==1 && running() && controls.offeredEffects==mine && controls.page==Controls::Page::Settings);
+  // Random's next pick, Orbit, is not offered any more: the next one is drawn from the set.
+  assert(upcomingEffect==Effect::Off);
+  {EffectSet::Config stored;assert(storedSet(stored) && stored.mask()==mine && stored.revision==effectSet.revision);}
+  assert(!std::strcmp(effectSetFields()," effect_set=00000000000000000000040000040080 effect_set_store=ok effect_set_default=0"));
+  // The same set again writes nothing.
+  effectSetRequest(mine);assert(guardedWrites==1);
+  // Busy (a pull, a vetoed IMU barrier) or short of NVS: refused, nothing written.
+  for(unsigned turn=0;turn<6;++turn){optical(5000,1100);optical(5000);}
+  assert(snap().phase==D::Phase::Launch);effectSetRequest(EffectSet::ALL);
+  assert(effectSet.mask()==mine && guardedWrites==1);
+  passes(1700);assert(running());
+  imuAcquisition.veto=true;effectSetRequest(EffectSet::ALL);imuAcquisition.veto=false;
+  assert(effectSet.mask()==mine && guardedWrites==1 && running());
+  freeEntries=EFFECT_SET_NEEDED_ENTRIES-1;effectSetRequest(EffectSet::ALL);freeEntries=158;
+  assert(effectSet.mask()==mine && guardedWrites==1);
+  // Invalid sets and damaged requests are refused before any checkpoint.
+  const unsigned windows=imuAcquisition.windows;
+  for(EffectSet::Mask bad:{EffectSet::Mask(),EffectSet::DEFAULT_MASK|flag(Effect::Off),flag(Effect::Random),flag(43),flag(63),flag(127)}) {
+    effectSetRequest(bad);assert(effectSet.mask()==mine && guardedWrites==1 && imuAcquisition.windows==windows);
+  }
+  {uint8_t bytes[EffectSet::Request::BYTES];EffectSet::Request::encode(EffectSet::ALL,bytes);bytes[9]^=1;uTransfer(bytes);
+   EffectSet::Request::encode(EffectSet::ALL,bytes);bytes[30]=1;Appearance::put32(bytes+36,Appearance::hash(bytes,36));uTransfer(bytes);
+   assert(effectSet.mask()==mine && guardedWrites==1 && imuAcquisition.windows==windows);}
+  // Milestone requests on the same transfer still reach the milestone code;
+  // neither record touches the other.
+  // Both milestone frames: 0.15's v1 and the pooled v2.
+  {Milestones::Config table;assert(table.select(Milestones::Mode::Both));uint8_t bytes[Milestones::Request::BYTES];
+   Milestones::Request::encode(Milestones::Request::Op::Set,&table,bytes,true);uTransfer(bytes,Milestones::Request::V1_BYTES);
+   assert(milestones.mode()==Milestones::Mode::Both && effectSet.mask()==mine && guardedWrites==2);
+   const Milestones::Row rows[]={{9000,(flag(Effect::Crimson)|flag(Effect::Tidal)).lo}};
+   assert(table.set(Milestones::Mode::Both,rows,1)==Milestones::Problem::None);
+   Milestones::Request::encode(Milestones::Request::Op::Set,&table,bytes);uTransfer(bytes,Milestones::Request::BYTES);
+   assert(milestones.same(table) && effectSet.mask()==mine && guardedWrites==3);}
+  // The defaults back, saved.
+  effectSetRequest(EffectSet::DEFAULT_MASK);assert(effectSet.isDefault() && guardedWrites==4 && controls.offeredEffects==EffectSet::DEFAULT_MASK);
+  {EffectSet::Config stored;assert(storedSet(stored) && stored.isDefault());}
+  // A damaged record offers the default set; a request replaces it, even with the default.
+  Preferences::data["ll-appearanceeset0"][9]^=1;Preferences::data["ll-appearanceeset1"][9]^=1;
+  effectSet={};effectSetStore={};assert(!effectSetStore.begin(effectSet,"ll-appearance","eset0","eset1",true) && effectSetStore.damaged());
+  assert(effectSet.isDefault() && !std::strcmp(effectSetFields()," effect_set=0000000000000000000000000003ff9f effect_set_store=damaged effect_set_default=1"));
+  effectSetRequest(EffectSet::DEFAULT_MASK);
+  assert(!effectSetStore.damaged() && guardedWrites==5 && !std::strcmp(effectSetStoreName(),"ok"));
+  {EffectSet::Config stored;assert(storedSet(stored) && stored.isDefault());}
+  {Milestones::Config kept;assert(storedTable(kept) && kept.mode()==Milestones::Mode::Both);}
+  std::cout<<"PASS: effect set requests write inside a checkpoint only; busy, short of NVS, corrupt or invalid requests write nothing; milestone requests unaffected; a damaged record is replaced\n";
+}
+
 static void sensorFaultHistory() {
   // After a pull, the sensor signal drops to the low rail (CHECK SENSOR). The
   // detector holds in Hold indefinitely; history still flushes once quiet.
@@ -427,7 +498,7 @@ static void sensorFaultHistory() {
 
 main = r'''
 int main() {
-  freshEdgeAtApply();imuVeto();applyDuringPull();lostReplies();usbDeviceSettings();shutdownFlush();themeRequests();milestoneRequests();sensorFaultHistory();
+  freshEdgeAtApply();imuVeto();applyDuringPull();lostReplies();usbDeviceSettings();shutdownFlush();themeRequests();milestoneRequests();effectSetRequests();sensorFaultHistory();
 }
 '''
 
@@ -438,7 +509,11 @@ functions = '\n'.join([
     function('themeReply'), function('themesChanged'), function('selectTheme'), function('finishThemeRequest'),
     function('milestoneReply'), function('*milestoneStoreName', 'const char'), statement('static constexpr unsigned MILESTONE_NEEDED_ENTRIES'),
     function('finishMilestoneRequest'),
+    function('*effectSetStoreName', 'const char'), statement('static constexpr unsigned EFFECT_SET_NEEDED_ENTRIES'),
+    function('*effectSetFields', 'const char'), function('effectSetChanged'), function('finishEffectSetRequest', 'bool'),
 ])
+# pollMilestoneRequest hands a completed transfer to the effect set first, as uTransfer() does.
+assert 'case DeviceBackup::TransferEvent::Complete:if(!finishEffectSetRequest(s))finishMilestoneRequest(s);break;' in source
 with tempfile.TemporaryDirectory(prefix='launchlab-save-paths-') as temp:
     build = pathlib.Path(temp)
     cpp = build / 'save_paths.cpp'

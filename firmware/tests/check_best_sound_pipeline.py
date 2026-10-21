@@ -97,6 +97,7 @@ static AppearanceStore<Appearance::Bests> bestStore;
 static Appearance::Celebration bestEffect,editorEffect;
 static Milestones::Config milestones;
 static Appearance::Effect milestoneNext[Milestones::MAX_ROWS];static Milestones::Config milestonePicked;static bool milestonePicksReady=false;
+static EffectSet::Config effectSet;
 static Appearance::Effect upcomingEffect=Appearance::Effect::Off;
 static Controls::State controls;
 static PracticeHistory practice;
@@ -123,7 +124,7 @@ tests = r'''
 static void reset(Appearance::Effect effect=Appearance::Effect::Random) {
   M5.Speaker={};soundPlayer.~BestEffectSpeaker();new(&soundPlayer) BestEffectSpeaker(imuAcquisition);soundPlayer.configure();
   appearance={};appearance.effect=effect;appearance.sound=Appearance::Sound::Low;
-  personalBests={};bestStore={};bestEffect={};editorEffect={};upcomingEffect=Appearance::Effect::Off;milestones={};
+  personalBests={};bestStore={};bestEffect={};editorEffect={};upcomingEffect=Appearance::Effect::Off;milestones={};effectSet={};
   practice={};latestMotion={};launchFeedback={};controls={};soundRequest={};
   dirty=motionPending=celebrationSound=soundPreview=tournamentMode=historyPage=diagnostics=motionDemo=demo=false;
   hostUs=5000000;randomCalls=0;lastAcceptedAt=historyPendingSince=motionDrops=0;
@@ -251,6 +252,31 @@ int main() {
     reset(Appearance::Effect::Orbit);
     for(unsigned i=0;i<2000;++i)tickSound(Snapshot{});
     assert(soundPlayer.prepared(Effect::Orbit) && !soundPlayer.prepared(Effect::Slash) && !soundPlayer.prepared(Effect::Sparkles));
+  }
+  // The effect set: Random's picks, the first one, each next pick after a
+  // presented best and the editor's Random preview stay inside it, never
+  // repeating while another is offered; one offered effect always plays.
+  {
+    using Appearance::Effect;using EffectSet::flag;
+    const EffectSet::Mask mine=flag(Effect::Slash)|flag(Effect::Crimson)|flag(Effect::Ravage);
+    reset();assert(effectSet.set(mine)==EffectSet::Problem::None);
+    prepared();assert(soundTarget()==Effect::Slash);
+    Effect previous=Effect::Off;
+    for(unsigned i=0;i<6;++i) {
+      prepared();accepted(6100+100*i);captured();tickSound(Snapshot{});presentFrame();
+      assert(bestEffect.badge() && effectSet.offers(bestEffect.effect()) && bestEffect.effect()!=previous && M5.Speaker.plays==1+i);
+      checkClip(bestEffect.effect());previous=bestEffect.effect();
+      assert(effectSet.offers(upcomingEffect) && upcomingEffect!=previous);
+      M5.Speaker.playing=false;
+    }
+    controls.page=Controls::Page::Edit;controls.setting=unsigned(Controls::Setting::BestEffect);controls.draft=unsigned(Effect::Random);
+    for(unsigned i=0;i<4;++i){previewEffect();assert(effectSet.offers(editorEffect.effect()));}
+    reset();assert(effectSet.set(flag(Effect::Bladework))==EffectSet::Problem::None);
+    for(unsigned i=0;i<3;++i){prepared();accepted(6100+100*i);captured();tickSound(Snapshot{});presentFrame();
+      assert(bestEffect.effect()==Effect::Bladework && upcomingEffect==Effect::Bladework);M5.Speaker.playing=false;}
+    // A saved effect outside the set still plays.
+    reset(Effect::Bloom);assert(effectSet.set(mine)==EffectSet::Problem::None);
+    prepared();accepted(6100);captured();tickSound(Snapshot{});presentFrame();assert(bestEffect.effect()==Effect::Bloom);
   }
   // At most MAX_BUFFERS sounds are kept: preparing another frees the least
   // recently used, never the one playing, and a freed sound renders again.

@@ -352,6 +352,33 @@ LOOP_HELPER static void hilCommand(char *line) {
     }
     Hil::reply("HIL_OK milecorrupt ok=%d\n",ok);return;
   }
+  if(!strcmp(cmd,"esetcorrupt")) {
+    // Damages both stored effect set slots, inside an ADC checkpoint; the
+    // next boot must fall back to the default set.
+    const auto s=acquisition.snapshot();bool ok=false;
+    if(acquisition.request(Action::IdleCheckpointBegin,s.launches)) {
+      Preferences store;uint8_t junk[EffectSet::Config::IMAGE_BYTES];std::memset(junk,0x5a,sizeof(junk));
+      ok=store.begin("ll-appearance",false) && store.putBytes("eset0",junk,sizeof(junk))==sizeof(junk) &&
+        store.putBytes("eset1",junk,sizeof(junk))==sizeof(junk);store.end();
+      acquisition.request(Action::CheckpointEnd);
+    }
+    Hil::reply("HIL_OK esetcorrupt ok=%d\n",ok);return;
+  }
+  if(!strcmp(cmd,"cycle")) {
+    // !cycle <presses>: the Best effect editor through the real controls and
+    // navigation: open it from Settings (BeginEdit), press B, list each draft
+    // (stored effect values), then cancel the edit and go home. Nothing saves.
+    const unsigned presses=std::min(64u,unsigned(num(Appearance::DRAWN+2)));
+    if(controls.page==Controls::Page::Edit)cancelSettingEdit();
+    controls.page=Controls::Page::Settings;controls.setting=unsigned(Controls::Setting::BestEffect);syncNavigation();
+    buttonA();
+    static char line[48+64*4];size_t used=snprintf(line,sizeof(line),"HIL_CYCLE page=%u start=%u values=",unsigned(controls.page),unsigned(controls.draft));
+    for(unsigned i=0;i<presses && controls.page==Controls::Page::Edit;++i) {
+      buttonB();used+=snprintf(line+used,sizeof(line)-used,"%s%u",i?",":"",unsigned(controls.draft));
+    }
+    holdB();controls.page=Controls::Page::Main;syncNavigation();
+    Hil::replyLine(line);return;
+  }
   if(!strcmp(cmd,"home")) {
     if(controls.page==Controls::Page::Edit)cancelSettingEdit();
     controls.page=Controls::Page::Main;syncNavigation();

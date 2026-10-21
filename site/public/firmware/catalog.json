@@ -526,6 +526,15 @@
       "md5": "3d1dc2352042caf50408b97aa8c1092c",
       "elfSha256": "3b938150b69141965d5b6055dec26d6be3e1789bf9b35586185ace2b75e9a1a0",
       "sensor": "qre1113"
+    },
+    {
+      "version": "0.17.0",
+      "runtime": "0.17.0-sticks3-anime-pm",
+      "size": 1152480,
+      "sha256": "5b27a5585eab33a5082adf6cc4605ff76b6ad6d054246774bdab594604b7ff22",
+      "md5": "703eca8ff362c27b5e2af42418e89405",
+      "elfSha256": "fcfa65a7c0ceb5a2d26cde943b33a2bc6785dc104e1de22a22dcc8e0ca7d48f5",
+      "sensor": "qre1113"
     }
   ],
   "published_channel": "beta"

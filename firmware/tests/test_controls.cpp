@@ -33,9 +33,11 @@ int main() {
   assert(s.tapA()==Effect::None && s.holdB()==Effect::None && s.page==Page::Tournament);
   assert(s.tapB()==Effect::Tournament && s.page==Page::Tournament);
   assert(s.holdA()==Effect::Tournament && s.page==Page::Main);
+  // Best effect cycles Random, the offered effects (the default set: the 16
+  // of 0.16) and Off.
   for(unsigned row=0;row<EDITABLE_SETTING_COUNT;++row) {
     s.page=Page::Edit;s.setting=row;s.draft=row==0?3:row==2?40:0;
-    const unsigned original=s.draft,cycle=row==0 || row==2?10:row==5?Appearance::THEMES:row==6?Appearance::EFFECTS:row==7 || row==8?3:2;
+    const unsigned original=s.draft,cycle=row==0 || row==2?10:row==5?Appearance::THEMES:row==6?EffectSet::count(s.offeredEffects)+2:row==7 || row==8?3:2;
     for(unsigned i=0;i<cycle;++i)assert(s.tapB()==Effect::Preview);
     assert(s.draft==original);
   }

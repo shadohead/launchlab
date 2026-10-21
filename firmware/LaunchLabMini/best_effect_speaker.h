@@ -78,7 +78,7 @@ public:
   bool playing()const{return begun_ && M5.Speaker.isPlaying();}
   void status(Appearance::Sound level) {
     unsigned buffers=0;for(const auto *b:buffers_)buffers+=b!=nullptr;
-    char rendered[192]="none";size_t used=0;
+    static char rendered[512];std::strcpy(rendered,"none");size_t used=0;
     for(unsigned i=0;i<Appearance::DRAWN;++i)if((rendered_>>i)&1u)
       used+=snprintf(rendered+used,sizeof(rendered)-used,"%s%s",used?",":"",Appearance::label(Appearance::drawnEffect(i)));
     Serial.printf("SOUND_STATUS level=%s configured=%d buffers=%u evictions=%lu rendered=%s powered=%d playing=%d plays=%lu stops=%lu lock_misses=%lu render_us=%lu max_slice_us=%lu max_begin_us=%lu max_end_us=%lu\n",
@@ -105,7 +105,7 @@ private:
     }
   }
   StickS3MotionAcquisition &imu_;
-  int16_t *buffers_[Appearance::DRAWN]={};uint32_t rendered_=0,used_[Appearance::DRAWN]={},clock_=0,evictions_=0;unsigned playingIndex_=Appearance::DRAWN;
+  int16_t *buffers_[Appearance::DRAWN]={};uint64_t rendered_=0;uint32_t used_[Appearance::DRAWN]={},clock_=0,evictions_=0;unsigned playingIndex_=Appearance::DRAWN;
   BestEffectSound::Synth synth_{Appearance::Effect::Off,0};
   Appearance::Effect target_=Appearance::Effect::Off;
   bool configured_=false,begun_=false;

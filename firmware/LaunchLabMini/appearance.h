@@ -12,15 +12,21 @@ namespace Appearance {
 enum class Theme:uint8_t {Classic=0,Mint=1,Amber=2,Violet=3,GolemGreen=4,PhoenixRed=5,CobaltBlue=6,SharkPink=7,ValkyrieWhite=8,TyrannoOrange=9};
 // Stored values: each effect keeps its number, so older records keep their
 // meaning. Random came after Off, Slash after Random, then the elemental
-// effects (Tidal..Radiance) and the physical ones (Spin..Bloom) in 0.16.
+// effects (Tidal..Radiance) and the physical ones (Spin..Bloom) in 0.16,
+// then five anime-inspired sets of five in 0.17 (Crimson..Ravage).
 // Firmware that predates a value rejects a record selecting it and falls
 // back to its other slot or the defaults.
 enum class Effect:uint8_t {Orbit,Flames,Sparkles,Shockwave,Lightning,Off,Random,Slash,
-  Tidal,Frost,Gale,Eclipse,Radiance,Spin,Storm,Quickdraw,Leaves,Bloom};
+  Tidal,Frost,Gale,Eclipse,Radiance,Spin,Storm,Quickdraw,Leaves,Bloom,
+  Crimson,Bulwark,Crux,Klaxon,Prism,
+  Sunwheel,Torrent,Blitz,Tigerclaw,Butterfly,
+  Birdsong,Spiral,Pinwheel,Overdrive,Summon,
+  Breach,Bladework,Moonpetal,Barrage,Glitch,
+  Rupture,Boundless,Precision,Umbra,Ravage};
 // Celebration sound level; Off by default. The speaker is powered only while a sound plays.
 enum class Sound:uint8_t {Off,Low,High};
 // DRAWN effects animate: every effect except Off and Random.
-constexpr unsigned THEMES=10,EFFECTS=18,DRAWN=16,SOUNDS=3;
+constexpr unsigned THEMES=10,EFFECTS=43,DRAWN=41,SOUNDS=3;
 // Theme IDs THEMES.. select the user's custom theme slots (theme_library.h).
 // Firmware without custom themes rejects such a record and falls back to its
 // other slot or the defaults, as it does for any newer record.
@@ -34,7 +40,12 @@ inline unsigned drawnIndex(Effect e){return unsigned(e)<5?unsigned(e):unsigned(e
 inline const char *label(Theme t){static const char *s[]={"Pegasus Cyan","Wolf Mint","Wizard Gold","Meteor Purple","Golem Green","Phoenix Red","Cobalt Blue","Shark Pink","Valkyrie White","Tyranno Orange"};return unsigned(t)<THEMES?s[unsigned(t)]:s[0];}
 inline const char *label(Effect e) {
   static const char *s[]={"Orbit","Flames","Sparkles","Shockwave","Lightning","Off","Random","Slash",
-    "Tidal","Frost","Gale","Eclipse","Radiance","Spin","Storm","Quickdraw","Leaves","Bloom"};
+    "Tidal","Frost","Gale","Eclipse","Radiance","Spin","Storm","Quickdraw","Leaves","Bloom",
+    "Crimson","Bulwark","Crux","Klaxon","Prism",
+    "Sunwheel","Torrent","Blitz","Tigerclaw","Butterfly",
+    "Birdsong","Spiral","Pinwheel","Overdrive","Summon",
+    "Breach","Bladework","Moonpetal","Barrage","Glitch",
+    "Rupture","Boundless","Precision","Umbra","Ravage"};
   static_assert(sizeof(s)/sizeof(s[0])==EFFECTS,"one label per effect");
   return unsigned(e)<EFFECTS?s[unsigned(e)]:s[0];
 }
@@ -54,7 +65,12 @@ inline uint16_t accent(Theme t){static constexpr uint16_t c[]={0x07ff,0x8ff9,0xf
 inline uint32_t duration(Effect e) {
   static constexpr uint16_t ms[]={5000,5100,5000,4900,5000,0,0,5000,
     5000,5000,4800,5200,5000,  // Tidal, Frost, Gale, Eclipse, Radiance
-    5000,5100,4900,5000,5100}; // Spin, Storm, Quickdraw, Leaves, Bloom
+    5000,5100,4900,5000,5100,  // Spin, Storm, Quickdraw, Leaves, Bloom
+    5000,4800,5000,4800,5000,  // Crimson..Prism (Evangelion)
+    5000,5000,4800,5000,5000,  // Sunwheel..Butterfly (Demon Slayer)
+    5000,5000,5200,4800,5000,  // Birdsong..Summon (Naruto)
+    5000,4800,5200,5000,4800,  // Breach..Glitch (NieR:Automata)
+    4800,5200,4800,4800,5000}; // Rupture..Ravage (Jujutsu Kaisen)
   static_assert(sizeof(ms)/sizeof(ms[0])==EFFECTS,"one duration per effect");
   return unsigned(e)<EFFECTS?ms[unsigned(e)]:0;
 }
@@ -63,7 +79,12 @@ inline uint32_t duration(Effect e) {
 inline uint32_t soundDuration(Effect e) {
   static constexpr uint16_t ms[]={1700,1800,1600,1300,1500,0,0,1700,
     2600,2600,2600,2800,2700,  // Tidal, Frost, Gale, Eclipse, Radiance
-    2600,2600,2300,2500,2600}; // Spin, Storm, Quickdraw, Leaves, Bloom
+    2600,2600,2300,2500,2600,  // Spin, Storm, Quickdraw, Leaves, Bloom
+    2600,2300,2300,2100,2400,  // Crimson..Prism
+    2600,2400,1900,2400,2400,  // Sunwheel..Butterfly
+    2400,2800,2800,2600,2300,  // Birdsong..Summon
+    2600,2400,2800,2400,2000,  // Breach..Glitch
+    1900,2400,2000,2200,2600}; // Rupture..Ravage
   static_assert(sizeof(ms)/sizeof(ms[0])==EFFECTS,"one sound length per effect");
   return unsigned(e)<EFFECTS?std::min<uint32_t>(ms[unsigned(e)],duration(e)):0;
 }

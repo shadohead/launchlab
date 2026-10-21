@@ -41,7 +41,7 @@ int main(){
   static_assert(unsigned(Effect::Orbit)==0 && unsigned(Effect::Lightning)==4 && unsigned(Effect::Off)==5 &&
                 unsigned(Effect::Random)==6 && unsigned(Effect::Slash)==7 && unsigned(Effect::Tidal)==8 &&
                 unsigned(Effect::Radiance)==12 && unsigned(Effect::Spin)==13 && unsigned(Effect::Bloom)==17 &&
-                EFFECTS==18 && DRAWN==16);
+                unsigned(Effect::Crimson)==18 && unsigned(Effect::Ravage)==42 && EFFECTS==43 && DRAWN==41);
   for(unsigned i=0;i<DRAWN;++i)assert(drawn(unsigned(drawnEffect(i))) && drawnIndex(drawnEffect(i))==i);
   for(unsigned e=0;e<EFFECTS;++e)assert(drawn(e)==(e!=5 && e!=6) && std::strlen(label(Effect(e)))<=9 && (duration(Effect(e))>0)==drawn(e));
   assert(!drawn(EFFECTS) && !drawn(255) && !std::strcmp(label(Effect::Slash),"Slash") && duration(Effect::Slash)==5000);
@@ -49,13 +49,13 @@ int main(){
   // impact), with a sound of a hit and a short tail.
   for(unsigned e=0;e<EFFECTS;++e)if(drawn(e))assert(duration(Effect(e))>=4800 && duration(Effect(e))<=5200 && soundDuration(Effect(e))<=2800);
   // Settings order Random, Orbit..Lightning, Slash, Tidal..Bloom, Off; Random never repeats its previous pick.
-  {Effect e=Effect::Random;uint32_t seen=0;for(unsigned i=0;i<EFFECTS;++i){seen|=1u<<unsigned(e);e=nextChoice(e);}
-   assert(e==Effect::Random && seen==(1u<<EFFECTS)-1 && nextChoice(Effect::Random)==Effect::Orbit && nextChoice(Effect::Lightning)==Effect::Slash &&
-          nextChoice(Effect::Slash)==Effect::Tidal && nextChoice(Effect::Radiance)==Effect::Spin && nextChoice(Effect::Bloom)==Effect::Off &&
+  {Effect e=Effect::Random;uint64_t seen=0;for(unsigned i=0;i<EFFECTS;++i){seen|=uint64_t(1)<<unsigned(e);e=nextChoice(e);}
+   assert(e==Effect::Random && seen==(uint64_t(1)<<EFFECTS)-1 && nextChoice(Effect::Random)==Effect::Orbit && nextChoice(Effect::Lightning)==Effect::Slash &&
+          nextChoice(Effect::Slash)==Effect::Tidal && nextChoice(Effect::Radiance)==Effect::Spin && nextChoice(Effect::Bloom)==Effect::Crimson && nextChoice(Effect::Ravage)==Effect::Off &&
           nextChoice(Effect::Off)==Effect::Random && nextChoice(Effect(EFFECTS))==Effect::Random);
-   uint32_t picked=0;
-   for(uint32_t bits=0;bits<400;++bits)for(unsigned prev=0;prev<EFFECTS;++prev){const Effect p=pick(bits*2654435761u,Effect(prev));assert(drawn(unsigned(p)) && p!=Effect(prev));picked|=1u<<unsigned(p);}
-   assert(picked==((1u<<EFFECTS)-1 & ~(1u<<5 | 1u<<6)));}
+   uint64_t picked=0;
+   for(uint32_t bits=0;bits<1000;++bits)for(unsigned prev=0;prev<EFFECTS;++prev){const Effect p=pick(bits*2654435761u,Effect(prev));assert(drawn(unsigned(p)) && p!=Effect(prev));picked|=uint64_t(1)<<unsigned(p);}
+   assert(picked==(((uint64_t(1)<<EFFECTS)-1) & ~(uint64_t(1)<<5 | uint64_t(1)<<6)));}
   for(unsigned theme=0;theme<THEMES;++theme)for(unsigned effect=0;effect<EFFECTS;++effect){
     assert(config.select(Theme(theme),Effect(effect)) && settings.save(config));
     Config restored;AppearanceStore<Config> reader;assert(reader.begin(restored,"a","cfg0","cfg1"));
@@ -124,11 +124,14 @@ int main(){
     bool drew=false,lower=false,glinted=false;uint32_t maxPlots=0;
     const Effect effect=Effect(mode);
     // How an effect may touch the UI's own pixels. Slash cuts the readout
-    // and slides its halves; Gale leans the readout's rows sideways; Eclipse
-    // dims the readout toward the background. Every other change to UI
-    // pixels brightens header glyphs in every channel (the glint, Frost's
-    // ice and Radiance's flare).
-    const bool slash=effect==Effect::Slash,moves=slash || effect==Effect::Gale,dims=effect==Effect::Eclipse;
+    // and slides its halves; Gale leans the readout's rows sideways, Glitch
+    // tears a few rows by a pixel or two and Rupture ripples them; Eclipse
+    // and Umbra dim the readout toward the background (never below 3:1) and
+    // Rupture flashes it crimson. Every other change to UI pixels brightens
+    // header glyphs in every channel (the glint, Frost's ice, Radiance's
+    // flare and the anime sets' flares).
+    const bool slash=effect==Effect::Slash,moves=slash || effect==Effect::Gale || effect==Effect::Glitch || effect==Effect::Rupture;
+    const bool dims=effect==Effect::Eclipse || effect==Effect::Umbra || effect==Effect::Rupture;
     for(unsigned ms=0;ms<=5300;ms+=10) {
       auto out=base;renderer.draw({out.data(),135,240},effect,ms,accent(Theme(theme)));
       auto again=base;renderer.draw({again.data(),135,240},effect,ms,accent(Theme(theme)));

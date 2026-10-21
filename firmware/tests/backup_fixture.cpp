@@ -6,13 +6,16 @@
 // three-row table: a format 3 backup (backup-export-milestones.txt). With
 // `pools`, a four-row table with an effect pool: a format 4 backup
 // (backup-export-pools.txt).
+// With `effect-set`, four offered effects and the pooled table: a format 5
+// backup (backup-export-effect-set.txt).
 #include "../LaunchLabMini/device_backup.h"
 #include <cstdio>
 
 #include <cstring>
 
 int main(int argc,char **argv) {
-  const bool themes=argc>1 && !std::strcmp(argv[1],"themes"),pools=argc>1 && !std::strcmp(argv[1],"pools"),milestones=pools || (argc>1 && !std::strcmp(argv[1],"milestones"));
+  const bool effectSet=argc>1 && !std::strcmp(argv[1],"effect-set");
+  const bool themes=argc>1 && !std::strcmp(argv[1],"themes"),pools=effectSet || (argc>1 && !std::strcmp(argv[1],"pools")),milestones=pools || (argc>1 && !std::strcmp(argv[1],"milestones"));
   DeviceBackup::Contents c;
   for(uint32_t i=1;i<=40;++i)c.practice.accept(i,true,5000+i*37,i*20000);
   c.practice.newSession();c.practice.accept(41,true,9100,900000);
@@ -38,11 +41,17 @@ int main(int argc,char **argv) {
     const Milestones::Row rows[]={{9000,Appearance::Effect::Sparkles},{10500,pool},{12000,Appearance::Effect::Lightning},{15000,Appearance::Effect::Slash}};
     c.hasMilestones=c.milestones.set(Milestones::Mode::Both,rows,4)==Milestones::Problem::None;
   }
-  const char *runtime=pools?"0.16.0-sticks3-effects-pm":milestones?"0.15.0-sticks3-milestone-pm":"0.11.0-sticks3-themes-backup";
+  if(effectSet) {
+    using Appearance::Effect;using EffectSet::flag;
+    c.hasEffectSet=c.effectSet.set(flag(Effect::Slash)|flag(Effect::Tidal)|flag(Effect::Crimson)|flag(Effect::Ravage))==EffectSet::Problem::None;
+  }
+  const char *runtime=effectSet?"0.17.0-sticks3-anime-pm":pools?"0.16.0-sticks3-effects-pm":milestones?"0.15.0-sticks3-milestone-pm":"0.11.0-sticks3-themes-backup";
   DeviceBackup::Buffer buffer;const size_t n=DeviceBackup::encode(c,runtime,buffer);
   // Unrelated log lines interleave with a real export; the parser must skip them.
   std::printf("RPM_STATE state=ready t_us=1 contrast=900.0 noise=4.0\n");
-  if(milestones)std::printf("BACKUP_BEGIN format=%lu bytes=%u records=%u sessions=%u motion=%d themes=%d milestones=%d runtime=%s\n",(unsigned long)c.format(),
+  if(effectSet)std::printf("BACKUP_BEGIN format=%lu bytes=%u records=%u sessions=%u motion=%d themes=%d milestones=%d effect_set=%d runtime=%s\n",(unsigned long)c.format(),
+    unsigned(n),c.practice.size(),c.practice.sessions(),c.hasMotion,c.hasThemes,c.hasMilestones,c.hasEffectSet,runtime);
+  else if(milestones)std::printf("BACKUP_BEGIN format=%lu bytes=%u records=%u sessions=%u motion=%d themes=%d milestones=%d runtime=%s\n",(unsigned long)c.format(),
     unsigned(n),c.practice.size(),c.practice.sessions(),c.hasMotion,c.hasThemes,c.hasMilestones,runtime);
   else std::printf("BACKUP_BEGIN format=%lu bytes=%u records=%u sessions=%u motion=%d themes=%d runtime=%s\n",(unsigned long)c.format(),
     unsigned(n),c.practice.size(),c.practice.sessions(),c.hasMotion,c.hasThemes,runtime);

@@ -199,6 +199,11 @@ struct Slash {
 }
 #include "best_effect_sound_elemental.h"
 #include "best_effect_sound_physical.h"
+#include "best_effect_sound_eva.h"
+#include "best_effect_sound_slayer.h"
+#include "best_effect_sound_ninja.h"
+#include "best_effect_sound_nier.h"
+#include "best_effect_sound_sorcery.h"
 namespace BestEffectSound {
 
 // One effect's generators at a time, in Settings order (Appearance::drawnIndex
@@ -207,7 +212,12 @@ namespace BestEffectSound {
 using Generator=std::variant<std::monostate,
   detail::Orbit,detail::Flames,detail::Sparkles,detail::Shockwave,detail::Lightning,detail::Slash,
   detail::Tidal,detail::Frost,detail::Gale,detail::Eclipse,detail::Radiance,
-  detail::Spin,detail::Storm,detail::Quickdraw,detail::Leaves,detail::Bloom>;
+  detail::Spin,detail::Storm,detail::Quickdraw,detail::Leaves,detail::Bloom,
+  detail::Crimson,detail::Bulwark,detail::Crux,detail::Klaxon,detail::Prism,
+  detail::Sunwheel,detail::Torrent,detail::Blitz,detail::Tigerclaw,detail::Butterfly,
+  detail::Birdsong,detail::Spiral,detail::Pinwheel,detail::Overdrive,detail::Summon,
+  detail::Breach,detail::Bladework,detail::Moonpetal,detail::Barrage,detail::Glitch,
+  detail::Rupture,detail::Boundless,detail::Precision,detail::Umbra,detail::Ravage>;
 static_assert(std::variant_size_v<Generator> == Appearance::DRAWN+1,"one generator per drawn effect");
 
 // Synthesizes one effect's sound, resumable: run() continues where the last

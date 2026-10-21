@@ -251,6 +251,25 @@ int main(){
   Preferences::failWrite=true;buttonA();assert(!settingsSaveError && appearance.effect==Appearance::Effect::Orbit && controls.page==Page::Settings && settingsSave.failed());
   Preferences::failWrite=false;retry(SettingsSave::FAILED_RETRY_MS);assert(!settingsSave.pending());
   Appearance::Config restored;AppearanceStore<Appearance::Config> reader;assert(reader.begin(restored,"controls-appearance","cfg0","cfg1") && restored.theme==appearance.theme && restored.effect==appearance.effect);
+  // The effect set: B visits Random, the offered effects and Off only. A saved
+  // effect outside the set opens the editor and Apply keeps it; B moves on
+  // from its position to the next offered one.
+  {
+    using Appearance::Effect;using EffectSet::flag;
+    controls.offeredEffects=flag(Effect::Slash)|flag(Effect::Crimson)|flag(Effect::Ravage);
+    edit(unsigned(Controls::Setting::BestEffect));assert(controls.draft==uint8_t(Effect::Orbit));
+    const Effect expected[]={Effect::Slash,Effect::Crimson,Effect::Ravage,Effect::Off,Effect::Random,Effect::Slash};
+    for(Effect want:expected){buttonB();assert(controls.draft==uint8_t(want));}
+    holdB();assert(appearance.effect==Effect::Orbit);
+    edit(unsigned(Controls::Setting::BestEffect));buttonA();retry(SettingsSave::RETRY_MS);
+    assert(appearance.effect==Effect::Orbit && controls.page==Page::Settings && !settingsSaveError);
+    edit(unsigned(Controls::Setting::BestEffect));buttonB();buttonB();buttonA();retry(SettingsSave::RETRY_MS);
+    assert(appearance.effect==Effect::Crimson && !settingsSave.pending());
+    controls.offeredEffects=EffectSet::DEFAULT_MASK;
+    edit(unsigned(Controls::Setting::BestEffect));buttonB();assert(controls.draft==uint8_t(Effect::Off));
+    for(unsigned i=0;i<2;++i)buttonB();assert(controls.draft==uint8_t(Effect::Orbit));buttonA();retry(SettingsSave::RETRY_MS);
+    assert(appearance.effect==Effect::Orbit && !settingsSave.pending());
+  }
   // Sound: each B previews the draft level; only Apply saves it, with the theme and effect intact.
   edit(unsigned(Controls::Setting::Sound));assert(controls.draft==0);const unsigned previews=soundPreviews;buttonB();buttonB();
   assert(controls.draft==2 && soundPreviews==previews+2 && appearance.sound==Appearance::Sound::Off);

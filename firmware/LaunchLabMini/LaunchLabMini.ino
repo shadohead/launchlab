@@ -36,6 +36,7 @@
 #include "launch_feedback.h"
 #include "appearance_store.h"
 #include "milestones.h"
+#include "effect_set.h"
 #include "best_effect_ui.h"
 #include "screens_ui.h"
 #include "theme_store.h"
@@ -53,11 +54,11 @@
 #define LOOP_HELPER __attribute__((noinline))
 #if LAUNCHLAB_HIL
 // Test-only hardware-in-the-loop build; never a release. See tools/hil.
-static constexpr char VERSION[] = "0.16.0-sticks3-effects-hil-pm";
+static constexpr char VERSION[] = "0.17.0-sticks3-anime-hil-pm";
 #elif LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = "0.16.0-sticks3-effects-pm";
+static constexpr char VERSION[] = "0.17.0-sticks3-anime-pm";
 #else
-static constexpr char VERSION[] = "0.16.0-sticks3-effects";
+static constexpr char VERSION[] = "0.17.0-sticks3-anime";
 #endif
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ
@@ -90,6 +91,11 @@ static AppearanceStore<Milestones::Config> milestoneStore;
 // the same twice in a row when the pool has more) and when the table changes.
 static Appearance::Effect milestoneNext[Milestones::MAX_ROWS];
 static Milestones::Config milestonePicked;static bool milestonePicksReady=false;
+// The effect set: the effects Best effect offers and Random draws from, a
+// record beside them. A damaged record offers the default set and is
+// replaced by the next change.
+static EffectSet::Config effectSet;
+static AppearanceStore<EffectSet::Config> effectSetStore;
 static Appearance::Celebration bestEffect;
 // The Best effect editor previews the draft around its value card.
 static Appearance::Celebration editorEffect;
@@ -178,7 +184,7 @@ static struct {bool active=false,celebration=false;Appearance::Effect effect=App
 // A celebration sound that cannot start within this long after its effect is dropped.
 static constexpr uint32_t SOUND_LATE_MS=300;
 static void requestSound(Appearance::Effect effect,Appearance::Sound level,bool celebration);
-static const char *milestoneStoreName();
+static const char *milestoneStoreName();static const char *effectSetFields();
 static Appearance::Effect celebrationEffect();static Appearance::Effect soundTarget();
 static const Appearance::Effect *milestonePicks();static void nextMilestonePick(uint16_t rpm,Appearance::Effect played);
 static constexpr size_t USB_TX_BUFFER_BYTES=8192;
@@ -711,7 +717,7 @@ LOOP_HELPER static void draw(const Snapshot &s) {
     // Keep this pick's clip ready until its first frame has started playback.
     // Only a presented Best effect consumes Random's next pick; a milestone
     // plays its own effect.
-    if(appearance.effect==Appearance::Effect::Random && !bestEffect.milestone())upcomingEffect=Appearance::pick(esp_random(),bestEffect.effect());
+    if(appearance.effect==Appearance::Effect::Random && !bestEffect.milestone())upcomingEffect=EffectSet::pick(esp_random(),bestEffect.effect(),effectSet.mask());
     // A milestone uses up its row's pick.
     if(bestEffect.milestone())nextMilestonePick(bestEffect.milestone(),bestEffect.effect());
   }
@@ -874,7 +880,7 @@ LOOP_HELPER static void previewSetting() {
 }
 // Random's upcoming pick stays available until a celebration is presented.
 LOOP_HELPER static Appearance::Effect upcoming() {
-  if(!Appearance::drawn(unsigned(upcomingEffect)))upcomingEffect=Appearance::pick(esp_random(),Appearance::Effect::Off);
+  if(!Appearance::drawn(unsigned(upcomingEffect)))upcomingEffect=EffectSet::pick(esp_random(),Appearance::Effect::Off,effectSet.mask());
   return upcomingEffect;
 }
 LOOP_HELPER static const Appearance::Effect *milestonePicks() {
@@ -917,7 +923,7 @@ LOOP_HELPER static void previewEffect() {
   const auto choice=Appearance::Effect(controls.draft);
   editorEffect.clear();dirty=true;
   if(!Appearance::drawn(unsigned(choice)) && choice!=Appearance::Effect::Random){soundPlayer.stop();soundPreview=false;soundRequest={};return;}
-  lastShown=choice==Appearance::Effect::Random?Appearance::pick(esp_random(),lastShown):choice;
+  lastShown=choice==Appearance::Effect::Random?EffectSet::pick(esp_random(),lastShown,effectSet.mask()):choice;
   editorEffect.queue(true,1,lastShown);editorEffect.captured(1);
 }
 static void cancelSettingEdit() {
@@ -1378,10 +1384,12 @@ LOOP_HELPER static void exportBackup() {
   contents->settings={inactivity.minutes(),brightnessPercent,rpmEstimator,sensorProfile,displayFlipped,mountMode};
   contents->hasThemes=!themeLibrary.empty();contents->themes=themeLibrary;
   contents->hasMilestones=!milestones.isDefault();contents->milestones=milestones;
+  contents->hasEffectSet=!effectSet.isDefault();contents->effectSet=effectSet;
   const size_t n=DeviceBackup::encode(*contents,VERSION,*buffer);
   if(!n){Serial.println("BACKUP_ERROR out_of_memory");return;}
-  Serial.printf("BACKUP_BEGIN format=%lu bytes=%u records=%u sessions=%u motion=%d themes=%d milestones=%d runtime=%s\n",
-    (unsigned long)contents->format(),unsigned(n),practice.size(),practice.sessions(),contents->hasMotion,contents->hasThemes,contents->hasMilestones,VERSION);
+  Serial.printf("BACKUP_BEGIN format=%lu bytes=%u records=%u sessions=%u motion=%d themes=%d milestones=%d effect_set=%d runtime=%s\n",
+    (unsigned long)contents->format(),unsigned(n),practice.size(),practice.sessions(),contents->hasMotion,contents->hasThemes,contents->hasMilestones,
+    contents->hasEffectSet,VERSION);
   DeviceBackup::base64Lines(buffer->data(),n,96,[](const char *line){Serial.print("BACKUP_DATA ");Serial.println(line);});
   Serial.println("BACKUP_END");
 }
@@ -1396,14 +1404,15 @@ LOOP_HELPER static void finishRestore(const Snapshot &s) {
   if(!restoreRx.take(buffer->data(),buffer->size(),n) || !DeviceBackup::decode(buffer->data(),n,*contents)) {
     Serial.println("RESTORE_ERROR reason=invalid_backup written=0");return;
   }
-  Serial.printf("RESTORE_VALID records=%u sessions=%u motion=%d themes=%d milestones=%d from=%s\n",contents->practice.size(),
-    contents->practice.sessions(),contents->hasMotion,contents->hasThemes,contents->hasMilestones,contents->runtime);
+  Serial.printf("RESTORE_VALID records=%u sessions=%u motion=%d themes=%d milestones=%d effect_set=%d from=%s\n",contents->practice.size(),
+    contents->practice.sessions(),contents->hasMotion,contents->hasThemes,contents->hasMilestones,contents->hasEffectSet,contents->runtime);
   if(motionPending || s.phase==AnalogTachometer::Phase::Launch || !acquisition.request(Action::IdleCheckpointBegin,s.launches)) {
     Serial.println("RESTORE_ERROR reason=busy written=0");return;
   }
   contents->practice.supersede(practice.generation());
   contents->look.revision=appearance.revision+1;contents->bests.revision=personalBests.revision+1;
   contents->themes.revision=themeLibrary.revision+1;contents->milestones.revision=milestones.revision+1;
+  contents->effectSet.revision=effectSet.revision+1;
   const auto &settings=contents->settings;
   const bool saved=practiceStore.save(contents->practice) && appearanceStore.save(contents->look) &&
     bestStore.save(contents->bests) && (!contents->hasMotion || motionStore.save(contents->motion)) &&
@@ -1411,7 +1420,8 @@ LOOP_HELPER static void finishRestore(const Snapshot &s) {
     RpmEstimatorSetting::save(prefs,settings.rpmMethod) && SensorProfileSetting::save(prefs,settings.sensorProfile) &&
     DisplayFlipSetting::save(prefs,settings.flipped) && MountOrientationSetting::save(prefs,settings.mount) &&
     (!contents->hasThemes || themeStore.save(contents->themes,true)) &&
-    (!contents->hasMilestones || milestoneStore.save(contents->milestones));
+    (!contents->hasMilestones || milestoneStore.save(contents->milestones)) &&
+    (!contents->hasEffectSet || effectSetStore.save(contents->effectSet));
   if(!saved) {
     if(!acquisition.request(Action::CheckpointEnd))Serial.println("RESTORE_ERROR ADC checkpoint resume failed");
     // Earlier records may already hold the restored values; restoring again is safe.
@@ -1551,9 +1561,9 @@ LOOP_HELPER static void listMilestones() {
   Milestones::Config::Image image;milestones.encode(image);
   char data[(Milestones::Config::IMAGE_BYTES+2)/3*4+1]={};
   DeviceBackup::base64Lines(image.data(),image.size(),96,[&](const char *line){strncpy(data,line,sizeof(data)-1);});
-  Serial.printf("MILESTONE_LIST version=2 mode=%s rows=%u max_rows=%u min_rpm=%u max_rpm=%u effects=%u revision=%lu store=%s default=%d nvs_available=%d nvs_needed=%u data=%s\n",
+  Serial.printf("MILESTONE_LIST version=2 mode=%s rows=%u max_rows=%u min_rpm=%u max_rpm=%u effects=%u revision=%lu store=%s default=%d nvs_available=%d nvs_needed=%u data=%s%s\n",
     Milestones::name(milestones.mode()),milestones.count(),Milestones::MAX_ROWS,unsigned(Milestones::MIN_RPM),unsigned(Milestones::MAX_RPM),Appearance::EFFECTS,
-    (unsigned long)milestones.revision,milestoneStoreName(),milestones.isDefault(),known?int(available):-1,MILESTONE_NEEDED_ENTRIES,data);
+    (unsigned long)milestones.revision,milestoneStoreName(),milestones.isDefault(),known?int(available):-1,MILESTONE_NEEDED_ENTRIES,data,effectSetFields());
   // effect/effect_id name the pool's first effect, as 0.15 listed its one.
   const auto *picks=milestonePicks();
   for(unsigned i=0;i<milestones.count();++i) {
@@ -1602,6 +1612,66 @@ LOOP_HELPER static void finishMilestoneRequest(const Snapshot &s) {
   Serial.printf("MILESTONE_OK op=%s revision=%lu mode=%s rows=%u\n",op,(unsigned long)milestones.revision,
     Milestones::name(milestones.mode()),milestones.count());milestoneReply();
 }
+// ---- USB effect set -----------------------------------------------------------
+// The milestone protocol carries it: `M` adds effect_set=, effect_set_store=
+// and effect_set_default= to MILESTONE_LIST, and `U` op 3 (set_effects,
+// effect_set.h) replaces the set, checked whole and saved inside an idle
+// checkpoint, or nothing changes. Replies are MILESTONE_OK / MILESTONE_ERROR.
+static const char *effectSetStoreName(){return !effectSetStore.ready()?"unavailable":effectSetStore.damaged()?"damaged":"ok";}
+// An upload must leave room for a history rewrite in the 20 KB NVS.
+static constexpr unsigned EFFECT_SET_NEEDED_ENTRIES=NvsBudget::blobEntries(EffectSet::Config::IMAGE_BYTES)+
+  NvsBudget::blobEntries(PracticeHistory::IMAGE_BYTES);
+// MILESTONE_LIST's effect set fields, each after a space.
+static const char *effectSetFields() {
+  static char text[96];char mask[33];effectSet.mask().hex(mask);
+  snprintf(text,sizeof(text)," effect_set=%s effect_set_store=%s effect_set_default=%d",mask,effectSetStoreName(),effectSet.isDefault());
+  return text;
+}
+// A new set reaches the Best effect editor and Random's next pick at once.
+static void effectSetChanged() {
+  controls.offeredEffects=effectSet.mask();
+  if(!effectSet.offers(upcomingEffect))upcomingEffect=Appearance::Effect::Off;
+  // A Best effect editor open on the device cycles the old set.
+  if(controls.page==Controls::Page::Edit && controls.setting==unsigned(Controls::Setting::BestEffect))cancelSettingEdit();
+  syncNavigation();dirty=true;
+}
+// Takes a completed `U` transfer that is a set_effects request; false leaves
+// it to finishMilestoneRequest.
+LOOP_HELPER static bool finishEffectSetRequest(const Snapshot &s) {
+  uint8_t bytes[EffectSet::Request::BYTES];size_t n=0;
+  if(!milestoneRx.take(bytes,sizeof(bytes),n) || !EffectSet::Request::claims(bytes,n))return false;
+  EffectSet::Mask mask;EffectSet::Problem problem=EffectSet::Problem::None;unsigned effect=0;
+  if(!EffectSet::Request::decode(bytes,n,mask,problem,effect)) {
+    Serial.println("MILESTONE_ERROR reason=invalid_request written=0");milestoneReply();return true;
+  }
+  const char *op=EffectSet::Request::NAME;
+  if(problem!=EffectSet::Problem::None) {
+    Serial.printf("MILESTONE_ERROR op=%s reason=invalid_effects problem=%s effect=%u written=0\n",op,EffectSet::problemName(problem),effect);
+    milestoneReply();return true;
+  }
+  auto fail=[&](const char *reason){Serial.printf("MILESTONE_ERROR op=%s reason=%s written=0\n",op,reason);milestoneReply();return true;};
+  if(!effectSetStore.ready())return fail("storage_unavailable");
+  auto next=effectSet;next.set(mask);
+  // A damaged record is replaced even by the set it already shows.
+  if(next.generation()==effectSet.generation() && !effectSetStore.damaged()) {
+    Serial.printf("MILESTONE_OK op=%s revision=%lu unchanged=1\n",op,(unsigned long)effectSet.revision);milestoneReply();return true;
+  }
+  if(next.generation()==effectSet.generation())++next.revision;
+  unsigned available=0;
+  if(!nvsAvailable(available) || available<EFFECT_SET_NEEDED_ENTRIES) {
+    Serial.printf("MILESTONE_ERROR op=%s reason=nvs_space available_entries=%u needed_entries=%u written=0\n",op,available,EFFECT_SET_NEEDED_ENTRIES);
+    milestoneReply();return true;
+  }
+  if(motionPending || s.phase==AnalogTachometer::Phase::Launch || !acquisition.request(Action::IdleCheckpointBegin,s.launches))return fail("busy");
+  const bool ok=effectSetStore.save(next);
+  if(!acquisition.request(Action::CheckpointEnd))Serial.println("MILESTONE_NOTICE adc_checkpoint_resume_failed");
+  if(!ok){Serial.printf("MILESTONE_ERROR op=%s reason=write_failed written=unknown\n",op);milestoneReply();dirty=true;return true;}
+  effectSet=next;effectSetChanged();
+  char hex[33];effectSet.mask().hex(hex);
+  Serial.printf("MILESTONE_OK op=%s revision=%lu effect_set=%s effects=%u\n",op,(unsigned long)effectSet.revision,hex,effectSet.count());milestoneReply();
+  return true;
+}
+
 LOOP_HELPER static void pollMilestoneRequest(const Snapshot &s) {
   const uint32_t now=millis();
   if(milestoneRx.timedOut(now)){milestoneRx.cancel();Serial.println("MILESTONE_ERROR reason=timeout written=0");milestoneReply();return;}
@@ -1609,7 +1679,7 @@ LOOP_HELPER static void pollMilestoneRequest(const Snapshot &s) {
     inactivity.touch(now);
     switch(milestoneRx.feed(Serial.read(),now)) {
       case DeviceBackup::TransferEvent::Chunk:Serial.printf("MILESTONE_CHUNK chars=%u\n",milestoneRx.received());milestoneReply();break;
-      case DeviceBackup::TransferEvent::Complete:finishMilestoneRequest(s);break;
+      case DeviceBackup::TransferEvent::Complete:if(!finishEffectSetRequest(s))finishMilestoneRequest(s);break;
       case DeviceBackup::TransferEvent::Error:Serial.printf("MILESTONE_ERROR reason=%s written=0\n",milestoneRx.error());milestoneReply();break;
       case DeviceBackup::TransferEvent::None:break;
     }
@@ -1826,7 +1896,9 @@ void setup() {
     if(legacyStore.begin(legacy,"ll-appearance","mile0","mile1",true) && legacyStore.present()){milestones=legacy.table;Serial.println("MILESTONE_NOTICE imported_v1_table");}
     else if(legacyStore.damaged())Serial.println("MILESTONE_NOTICE invalid_record_using_defaults");
   }
-  controls.customThemes=themeLibrary.validMask();
+  if(!effectSetStore.begin(effectSet,"ll-appearance","eset0","eset1",true))
+    Serial.println(effectSetStore.damaged()?"EFFECT_SET_NOTICE invalid_record_using_defaults":"EFFECT_SET_NOTICE storage_unavailable_using_defaults");
+  controls.customThemes=themeLibrary.validMask();controls.offeredEffects=effectSet.mask();
   if(!themeLibrary.available(appearance.theme))Serial.printf("THEME_NOTICE selected_theme_unavailable theme=%u showing=%u\n",unsigned(appearance.theme),unsigned(Themes::FALLBACK));
   uint8_t pin=prefs.getUChar("ao_pin",1);
   if(pin<1 || pin>10)pin=1;

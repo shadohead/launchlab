@@ -839,5 +839,20 @@
       "tcrt5000"
     ],
     "published_channel": "beta"
+  },
+  {
+    "release": "0.17.0-sticks3-anime-pm",
+    "runtime_version": "0.17.0-sticks3-anime-pm",
+    "board": "M5StickS3 K150",
+    "date": "2026-10-21",
+    "binary": "LaunchLabMini.ino.bin",
+    "binary_bytes": 1152480,
+    "sha256": "5b27a5585eab33a5082adf6cc4605ff76b6ad6d054246774bdab594604b7ff22",
+    "application_offset": "0x10000",
+    "profiles": [
+      "qre1113",
+      "tcrt5000"
+    ],
+    "published_channel": "beta"
   }
 ]

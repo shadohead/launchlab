@@ -72,8 +72,8 @@ int main() {
     // Every corruption of a format 2 backup is rejected too.
     for(size_t i=0;i<length;i+=5){auto bad=encoded;bad[i]^=0x20;Contents ignored;assert(!decode(bad.data(),length,ignored));}
     // Format 1 cannot carry the themes section, format 3 needs milestones,
-    // and no other format is read.
-    for(uint32_t format:{LEGACY_FORMAT,FORMAT,FORMAT+1}) {
+    // format 5 the effect set, and no other format is read.
+    for(uint32_t format:{LEGACY_FORMAT,MILESTONES_FORMAT,4u,FORMAT,FORMAT+1}) {
       auto bad=encoded;put32(bad.data()+4,format);put32(bad.data()+length-4,checksum(bad.data(),length-4));
       Contents ignored;assert(!decode(bad.data(),length,ignored));
     }
@@ -95,7 +95,7 @@ int main() {
   // The default milestones add nothing: format 1 stays byte for byte (above).
   // A changed mode or table 0.15 can hold makes format 3 (0.15's record), with
   // or without custom themes; a table it cannot hold makes format 4.
-  static_assert(FORMAT==4 && MILESTONES_FORMAT==3,"0.15 reads formats 1-3 and refuses 4");
+  static_assert(FORMAT==5 && POOLS_FORMAT==4 && MILESTONES_FORMAT==3,"0.15 reads formats 1-3, 0.16 formats 1-4");
   {
     using Milestones::Row;using Appearance::Effect;
     assert(original.milestones.isDefault() && !original.hasMilestones);
@@ -111,8 +111,9 @@ int main() {
       assert(restored.hasMilestones && restored.milestones.same(c->milestones) && restored.milestones.revision==c->milestones.revision);
       assert(restored.hasThemes==c->hasThemes && (!c->hasThemes || restored.themes==c->themes));
       for(size_t i=0;i<length;i+=5){auto bad=encoded;bad[i]^=0x20;Contents ignored;assert(!decode(bad.data(),length,ignored));}
-      // Older formats cannot carry the milestones section.
-      for(uint32_t format:{LEGACY_FORMAT,THEMES_FORMAT,FORMAT,FORMAT+1}) {
+      // Older formats cannot carry the milestones section, format 4 needs the
+      // pooled section and format 5 the effect set.
+      for(uint32_t format:{LEGACY_FORMAT,THEMES_FORMAT,POOLS_FORMAT,FORMAT,FORMAT+1}) {
         auto bad=encoded;put32(bad.data()+4,format);put32(bad.data()+length-4,checksum(bad.data(),length-4));
         Contents ignored;assert(!decode(bad.data(),length,ignored));
       }
@@ -137,13 +138,13 @@ int main() {
       auto ladder=original;ladder.hasMilestones=true;Row twelve[12];for(unsigned i=0;i<12;++i)twelve[i]={uint16_t(9000+500*i),Effect::Orbit};
       assert(ladder.milestones.set(Milestones::Mode::Milestones,twelve,12)==Milestones::Problem::None);
       for(const auto *c:{&pooled,&tidal,&ladder}) {
-        assert(c->format()==FORMAT);
+        assert(c->format()==POOLS_FORMAT);
         Buffer encoded;const size_t length=encode(*c,"0.16.0-sticks3-test",encoded);
-        assert(get32(encoded.data()+4)==FORMAT && length==n+8+Milestones::Config::IMAGE_BYTES);
+        assert(get32(encoded.data()+4)==POOLS_FORMAT && length==n+8+Milestones::Config::IMAGE_BYTES);
         assert(encoded[length-4-Milestones::Config::IMAGE_BYTES-8]==MilestonePools);
         Contents restored;assert(decode(encoded.data(),length,restored) && restored.hasMilestones && restored.milestones.same(c->milestones));
         for(size_t i=0;i<length;i+=7){auto bad=encoded;bad[i]^=0x10;Contents ignored;assert(!decode(bad.data(),length,ignored));}
-        for(uint32_t format:{LEGACY_FORMAT,THEMES_FORMAT,MILESTONES_FORMAT,FORMAT+1}) {
+        for(uint32_t format:{LEGACY_FORMAT,THEMES_FORMAT,MILESTONES_FORMAT,FORMAT,FORMAT+1}) {
           auto bad=encoded;put32(bad.data()+4,format);put32(bad.data()+length-4,checksum(bad.data(),length-4));
           Contents ignored;assert(!decode(bad.data(),length,ignored));
         }
@@ -160,6 +161,67 @@ int main() {
     auto incoming=table.milestones;incoming.revision=device.revision+1;assert(store.save(incoming));
     Milestones::Config reloaded;AppearanceStore<Milestones::Config> reader;
     assert(reader.begin(reloaded,"ll-appearance","mile0","mile1",true) && !reader.damaged() && reloaded.same(table.milestones));
+  }
+
+  // The default effect set adds nothing: formats 1-4 stay byte for byte
+  // (above, and test_effect_set_compat against the frozen 0.15 and 0.16
+  // sources). A set that differs from the default makes format 5, with or
+  // without custom themes and milestones; its milestones are always the
+  // pooled section, even a table 0.15's record could hold.
+  {
+    using EffectSet::flag;using Appearance::Effect;
+    assert(original.effectSet.isDefault() && !original.hasEffectSet && !decoded.hasEffectSet && decoded.effectSet.isDefault());
+    auto only=original;assert(only.effectSet.set(flag(Effect::Slash)|flag(Effect::Crimson)|flag(Effect::Ravage))==EffectSet::Problem::None);only.hasEffectSet=true;
+    only.effectSet.revision=0x0a0b0c0d;
+    auto all=only;all.hasThemes=true;assert(all.themes.put(2,custom("Dragoon Storm",0x5c7f)));
+    const Milestones::Row rows[]={{8000,Effect::Bulwark},{16000,Effect::Slash}};
+    assert(all.milestones.set(Milestones::Mode::Both,rows,2)==Milestones::Problem::None);all.hasMilestones=true;
+    auto tabled=only;tabled.milestones=all.milestones;tabled.hasMilestones=true;
+    for(const auto *c:{&only,&tabled,&all}) {
+      assert(c->format()==FORMAT);
+      Buffer encoded;const size_t length=encode(*c,"0.17.0-sticks3-test",encoded);
+      assert(get32(encoded.data()+4)==FORMAT && length==n+8+EffectSet::Config::IMAGE_BYTES+(c->hasThemes?8+Themes::Library::IMAGE_BYTES:0)+
+             (c->hasMilestones?8+Milestones::Config::IMAGE_BYTES:0));
+      // The effect set is the last section.
+      assert(encoded[length-4-EffectSet::Config::IMAGE_BYTES-8]==OfferedEffects);
+      Contents restored;assert(decode(encoded.data(),length,restored) && same(*c,restored));
+      assert(restored.hasEffectSet && restored.effectSet.mask()==c->effectSet.mask() && restored.effectSet.revision==c->effectSet.revision);
+      assert(restored.hasThemes==c->hasThemes && restored.hasMilestones==c->hasMilestones && (!c->hasMilestones || restored.milestones.same(c->milestones)));
+      for(size_t i=0;i<length;i+=5){auto bad=encoded;bad[i]^=0x20;Contents ignored;assert(!decode(bad.data(),length,ignored));}
+      if(c->hasMilestones)assert(encoded[length-4-EffectSet::Config::IMAGE_BYTES-8-Milestones::Config::IMAGE_BYTES-8]==MilestonePools);
+      // No other format carries the effect set section.
+      for(uint32_t format:{LEGACY_FORMAT,THEMES_FORMAT,MILESTONES_FORMAT,POOLS_FORMAT,FORMAT+1}) {
+        auto bad=encoded;put32(bad.data()+4,format);put32(bad.data()+length-4,checksum(bad.data(),length-4));
+        Contents ignored;assert(!decode(bad.data(),length,ignored));
+      }
+      // The set under another section id is refused, and so is the pooled
+      // record under the 0.15 section id.
+      for(uint8_t id:{uint8_t(MilestoneTable),uint8_t(MilestonePools)}) {
+        auto bad=encoded;bad[length-4-EffectSet::Config::IMAGE_BYTES-8]=id;put32(bad.data()+length-4,checksum(bad.data(),length-4));
+        Contents ignored;assert(!decode(bad.data(),length,ignored));
+      }
+      if(c->hasMilestones) {
+        auto bad=encoded;bad[length-4-EffectSet::Config::IMAGE_BYTES-8-Milestones::Config::IMAGE_BYTES-8]=MilestoneTable;
+        put32(bad.data()+length-4,checksum(bad.data(),length-4));
+        Contents ignored;assert(!decode(bad.data(),length,ignored));
+      }
+    }
+    // A checksummed record with an invalid set is rejected whole.
+    for(EffectSet::Mask mask:{EffectSet::Mask(),flag(5),flag(43),flag(64)}) {
+      Buffer encoded;const size_t length=encode(only,"x",encoded);const size_t body=length-4-EffectSet::Config::IMAGE_BYTES;
+      auto bad=encoded;EffectSet::putMask(bad.data()+body+8,mask);
+      put32(bad.data()+body+24,Appearance::hash(bad.data()+body,24));put32(bad.data()+length-4,checksum(bad.data(),length-4));
+      Contents ignored;assert(!decode(bad.data(),length,ignored));
+    }
+    // A restore writes the backup's set over whatever the device holds, a
+    // damaged record included; a backup without one leaves the device's.
+    Preferences::data.clear();Preferences::data["ll-appearanceeset0"]={9,9,9};
+    EffectSet::Config device;AppearanceStore<EffectSet::Config> store;
+    assert(!store.begin(device,"ll-appearance","eset0","eset1",true) && store.damaged() && device.isDefault());
+    auto incoming=only.effectSet;incoming.revision=device.revision+1;assert(store.save(incoming));
+    EffectSet::Config reloaded;AppearanceStore<EffectSet::Config> reader;
+    assert(reader.begin(reloaded,"ll-appearance","eset0","eset1",true) && !reader.damaged() && reloaded.mask()==only.effectSet.mask());
+    Contents plain;assert(decode(buffer.data(),n,plain) && !plain.hasEffectSet);
   }
 
   // Expanded accents travel through the complete USB backup, including the
@@ -207,7 +269,7 @@ int main() {
   assert(!decode(buffer.data(),n-1,rejected) && !decode(buffer.data(),HEADER_BYTES,rejected));
   {
     // Format 2 without its themes section is not a backup either, nor format 3 without milestones.
-    for(uint32_t format:{THEMES_FORMAT,FORMAT}) {
+    for(uint32_t format:{THEMES_FORMAT,MILESTONES_FORMAT,FORMAT}) {
       auto bad=buffer;put32(bad.data()+4,format);put32(bad.data()+n-4,checksum(bad.data(),n-4));assert(!decode(bad.data(),n,rejected));
     }
   }
