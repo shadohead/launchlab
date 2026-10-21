@@ -26,6 +26,21 @@ namespace Released015 {
 namespace Released016 {
 #include "../releases/0.16.0-sticks3-effects-pm/source/device_backup.h"
 }
+// Each release's namespaces as its code sees them. GCC's #pragma once skips a
+// frozen header that is byte-identical to one already included (0.16's
+// milestones.h is today's), so it is not declared inside the release's
+// namespace and the release's code uses today's identical copy instead; an
+// alias looked up from inside the release's namespace finds whichever it is.
+#define RELEASE_NAMES(R) \
+  namespace R { namespace Pick { namespace A=Appearance;namespace M=Milestones;namespace B=DeviceBackup; \
+    namespace E=RpmEstimator;namespace S=StickS3SensorProfile;namespace P=Palette; } }
+RELEASE_NAMES(Released015)
+RELEASE_NAMES(Released016)
+#define RELEASE_VIEW(V,R) \
+  namespace V { namespace Appearance=R::Pick::A;namespace Milestones=R::Pick::M;namespace DeviceBackup=R::Pick::B; \
+    namespace RpmEstimator=R::Pick::E;namespace StickS3SensorProfile=R::Pick::S;namespace Palette=R::Pick::P; }
+RELEASE_VIEW(Old,Released015)
+RELEASE_VIEW(New,Released016)
 #include <cassert>
 #include <iostream>
 
@@ -44,7 +59,6 @@ namespace Released016 {
 } while(0)
 
 int main() {
-  namespace Old=Released015;
   static_assert(Old::DeviceBackup::FORMAT==3 && Old::Milestones::Request::BYTES==EffectSet::Request::BYTES && Milestones::Request::V1_BYTES==40 &&
                 Old::Milestones::Request::MAGIC==EffectSet::Request::MAGIC);
   // U op 3: the old decoder takes the frame and refuses the op.
@@ -91,7 +105,6 @@ int main() {
   }
   // 0.16.0: the pooled milestones of format 4, and the v2 request.
   {
-    namespace New=Released016;
     static_assert(New::DeviceBackup::FORMAT==4 && DeviceBackup::POOLS_FORMAT==4 && New::Milestones::Request::V1_BYTES==EffectSet::Request::BYTES &&
                   New::Milestones::Request::V1_MAGIC==EffectSet::Request::MAGIC);
     using EffectSet::flag;using Appearance::Effect;
