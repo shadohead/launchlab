@@ -95,7 +95,7 @@ inline void editor(lgfx::LGFXBase &g,const Controls::State &state,bool failed,bo
       const auto &m=*milestones;char low[12],high[12];
       Milestones::rpmText(low,sizeof(low),m.row(0).rpm);Milestones::rpmText(high,sizeof(high),m.row(m.count()-1).rpm);
       if(m.count()==1)snprintf(line,sizeof(line),"1 milestone, %s",low);
-      else snprintf(line,sizeof(line),"%u steps %s to %s",m.count(),low,high);
+      else snprintf(line,sizeof(line),"%u steps %s-%s",m.count(),low,high);
       g.drawString(line,g.width()/2,154,1);
       g.drawString(mode==Milestones::Mode::Both?"and new bests":"Edit table online",g.width()/2,169,1);
     }

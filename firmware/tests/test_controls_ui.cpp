@@ -89,7 +89,7 @@ int main() {
     using Milestones::Row;using Appearance::Effect;
     Milestones::Config defaults,one,wide;
     const Row single[]={{12500,Effect::Slash}};assert(one.set(Milestones::Mode::Both,single,1)==Milestones::Problem::None);
-    Row rows[Milestones::MAX_ROWS];for(unsigned i=0;i<Milestones::MAX_ROWS;++i)rows[i]={uint16_t(10001+2857*i),Effect::Orbit};
+    Row rows[Milestones::MAX_ROWS];for(unsigned i=0;i<Milestones::MAX_ROWS;++i)rows[i]={uint16_t(10001+1818*i),Effect::Orbit};
     assert(wide.set(Milestones::Mode::Milestones,rows,Milestones::MAX_ROWS)==Milestones::Problem::None);
     for(const Milestones::Config *table:{(const Milestones::Config *)nullptr,(const Milestones::Config *)&defaults,(const Milestones::Config *)&one,(const Milestones::Config *)&wide})for(unsigned mode=0;mode<Milestones::MODES;++mode) {
       ControlsUI::milestones=table;

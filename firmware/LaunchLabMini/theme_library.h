@@ -8,8 +8,9 @@
 
 // The user's custom themes: CUSTOM_THEMES slots, selected as theme IDs
 // THEMES.. in the appearance record. Pure data: validation, the stored image
-// and the USB request. A slot that is empty, malformed or fails validation
-// shows the built-in default instead; its stored bytes are kept as they are,
+// and the USB request. Any colors are accepted (Palette::Advice only warns);
+// a slot that is empty or malformed (flag, name) shows the built-in default
+// instead; its stored bytes are kept as they are,
 // so a newer firmware's slot survives a visit to an older one.
 namespace Themes {
 constexpr unsigned SLOTS=Appearance::CUSTOM_THEMES,SLOT_BYTES=Palette::Custom::BYTES;
@@ -89,7 +90,7 @@ private:
     if(std::memcmp(raw_[slot],bytes,SLOT_BYTES)){std::memcpy(raw_[slot],bytes,SLOT_BYTES);judge(slot);++revision;}
     return true;
   }
-  // Empty is all zero; anything else must decode and pass validation.
+  // Empty is all zero; anything else must decode with a valid name.
   void judge(unsigned slot) {
     bool zero=true;for(unsigned i=0;i<SLOT_BYTES;++i)zero=zero && !raw_[slot][i];
     custom_[slot]={};

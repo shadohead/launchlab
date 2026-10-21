@@ -302,6 +302,13 @@ LOOP_HELPER static void hilCommand(char *line) {
     const bool ok=xTaskCreatePinnedToCore(hilGateTask,"hil_gate",3072,reinterpret_cast<void *>(uintptr_t(ms)),2,nullptr,1)==pdPASS;
     Hil::reply("HIL_OK gate ms=%lu started=%d\n",(unsigned long)ms,ok);return;
   }
+  if(!strcmp(cmd,"effectframes")) {
+    // Every recap effect pass since the last E preview: elapsed_ms:us.
+    static char line[128*12+48];size_t used=snprintf(line,sizeof(line),"HIL_EFFECT_FRAMES count=%u",effectFrames.count);
+    for(unsigned i=0;i<effectFrames.count && used<sizeof(line)-16;++i)
+      used+=snprintf(line+used,sizeof(line)-used," %u:%u",unsigned(effectFrames.elapsed[i]),unsigned(effectFrames.us[i]));
+    Hil::replyLine(line);return;
+  }
   if(!strcmp(cmd,"set")) {
     // The real Apply path: checkpoint, NVS write, resume, error state.
     const unsigned row=unsigned(num(-1)),value=unsigned(num(-1));
@@ -339,8 +346,8 @@ LOOP_HELPER static void hilCommand(char *line) {
     const auto s=acquisition.snapshot();bool ok=false;
     if(acquisition.request(Action::IdleCheckpointBegin,s.launches)) {
       Preferences store;uint8_t junk[Milestones::Config::IMAGE_BYTES];std::memset(junk,0x5a,sizeof(junk));
-      ok=store.begin("ll-appearance",false) && store.putBytes("mile0",junk,sizeof(junk))==sizeof(junk) &&
-        store.putBytes("mile1",junk,sizeof(junk))==sizeof(junk);store.end();
+      ok=store.begin("ll-appearance",false) && store.putBytes("mpool0",junk,sizeof(junk))==sizeof(junk) &&
+        store.putBytes("mpool1",junk,sizeof(junk))==sizeof(junk);store.end();
       acquisition.request(Action::CheckpointEnd);
     }
     Hil::reply("HIL_OK milecorrupt ok=%d\n",ok);return;

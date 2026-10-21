@@ -50,7 +50,7 @@ test('withdrawn 0.12.1 cannot be selected through the updater index',async()=>{
   await selection.select('0.12.1');assert.equal(selection.state.catalog,null);assert.match(selection.state.error.message,/Unknown firmware release/);
 });
 
-const withBeta=()=>{const i=structuredClone(index);i.betaReleases=[{version:'0.16.0',catalog:'firmware/0.16.0/catalog.json',channel:'beta'},...i.betaReleases];i.beta='0.16.0';return i;};
+const withBeta=()=>{const i=structuredClone(index);i.betaReleases=[{version:'0.17.0',catalog:'firmware/0.17.0/catalog.json',channel:'beta'}];i.beta='0.17.0';return i;};
 test('stable releases stay stable, latest is the newest stable and beta points at a newer beta or nothing',()=>{
   assert.ok(index.releases.every(r=>r.channel==='stable'));assert.equal(index.latest,index.releases[0].version);
   assert.ok(index.betaReleases.every(r=>r.channel==='beta'));
@@ -61,8 +61,8 @@ test('stable releases stay stable, latest is the newest stable and beta points a
 test('a newer beta sits beside latest, which older readers keep following',()=>{
   const i=validateReleaseIndex(withBeta());
   assert.equal(i.latest,'0.15.0');
-  assert.ok(!i.releases.some(r=>r.version==='0.16.0'),'releases holds stable only');
-  assert.deepEqual(listedReleases(i).slice(0,2).map(r=>[r.version,channelOf(r)]),[['0.16.0','beta'],['0.15.0','stable']]);
+  assert.ok(!i.releases.some(r=>r.version==='0.17.0'),'releases holds stable only');
+  assert.deepEqual(listedReleases(i).slice(0,2).map(r=>[r.version,channelOf(r)]),[['0.17.0','beta'],['0.15.0','stable']]);
 });
 test('an index from before channels reads as all stable',()=>{
   const i=structuredClone(index);delete i.beta;delete i.betaReleases;i.releases.forEach(r=>delete r.channel);

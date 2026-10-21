@@ -14,7 +14,9 @@
 // and fed from a PSRAM buffer rendered once per effect, so UI frame timing
 // cannot disturb it and acquisition on core 0 is untouched. Each effect has
 // its own buffer, kept once rendered: a milestone's effect is only known
-// when its pull ends, so every effect it may play is rendered ahead.
+// when its pull ends, so every effect it may play is rendered ahead. At most
+// MAX_BUFFERS are kept (about 90 KB each for a 2.8 s sound): preparing
+// another frees the least recently used one, never the one playing.
 class BestEffectSpeaker {
 public:
   explicit BestEffectSpeaker(StickS3MotionAcquisition &imu):imu_(imu){}
@@ -31,15 +33,17 @@ public:
     if(!configured_ || !Appearance::drawn(unsigned(e)))return false;
     if(prepared(e))return true;
     const unsigned i=Appearance::drawnIndex(e);
+    used_[i]=++clock_;
     if(!buffers_[i]) {
+      makeRoom(i);
       buffers_[i]=static_cast<int16_t *>(heap_caps_malloc(BestEffectSound::samples(e)*sizeof(int16_t),MALLOC_CAP_SPIRAM));
       if(!buffers_[i])return false;
     }
-    if(target_!=e){target_=e;synth_=BestEffectSound::Synth(e,BestEffectSound::samples(e));renderUs_=0;}
+    if(target_!=e){target_=e;synth_.restart(e,BestEffectSound::samples(e));renderUs_=0;}
     const int64_t started=esp_timer_get_time();
     synth_.run(buffers_[i]+synth_.index(),std::min(slice,BestEffectSound::samples(e)-synth_.index()));
     const uint32_t spent=uint32_t(esp_timer_get_time()-started);renderUs_+=spent;maxSliceUs_=std::max(maxSliceUs_,spent);
-    if(synth_.done()){rendered_|=1u<<i;target_=Appearance::Effect::Off;}
+    if(synth_.done()){rendered_|=decltype(rendered_)(1)<<i;target_=Appearance::Effect::Off;}
     return prepared(e);
   }
   bool prepared(Appearance::Effect e)const{return Appearance::drawn(unsigned(e)) && ((rendered_>>Appearance::drawnIndex(e))&1u);}
@@ -56,8 +60,9 @@ public:
       begun_=true;
     }
     M5.Speaker.setVolume(level==Appearance::Sound::High?HIGH_VOLUME:LOW_VOLUME);
-    if(!M5.Speaker.playRaw(buffers_[Appearance::drawnIndex(e)],BestEffectSound::samples(e),BestEffectSound::RATE,false,1,0,true))return false;
-    ++plays_;return true;
+    const unsigned i=Appearance::drawnIndex(e);
+    if(!M5.Speaker.playRaw(buffers_[i],BestEffectSound::samples(e),BestEffectSound::RATE,false,1,0,true))return false;
+    used_[i]=++clock_;playingIndex_=i;++plays_;return true;
   }
   // Silence now: no bus traffic, safe during a measured pull.
   void stop(){if(begun_ && M5.Speaker.isPlaying()){M5.Speaker.stop();++stops_;}}
@@ -73,17 +78,34 @@ public:
   bool playing()const{return begun_ && M5.Speaker.isPlaying();}
   void status(Appearance::Sound level) {
     unsigned buffers=0;for(const auto *b:buffers_)buffers+=b!=nullptr;
-    char rendered[64]="none";size_t used=0;
+    char rendered[192]="none";size_t used=0;
     for(unsigned i=0;i<Appearance::DRAWN;++i)if((rendered_>>i)&1u)
       used+=snprintf(rendered+used,sizeof(rendered)-used,"%s%s",used?",":"",Appearance::label(Appearance::drawnEffect(i)));
-    Serial.printf("SOUND_STATUS level=%s configured=%d buffers=%u rendered=%s powered=%d playing=%d plays=%lu stops=%lu lock_misses=%lu render_us=%lu max_slice_us=%lu max_begin_us=%lu max_end_us=%lu\n",
-      Appearance::label(level),configured_,buffers,rendered,begun_,playing(),
+    Serial.printf("SOUND_STATUS level=%s configured=%d buffers=%u evictions=%lu rendered=%s powered=%d playing=%d plays=%lu stops=%lu lock_misses=%lu render_us=%lu max_slice_us=%lu max_begin_us=%lu max_end_us=%lu\n",
+      Appearance::label(level),configured_,buffers,(unsigned long)evictions_,rendered,begun_,playing(),
       (unsigned long)plays_,(unsigned long)stops_,(unsigned long)lockMisses_,(unsigned long)renderUs_,(unsigned long)maxSliceUs_,(unsigned long)beginUs_,(unsigned long)endUs_);
   }
+  static constexpr unsigned MAX_BUFFERS=12;
 private:
   static constexpr uint8_t LOW_VOLUME=72,HIGH_VOLUME=160;
+  // Frees least recently used buffers until one more fits, keeping `keep`
+  // and the buffer the speaker is playing.
+  void makeRoom(unsigned keep) {
+    for(;;) {
+      unsigned count=0,oldest=Appearance::DRAWN;
+      for(unsigned j=0;j<Appearance::DRAWN;++j) {
+        if(!buffers_[j])continue;
+        ++count;
+        if(j==keep || (j==playingIndex_ && M5.Speaker.isPlaying()))continue;
+        if(oldest==Appearance::DRAWN || used_[j]<used_[oldest])oldest=j;
+      }
+      if(count<MAX_BUFFERS || oldest==Appearance::DRAWN)return;
+      heap_caps_free(buffers_[oldest]);buffers_[oldest]=nullptr;rendered_&=~(decltype(rendered_)(1)<<oldest);++evictions_;
+      if(target_==Appearance::drawnEffect(oldest))target_=Appearance::Effect::Off;
+    }
+  }
   StickS3MotionAcquisition &imu_;
-  int16_t *buffers_[Appearance::DRAWN]={};uint32_t rendered_=0;
+  int16_t *buffers_[Appearance::DRAWN]={};uint32_t rendered_=0,used_[Appearance::DRAWN]={},clock_=0,evictions_=0;unsigned playingIndex_=Appearance::DRAWN;
   BestEffectSound::Synth synth_{Appearance::Effect::Off,0};
   Appearance::Effect target_=Appearance::Effect::Off;
   bool configured_=false,begun_=false;

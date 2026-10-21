@@ -27,10 +27,14 @@ namespace DeviceBackup {
 // and hosts that predate custom themes keep reading it; both formats restore.
 // Format 3 adds the milestones section (mode and table), written only when
 // they differ from the defaults; its custom themes section is optional. A
-// backup with default milestones stays format 1 or 2. Every format restores.
-constexpr uint32_t MAGIC=0x4b424c4c,FORMAT=3,THEMES_FORMAT=2,LEGACY_FORMAT=1; // "LLBK"
+// backup with default milestones stays format 1 or 2. Format 4 (0.16) carries
+// a table 0.15's record cannot hold (effect pools, more than eight rows or an
+// effect 0.15 lacks) in the pooled section instead; any other table is still
+// written as format 3, byte for byte, so 0.15 restores it. Older firmware
+// refuses format 4 before writing anything. Every format restores here.
+constexpr uint32_t MAGIC=0x4b424c4c,FORMAT=4,MILESTONES_FORMAT=3,THEMES_FORMAT=2,LEGACY_FORMAT=1; // "LLBK"
 constexpr unsigned HEADER_BYTES=44,RUNTIME_BYTES=32;
-enum Section:uint8_t {Practice=1,Look=2,Bests=3,Motion=4,Settings=5,CustomThemes=6,MilestoneTable=7};
+enum Section:uint8_t {Practice=1,Look=2,Bests=3,Motion=4,Settings=5,CustomThemes=6,MilestoneTable=7,MilestonePools=8};
 
 struct UserSettings {
   uint8_t sleepMinutes=InactivityTimer::DEFAULT_MINUTES,brightness=40;
@@ -52,13 +56,13 @@ struct Contents {
   // themes only when the backup carries them.
   bool hasThemes=false;
   Themes::Library themes;
-  // Format 3: the milestones record. A restore replaces the device's
+  // Format 3 or 4: the milestones record. A restore replaces the device's
   // milestones only when the backup carries them.
   bool hasMilestones=false;
   Milestones::Config milestones;
   char runtime[RUNTIME_BYTES+1]={};
   bool themesSection()const{return hasThemes || Appearance::custom(look.theme);}
-  uint32_t format()const{return hasMilestones?FORMAT:themesSection()?THEMES_FORMAT:LEGACY_FORMAT;}
+  uint32_t format()const{return hasMilestones?(milestones.fitsV1()?MILESTONES_FORMAT:FORMAT):themesSection()?THEMES_FORMAT:LEGACY_FORMAT;}
 };
 
 constexpr unsigned SETTINGS_BYTES=8;
@@ -90,7 +94,8 @@ inline size_t encode(const Contents &c,const char *runtime,Buffer &out) {
   section(Settings,settings,sizeof(settings));
   const uint32_t format=c.format();
   if(c.themesSection()){Themes::Library::Image themes;c.themes.encode(themes);section(CustomThemes,themes.data(),themes.size());}
-  if(format==FORMAT){Milestones::Config::Image table;c.milestones.encode(table);section(MilestoneTable,table.data(),table.size());}
+  if(format==MILESTONES_FORMAT){Milestones::Config::V1Image table;c.milestones.encodeV1(table);section(MilestoneTable,table.data(),table.size());}
+  if(format==FORMAT){Milestones::Config::Image table;c.milestones.encode(table);section(MilestonePools,table.data(),table.size());}
   put32(out.data(),MAGIC);put32(out.data()+4,format);put32(out.data()+8,uint32_t(p+4));
   std::strncpy(reinterpret_cast<char *>(out.data()+12),runtime,RUNTIME_BYTES);
   out[12+RUNTIME_BYTES-1]=0;
@@ -100,8 +105,8 @@ inline size_t encode(const Contents &c,const char *runtime,Buffer &out) {
 
 // All-or-nothing: every record must pass its own validation, each section may
 // appear once, and history, appearance, bests and settings are all required.
-// Custom themes appear in format 2 (always) and 3 (optional); milestones in
-// format 3 only, and always.
+// Custom themes appear in format 2 (always) and 3-4 (optional); milestones in
+// format 3 (0.15's record) or 4 (the pooled record), and always there.
 inline bool decode(const uint8_t *data,size_t n,Contents &out) {
   const uint32_t format=n>=8?get32(data+4):0;
   if(n<HEADER_BYTES+4 || n>MAX_BYTES || get32(data)!=MAGIC || format<LEGACY_FORMAT || format>FORMAT || get32(data+8)!=n ||
@@ -113,15 +118,16 @@ inline bool decode(const uint8_t *data,size_t n,Contents &out) {
   while(p<n-4) {
     if(n-4-p<8 || data[p+1] || data[p+2] || data[p+3])return false;
     const uint8_t id=data[p];const uint32_t length=get32(data+p+4);const uint8_t *body=data+p+8;
-    const uint8_t last=format==FORMAT?MilestoneTable:format==THEMES_FORMAT?CustomThemes:Settings;
-    if(length>n-4-p-8 || id<Practice || id>last || (seen&(1u<<id)))return false;
+    const uint8_t last=format==FORMAT?MilestonePools:format==MILESTONES_FORMAT?MilestoneTable:format==THEMES_FORMAT?CustomThemes:Settings;
+    if(length>n-4-p-8 || id<Practice || id>last || (seen&(1u<<id)) || (format==FORMAT && id==MilestoneTable))return false;
     seen|=1u<<id;
     bool ok=false;
     switch(Section(id)) {
       case Practice:ok=c->practice.decode(body,length);break;
       case Look:ok=c->look.decode(body,length);break;
       case CustomThemes:ok=c->themes.decode(body,length);c->hasThemes=ok;break;
-      case MilestoneTable:ok=c->milestones.decode(body,length);c->hasMilestones=ok;break;
+      case MilestoneTable:ok=length==Milestones::Config::V1_IMAGE_BYTES && c->milestones.decode(body,length);c->hasMilestones=ok;break;
+      case MilestonePools:ok=length==Milestones::Config::IMAGE_BYTES && c->milestones.decode(body,length);c->hasMilestones=ok;break;
       case Bests:ok=c->bests.decode(body,length);break;
       case Motion:{
         if(length!=LaunchMotion::IMAGE_BYTES)break;
@@ -145,9 +151,9 @@ inline bool decode(const uint8_t *data,size_t n,Contents &out) {
     if(!ok)return false;
     p+=8+length;
   }
-  // Format 2 exists to carry the custom themes, and format 3 the milestones.
+  // Format 2 exists to carry the custom themes, and formats 3 and 4 the milestones.
   const unsigned required=(1u<<Practice)|(1u<<Look)|(1u<<Bests)|(1u<<Settings)|
-    (format==THEMES_FORMAT?1u<<CustomThemes:0u)|(format==FORMAT?1u<<MilestoneTable:0u);
+    (format==THEMES_FORMAT?1u<<CustomThemes:0u)|(format==MILESTONES_FORMAT?1u<<MilestoneTable:0u)|(format==FORMAT?1u<<MilestonePools:0u);
   if(p!=n-4 || (seen&required)!=required)return false;
   out=*c;return true;
 }

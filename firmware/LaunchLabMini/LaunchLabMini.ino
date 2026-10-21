@@ -53,11 +53,11 @@
 #define LOOP_HELPER __attribute__((noinline))
 #if LAUNCHLAB_HIL
 // Test-only hardware-in-the-loop build; never a release. See tools/hil.
-static constexpr char VERSION[] = "0.15.0-sticks3-milestone-hil-pm";
+static constexpr char VERSION[] = "0.16.0-sticks3-effects-hil-pm";
 #elif LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = "0.15.0-sticks3-milestone-pm";
+static constexpr char VERSION[] = "0.16.0-sticks3-effects-pm";
 #else
-static constexpr char VERSION[] = "0.15.0-sticks3-milestone";
+static constexpr char VERSION[] = "0.16.0-sticks3-effects";
 #endif
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ
@@ -85,6 +85,11 @@ static ThemeStore themeStore;
 // damaged record shows the defaults and is replaced by the next change.
 static Milestones::Config milestones;
 static AppearanceStore<Milestones::Config> milestoneStore;
+// Each row's next effect, picked from its pool ahead of the pull that plays
+// it, so its sound is rendered in time; picked again after it plays (never
+// the same twice in a row when the pool has more) and when the table changes.
+static Appearance::Effect milestoneNext[Milestones::MAX_ROWS];
+static Milestones::Config milestonePicked;static bool milestonePicksReady=false;
 static Appearance::Celebration bestEffect;
 // The Best effect editor previews the draft around its value card.
 static Appearance::Celebration editorEffect;
@@ -108,11 +113,17 @@ static uint32_t tournamentHintUntil=0;
 static unsigned historyOffset=0;
 static uint32_t lastSaveTry=0,saveCount=0,saveErrors=0,maxSaveUs=0,newSessionAt=0;
 static constexpr uint32_t HISTORY_COALESCE_MS=10000;
+static constexpr uint32_t CELEBRATION_HOLD_MS=1000;
 static constexpr uint32_t HISTORY_SAVE_RETRY_MS=5000;
 static uint32_t lastAcceptedAt=0,historyPendingSince=0;
 static bool screenReady=false;
 static bool diagnostics=false,extPower=false,stress=false,dirty=true;
 static uint32_t lastDraw=0,lastStatus=0,lastRevision=0,maxDrawUs=0,maxEffectUs=0,uiStalls=0;
+#if LAUNCHLAB_HIL
+// HIL only: each recap effect pass since the last E preview (elapsed ms, us),
+// listed by `!effectframes`, to see where in an effect its time goes.
+static struct {uint16_t elapsed[128],us[128];unsigned count=0;} effectFrames;
+#endif
 static uint32_t lastImuPoll=0,maxImuPollUs=0;
 static StickS3Level::Reading drawnLevel;
 static InactivityTimer inactivity;
@@ -169,6 +180,7 @@ static constexpr uint32_t SOUND_LATE_MS=300;
 static void requestSound(Appearance::Effect effect,Appearance::Sound level,bool celebration);
 static const char *milestoneStoreName();
 static Appearance::Effect celebrationEffect();static Appearance::Effect soundTarget();
+static const Appearance::Effect *milestonePicks();static void nextMilestonePick(uint16_t rpm,Appearance::Effect played);
 static constexpr size_t USB_TX_BUFFER_BYTES=8192;
 static constexpr uint32_t MOTION_INIT_RETRY_MS=5000,MOTION_DATA_TIMEOUT_MS=250;
 // The 1024-sample ring (10 s at 100 Hz) still holds a pull for this long.
@@ -659,6 +671,11 @@ LOOP_HELPER static void draw(const Snapshot &s) {
       bestEffectRenderer.draw({static_cast<uint16_t *>(screen.getBuffer()),screen.width(),screen.height()},
         bestEffect.effect(),bestEffect.elapsed(millis()),colors.accent,BestEffectUI::Renderer::Anchor(),colors.background);
       maxEffectUs=std::max(maxEffectUs,uint32_t(esp_timer_get_time()-effectStarted));
+#if LAUNCHLAB_HIL
+      if(effectFrames.count<128 && bestEffect.moving(millis())){
+        effectFrames.elapsed[effectFrames.count]=uint16_t(bestEffect.elapsed(millis()));
+        effectFrames.us[effectFrames.count++]=uint16_t(std::min<int64_t>(65535,esp_timer_get_time()-effectStarted));}
+#endif
     }
   } else {
     const bool sessionNotice=newSessionAt && millis()-newSessionAt<1500 &&
@@ -695,6 +712,8 @@ LOOP_HELPER static void draw(const Snapshot &s) {
     // Only a presented Best effect consumes Random's next pick; a milestone
     // plays its own effect.
     if(appearance.effect==Appearance::Effect::Random && !bestEffect.milestone())upcomingEffect=Appearance::pick(esp_random(),bestEffect.effect());
+    // A milestone uses up its row's pick.
+    if(bestEffect.milestone())nextMilestonePick(bestEffect.milestone(),bestEffect.effect());
   }
   if(editorEffect.takeCue())requestSound(editorEffect.effect(),appearance.sound,false);
   launchFeedback.replayPresented(millis(),!tournamentMode && !diagnostics && !historyPage &&
@@ -773,7 +792,7 @@ LOOP_HELPER static void prepareMotion(const Snapshot &event) {
   // The selected estimator's RPM is the pull's RPM, for milestones as for bests.
   const bool visible=!tournamentMode && !historyPage && !diagnostics;
   const auto decision=visible?Milestones::decide(milestones,event.valid,event.resultRpm,beat,
-    beat && milestones.mode()!=Milestones::Mode::Milestones?celebrationEffect():Appearance::Effect::Off):Milestones::Decision{};
+    beat && milestones.mode()!=Milestones::Mode::Milestones?celebrationEffect():Appearance::Effect::Off,milestonePicks()):Milestones::Decision{};
   bestEffect.queue(decision.show,latestMotion.number,decision.effect,decision.best,decision.milestone);
   Serial.printf("CELEBRATION launch=%lu rpm=%.1f shown_rpm=%ld valid=%d mode=%s best=%d milestone=%u effect=%s celebrate=%d\n",(unsigned long)latestMotion.number,
     event.resultRpm,Milestones::shown(event.resultRpm),event.valid,Milestones::name(milestones.mode()),beat,unsigned(decision.milestone),
@@ -857,6 +876,18 @@ LOOP_HELPER static void previewSetting() {
 LOOP_HELPER static Appearance::Effect upcoming() {
   if(!Appearance::drawn(unsigned(upcomingEffect)))upcomingEffect=Appearance::pick(esp_random(),Appearance::Effect::Off);
   return upcomingEffect;
+}
+LOOP_HELPER static const Appearance::Effect *milestonePicks() {
+  if(!milestonePicksReady || !milestonePicked.same(milestones)) {
+    for(unsigned i=0;i<milestones.count();++i)milestoneNext[i]=Milestones::pick(milestones.row(i).pool,esp_random(),Appearance::Effect::Off);
+    milestonePicked=milestones;milestonePicksReady=true;
+  }
+  return milestoneNext;
+}
+LOOP_HELPER static void nextMilestonePick(uint16_t rpm,Appearance::Effect played) {
+  milestonePicks();
+  for(unsigned i=0;i<milestones.count();++i)
+    if(milestones.row(i).rpm==rpm)milestoneNext[i]=Milestones::pick(milestones.row(i).pool,esp_random(),played);
 }
 LOOP_HELPER static Appearance::Effect celebrationEffect() {
   if(appearance.effect!=Appearance::Effect::Random)return appearance.effect;
@@ -1412,7 +1443,8 @@ LOOP_HELPER static void pollRestore(const Snapshot &s) {
 static void themeReply(){UsbTx::drain(100);}
 LOOP_HELPER static void listThemes() {
   unsigned available=0;const bool known=nvsAvailable(available);
-  Serial.printf("THEME_LIST slots=%u selected=%u showing=%u store=%s revision=%lu nvs_available=%d nvs_needed=%u\n",
+  // colors=any: any colors are accepted (0.14 and 0.15 refused light or low-contrast themes).
+  Serial.printf("THEME_LIST slots=%u selected=%u showing=%u store=%s revision=%lu nvs_available=%d nvs_needed=%u colors=any\n",
     Themes::SLOTS,unsigned(appearance.theme),unsigned(themeLibrary.effective(appearance.theme)),ThemeStore::name(themeStore.status()),
     (unsigned long)themeLibrary.revision,known?int(available):-1,ThemeStore::NEEDED_ENTRIES);
   for(unsigned i=0;i<Themes::SLOTS;++i) {
@@ -1462,13 +1494,10 @@ LOOP_HELPER static void finishThemeRequest(const Snapshot &s) {
   if(request->op==Op::Select){selectTheme(Appearance::Theme(request->argument),s);return;}
   auto fail=[&](const char *reason){Serial.printf("THEME_ERROR op=%s slot=%u reason=%s written=0\n",op,slot,reason);themeReply();};
   if(request->op!=Op::Clear && slot>=Themes::SLOTS)return fail("bad_slot");
-  if(request->op==Op::Put) {
-    unsigned role=0;const auto problem=request->theme.check(&role);
-    if(problem!=Palette::Problem::None) {
-      Serial.printf("THEME_ERROR op=put slot=%u reason=%s role=%s written=0\n",slot,Palette::problemName(problem),
-        problem==Palette::Problem::Contrast?Palette::roleName(role):"none");themeReply();return;
-    }
-  }
+  if(request->op==Op::Put && !request->theme.valid())return fail(Palette::problemName(request->theme.check()));
+  // Colors are never refused; a put reports what the editor warns about.
+  char warnings[Palette::ADVICE_TEXT]="none";
+  if(request->op==Op::Put)request->theme.advice().format(warnings,sizeof(warnings));
   if(themeStore.status()==ThemeStore::Status::Unavailable)return fail("storage_unavailable");
   // An unreadable record is kept until it is cleared on purpose.
   if(request->op!=Op::Clear && themeStore.status()==ThemeStore::Status::Unreadable)return fail("store_unreadable");
@@ -1477,7 +1506,7 @@ LOOP_HELPER static void finishThemeRequest(const Snapshot &s) {
   else if(request->op==Op::Delete)next->remove(slot);
   else *next=Themes::Library{};
   if(request->op!=Op::Clear && *next==themeLibrary) {
-    Serial.printf("THEME_OK op=%s slot=%u revision=%lu unchanged=1\n",op,slot,(unsigned long)themeLibrary.revision);themeReply();return;
+    Serial.printf("THEME_OK op=%s slot=%u revision=%lu unchanged=1 warnings=%s\n",op,slot,(unsigned long)themeLibrary.revision,warnings);themeReply();return;
   }
   unsigned available=0;
   if(request->op==Op::Put && (!nvsAvailable(available) || !ThemeStore::fits(available))) {
@@ -1489,8 +1518,8 @@ LOOP_HELPER static void finishThemeRequest(const Snapshot &s) {
   if(!acquisition.request(Action::CheckpointEnd))Serial.println("THEME_NOTICE adc_checkpoint_resume_failed");
   if(!ok){Serial.printf("THEME_ERROR op=%s slot=%u reason=write_failed written=unknown\n",op,slot);themeReply();dirty=true;return;}
   themeLibrary=*next;themesChanged();
-  Serial.printf("THEME_OK op=%s slot=%u revision=%lu state=%s\n",op,slot,(unsigned long)themeLibrary.revision,
-    request->op==Op::Clear?"empty":Themes::stateName(themeLibrary.state(slot)));themeReply();
+  Serial.printf("THEME_OK op=%s slot=%u revision=%lu state=%s warnings=%s\n",op,slot,(unsigned long)themeLibrary.revision,
+    request->op==Op::Clear?"empty":Themes::stateName(themeLibrary.state(slot)),warnings);themeReply();
   // A selection that fell back is saved like any other setting.
   saveSettings(millis(),acquisition.snapshot(),true);dirty=true;
 }
@@ -1522,12 +1551,18 @@ LOOP_HELPER static void listMilestones() {
   Milestones::Config::Image image;milestones.encode(image);
   char data[(Milestones::Config::IMAGE_BYTES+2)/3*4+1]={};
   DeviceBackup::base64Lines(image.data(),image.size(),96,[&](const char *line){strncpy(data,line,sizeof(data)-1);});
-  Serial.printf("MILESTONE_LIST mode=%s rows=%u max_rows=%u min_rpm=%u max_rpm=%u revision=%lu store=%s default=%d nvs_available=%d nvs_needed=%u data=%s\n",
-    Milestones::name(milestones.mode()),milestones.count(),Milestones::MAX_ROWS,unsigned(Milestones::MIN_RPM),unsigned(Milestones::MAX_RPM),
+  Serial.printf("MILESTONE_LIST version=2 mode=%s rows=%u max_rows=%u min_rpm=%u max_rpm=%u effects=%u revision=%lu store=%s default=%d nvs_available=%d nvs_needed=%u data=%s\n",
+    Milestones::name(milestones.mode()),milestones.count(),Milestones::MAX_ROWS,unsigned(Milestones::MIN_RPM),unsigned(Milestones::MAX_RPM),Appearance::EFFECTS,
     (unsigned long)milestones.revision,milestoneStoreName(),milestones.isDefault(),known?int(available):-1,MILESTONE_NEEDED_ENTRIES,data);
-  for(unsigned i=0;i<milestones.count();++i)
-    Serial.printf("MILESTONE_ROW index=%u rpm=%u effect=%s effect_id=%u\n",i,unsigned(milestones.row(i).rpm),
-      Appearance::label(milestones.row(i).effect),unsigned(milestones.row(i).effect));
+  // effect/effect_id name the pool's first effect, as 0.15 listed its one.
+  const auto *picks=milestonePicks();
+  for(unsigned i=0;i<milestones.count();++i) {
+    const auto &r=milestones.row(i);char names[400]="";size_t used=0;
+    for(unsigned e=0;e<Appearance::EFFECTS;++e)if(r.has(Appearance::Effect(e)))
+      used+=snprintf(names+used,sizeof(names)-used,"%s%s",used?"+":"",Appearance::label(Appearance::Effect(e)));
+    Serial.printf("MILESTONE_ROW index=%u rpm=%u effect=%s effect_id=%u pool=%016llx effects=%s next=%s\n",i,unsigned(r.rpm),
+      Appearance::label(r.first()),unsigned(r.first()),(unsigned long long)r.pool,names,Appearance::label(picks[i]));
+  }
   Serial.println("MILESTONE_LIST_END");milestoneReply();
 }
 LOOP_HELPER static void finishMilestoneRequest(const Snapshot &s) {
@@ -1781,8 +1816,16 @@ void setup() {
   if(!appearanceStore.begin(appearance,"ll-appearance","cfg0","cfg1"))Serial.println("APPEARANCE_NOTICE invalid_record_retained_using_defaults");
   if(!bestStore.begin(personalBests,"ll-bests","best0","best1"))Serial.println("BEST_NOTICE invalid_record_retained_celebration_disabled");
   if(themeStore.begin(themeLibrary)==ThemeStore::Status::Unreadable)Serial.println("THEME_NOTICE invalid_record_retained_using_default_colors");
-  if(!milestoneStore.begin(milestones,"ll-appearance","mile0","mile1",true))
+  // The pooled record (0.16) has its own keys. Until it is first saved, 0.15's
+  // record is read and carried over; 0.15's keys are never written again, so
+  // a unit rolled back to 0.15 keeps the last table 0.15 wrote.
+  if(!milestoneStore.begin(milestones,"ll-appearance","mpool0","mpool1",true))
     Serial.println(milestoneStore.damaged()?"MILESTONE_NOTICE invalid_record_using_defaults":"MILESTONE_NOTICE storage_unavailable_using_defaults");
+  else if(!milestoneStore.present()) {
+    Milestones::V1Record legacy;AppearanceStore<Milestones::V1Record> legacyStore;
+    if(legacyStore.begin(legacy,"ll-appearance","mile0","mile1",true) && legacyStore.present()){milestones=legacy.table;Serial.println("MILESTONE_NOTICE imported_v1_table");}
+    else if(legacyStore.damaged())Serial.println("MILESTONE_NOTICE invalid_record_using_defaults");
+  }
   controls.customThemes=themeLibrary.validMask();
   if(!themeLibrary.available(appearance.theme))Serial.printf("THEME_NOTICE selected_theme_unavailable theme=%u showing=%u\n",unsigned(appearance.theme),unsigned(Themes::FALLBACK));
   uint8_t pin=prefs.getUChar("ao_pin",1);
@@ -1861,8 +1904,9 @@ LOOP_HELPER static void tickSound(const Snapshot &s) {
   if(!wanted)return;
   if(!soundPlayer.prepared(soundTarget())){soundPlayer.prepare(soundTarget(),SLICE);return;}
   if(appearance.sound==Appearance::Sound::Off || !Milestones::milestones(milestones.mode()))return;
+  const auto *picks=milestonePicks();
   for(unsigned i=0;i<milestones.count();++i) {
-    const auto effect=milestones.row(i).effect;
+    const auto effect=picks[i];
     if(!soundPlayer.prepared(effect)){soundPlayer.prepare(effect,SLICE);return;}
   }
 }
@@ -1885,6 +1929,9 @@ LOOP_HELPER static void previewBestEffect(Appearance::Effect effect) {
   launchFeedback.show(millis());
   bestEffect.queue(true,latestMotion.number,effect);bestEffect.captured(latestMotion.number);
   maxEffectUs=maxDrawUs=0;dirty=true;
+#if LAUNCHLAB_HIL
+  effectFrames.count=0;
+#endif
   Serial.printf("EFFECT_PREVIEW effect=%s duration_ms=%lu launch=%lu sound_render_us=%lu bests_unchanged=1\n",Appearance::label(effect),
     (unsigned long)Appearance::duration(effect),(unsigned long)latestMotion.number,(unsigned long)renderUs);
 }
@@ -1923,9 +1970,10 @@ LOOP_HELPER static void runUsbCommand(const char *command,const Snapshot &s) {
     return;
   }
   if(c=='E') {
-    // E<digit> previews that effect; E alone the saved one.
-    const unsigned digit=command[1]?unsigned(command[1]-'0'):10u;
-    previewBestEffect(Appearance::drawn(digit)?Appearance::Effect(digit):celebrationEffect());
+    // E<id> previews that effect (its stored value, one or two digits); E
+    // alone the saved one.
+    const unsigned id=command[1]?unsigned(strtoul(command+1,nullptr,10)):255u;
+    previewBestEffect(Appearance::drawn(id)?Appearance::Effect(id):celebrationEffect());
     return;
   }
   if(c=='p')status();
@@ -2108,7 +2156,12 @@ void loop() {
   if(s.phase==AnalogTachometer::Phase::Launch || motionDemo || tournamentMode || historyPage || diagnostics){
     if(bestEffect.badge()){bestEffect.clear();dirty=true;}else bestEffect.clear();
   }
-  if(launchFeedback.tick(now)){dirty=true;motionDemo=false;Serial.printf("MAIN_FEEDBACK shown=0 reason=timeout t_ms=%lu\n",(unsigned long)now);}
+  // A celebration runs about as long as the recap (5 s) and starts with its
+  // first frame: the recap stays until the effect has ended and the readout
+  // has shown clean for CELEBRATION_HOLD_MS.
+  const bool celebrationHolds=bestEffect.badge() && bestEffect.started() &&
+    bestEffect.elapsed(now)<Appearance::duration(bestEffect.effect())+CELEBRATION_HOLD_MS;
+  if(!celebrationHolds && launchFeedback.tick(now)){dirty=true;motionDemo=false;Serial.printf("MAIN_FEEDBACK shown=0 reason=timeout t_ms=%lu\n",(unsigned long)now);}
   if(!launchFeedback.shown())bestEffect.clear();
   if(s.phase==AnalogTachometer::Phase::Launch)inactivity.touch(now);
   finishMotion();

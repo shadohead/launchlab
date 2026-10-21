@@ -297,6 +297,10 @@ static void themeRequest(Themes::Request::Op op,uint8_t argument,const Palette::
   assert(event==DeviceBackup::TransferEvent::Complete);
   finishThemeRequest(snap());
 }
+// A copy of `theme` renamed; the name stays NUL padded, as a valid slot requires.
+static Palette::Custom renamed(Palette::Custom theme,const char *name) {
+  std::memset(theme.name,0,sizeof(theme.name));std::strcpy(theme.name,name);return theme;
+}
 static void themeRequests() {
   using Op=Themes::Request::Op;
   boot();themeStore=ThemeStore{};themeLibrary={};freeEntries=158;assert(themeStore.begin(themeLibrary)==ThemeStore::Status::Empty);
@@ -307,7 +311,8 @@ static void themeRequests() {
   assert(themeLibrary.state(1)==Themes::SlotState::Valid && guardedWrites==1 && running() && controls.customThemes==0b10);
   {Themes::Library stored;ThemeStore reader;assert(reader.begin(stored)==ThemeStore::Status::Loaded && stored==themeLibrary);}
   // Busy (a pull, a vetoed IMU barrier) or short of NVS: refused, nothing written.
-  auto other=navy;std::strcpy(other.name,"Other");
+  // "Other" is a valid theme, so each refusal below is for its stated reason.
+  const auto other=renamed(navy,"Other");assert(other.valid());
   optical(5000,1100);optical(5000);optical(5000,1100);optical(5000);
   for(unsigned turn=0;turn<4;++turn){optical(5000,1100);optical(5000);}
   assert(snap().phase==D::Phase::Launch);themeRequest(Op::Put,2,&other);
@@ -317,9 +322,14 @@ static void themeRequests() {
   assert(themeLibrary.state(2)==Themes::SlotState::Empty && guardedWrites==1 && running());
   freeEntries=ThemeStore::NEEDED_ENTRIES-1;themeRequest(Op::Put,2,&other);freeEntries=158;
   assert(themeLibrary.state(2)==Themes::SlotState::Empty && guardedWrites==1);
-  // Invalid contents are refused before any checkpoint.
-  auto dim=navy;dim.role[Palette::Text]=0x2104;const unsigned windows=imuAcquisition.windows;
-  themeRequest(Op::Put,2,&dim);assert(themeLibrary.state(2)==Themes::SlotState::Empty && imuAcquisition.windows==windows);
+  // A malformed name is refused before any checkpoint.
+  const auto unnamed=renamed(navy," Lead");const unsigned windows=imuAcquisition.windows;
+  themeRequest(Op::Put,2,&unnamed);assert(themeLibrary.state(2)==Themes::SlotState::Empty && imuAcquisition.windows==windows && guardedWrites==1);
+  // Colors are not: nearly invisible text on a white background is written like any theme.
+  auto light=renamed(navy,"Light");light.role[Palette::Background]=0xffff;light.role[Palette::Text]=0xef7d;
+  themeRequest(Op::Put,2,&light);assert(themeLibrary.state(2)==Themes::SlotState::Valid && guardedWrites>1 && !directWrites && running());
+  {Themes::Library stored;ThemeStore reader;assert(reader.begin(stored)==ThemeStore::Status::Loaded && stored.state(2)==Themes::SlotState::Valid);}
+  themeRequest(Op::Delete,2);assert(themeLibrary.state(2)==Themes::SlotState::Empty && running());
   // Select saves the appearance record like Apply; Settings Apply refuses a missing theme.
   themeRequest(Op::Select,Appearance::THEMES+1);passes(100);
   assert(appearance.theme==Themes::slotTheme(1) && !settingsSave.pending() && running());
@@ -337,7 +347,7 @@ static void themeRequests() {
   themeRequest(Op::Put,0,&navy);assert(themeLibrary.empty() && Preferences::data["ll-appearancethemes"]==retained);
   themeRequest(Op::Clear,0);assert(!Preferences::data.count("ll-appearancethemes") && themeStore.status()==ThemeStore::Status::Empty);
   themeRequest(Op::Put,0,&navy);assert(themeLibrary.state(0)==Themes::SlotState::Valid && running());
-  std::cout<<"PASS: theme uploads, deletes and clears write inside a checkpoint only; busy, short of NVS, invalid or unreadable requests write nothing; select and fallback save like Apply\n";
+  std::cout<<"PASS: theme uploads, deletes and clears write inside a checkpoint only; busy, short of NVS, misnamed or unreadable requests write nothing, any colors are written; select and fallback save like Apply\n";
 }
 
 // One framed milestone request through the receiver, as the USB loop feeds it.
@@ -351,10 +361,10 @@ static void milestoneBytes(const uint8_t *bytes) {
 static void milestoneRequest(Milestones::Request::Op op,const Milestones::Config *table=nullptr) {
   uint8_t bytes[Milestones::Request::BYTES];Milestones::Request::encode(op,table,bytes);milestoneBytes(bytes);
 }
-static bool storedTable(Milestones::Config &out){AppearanceStore<Milestones::Config> reader;return reader.begin(out,"ll-appearance","mile0","mile1",true);}
+static bool storedTable(Milestones::Config &out){AppearanceStore<Milestones::Config> reader;return reader.begin(out,"ll-appearance","mpool0","mpool1",true);}
 static void milestoneRequests() {
   using Op=Milestones::Request::Op;using Milestones::Row;using Appearance::Effect;
-  boot();milestones={};milestoneStore={};freeEntries=158;assert(milestoneStore.begin(milestones,"ll-appearance","mile0","mile1",true));
+  boot();milestones={};milestoneStore={};freeEntries=158;assert(milestoneStore.begin(milestones,"ll-appearance","mpool0","mpool1",true));
   Milestones::Config table;const Row rows[]={{8000,Effect::Orbit},{10500,Effect::Lightning},{13000,Effect::Slash}};
   assert(table.set(Milestones::Mode::Milestones,rows,3)==Milestones::Problem::None);
   // A table is written in its own checkpoint with the IMU quiet, then the ADC runs again.
@@ -380,9 +390,10 @@ static void milestoneRequests() {
     Appearance::put32(bytes+Milestones::Request::BYTES-4,Appearance::hash(bytes,Milestones::Request::BYTES-4));milestoneBytes(bytes);
     assert(milestones.same(table) && guardedWrites==1 && imuAcquisition.windows==windows);
   };
-  invalid([](uint8_t *b){b[8+4+3]=b[8+4];b[8+4+4]=b[8+4+1];});      // two rows at the same RPM
+  invalid([](uint8_t *b){b[8+4+10]=b[8+4];b[8+4+11]=b[8+4+1];});    // two rows at the same RPM
   invalid([](uint8_t *b){b[8+4]=0xe7;b[8+5]=0x03;});                 // 999 RPM
-  invalid([](uint8_t *b){b[8+4+2]=uint8_t(Effect::Random);});        // not a drawn effect
+  invalid([](uint8_t *b){b[8+4+2]|=1u<<unsigned(Effect::Random);});  // not a drawn effect in the pool
+  invalid([](uint8_t *b){std::memset(b+8+4+2,0,8);});                // an empty pool
   invalid([](uint8_t *b){b[8]=3;});                                  // no such mode
   invalid([](uint8_t *b){b[8+1]=0;});                                // no rows
   {uint8_t bytes[Milestones::Request::BYTES];Milestones::Request::encode(Op::Set,&other,bytes);bytes[20]^=1;milestoneBytes(bytes);
@@ -392,12 +403,12 @@ static void milestoneRequests() {
   assert(milestones.isDefault() && guardedWrites==2 && running());
   {Milestones::Config stored;assert(storedTable(stored) && stored.isDefault());}
   // A damaged record shows the defaults; a request replaces it, even with the defaults.
-  Preferences::data["ll-appearancemile0"][9]^=1;Preferences::data["ll-appearancemile1"][9]^=1;
-  milestones={};milestoneStore={};assert(!milestoneStore.begin(milestones,"ll-appearance","mile0","mile1",true) && milestoneStore.damaged());
+  Preferences::data["ll-appearancempool0"][9]^=1;Preferences::data["ll-appearancempool1"][9]^=1;
+  milestones={};milestoneStore={};assert(!milestoneStore.begin(milestones,"ll-appearance","mpool0","mpool1",true) && milestoneStore.damaged());
   assert(milestones.isDefault() && !std::strcmp(milestoneStoreName(),"damaged"));
   milestoneRequest(Op::Reset);
   assert(!milestoneStore.damaged() && guardedWrites==3 && !std::strcmp(milestoneStoreName(),"ok"));
-  {Milestones::Config stored;AppearanceStore<Milestones::Config> reader;assert(reader.begin(stored,"ll-appearance","mile0","mile1",true) && !reader.damaged() && stored.isDefault());}
+  {Milestones::Config stored;AppearanceStore<Milestones::Config> reader;assert(reader.begin(stored,"ll-appearance","mpool0","mpool1",true) && !reader.damaged() && stored.isDefault());}
   std::cout<<"PASS: milestone tables and resets write inside a checkpoint only; busy, short of NVS, corrupt or invalid requests write nothing; a damaged record is replaced\n";
 }
 

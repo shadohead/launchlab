@@ -1,6 +1,6 @@
 // Shared test vectors for the web theme editor (beywatch
-// tests/launchlab/fixtures/theme-vectors.json): luminance, contrast and
-// validation verdicts, the built-in palettes, slot and request records and a
+// tests/launchlab/fixtures/theme-vectors.json): luminance, contrast, the
+// name verdict and the color warnings, the built-in palettes, slot and request records and a
 // library image, all computed by the firmware's own code. test_palette checks
 // fixtures/theme_vectors.json against this; theme_fixture.cpp prints it.
 #pragma once
@@ -16,20 +16,25 @@ inline Palette::Custom theme(const char *name,std::initializer_list<uint16_t> ro
   Palette::Custom t;std::strncpy(t.name,name,Palette::Custom::NAME_BYTES);
   unsigned i=0;for(uint16_t r:roles)t.role[i++]=r;return t;
 }
-// Valid and invalid themes covering every rule and each contrast boundary.
+// Themes covering the name rule, every warning and each warning boundary.
 inline std::vector<Palette::Custom> themes() {
   return {
     theme("Dragoon Storm",{0x0000,0xffff,0x7bef,0x5c7f,0x5c7f,0xfda0,0x07e0,0xf800}),
     theme("Night Ember",{0x1082,0xef5d,0x8410,0xfb20,0xffff,0xfe60,0x5fea,0xfa49}),
     theme("Abyss",{0x0006,0xffff,0x5acb,0x2d7f,0x2d7f,0xfda0,0x07e0,0xf800}),   // muted just under 3:1
     theme("Abyss",{0x0006,0xffff,0x5aeb,0x2d7f,0x2d7f,0xfda0,0x07e0,0xf800}),   // muted just over 3:1
-    theme("Grey Day",{0x4208,0xffff,0xc618,0xffe0,0xffe0,0xfda0,0x07e0,0xffff}),// background too light
+    theme("Grey Day",{0x4208,0xffff,0xc618,0xffe0,0xffe0,0xfda0,0x07e0,0xffff}),// light background
     theme("Low Ink",{0x0000,0x4a49,0x7bef,0x07ff,0x07ff,0xfda0,0x07e0,0xf800}),  // text under 4.5:1
     theme("Dim Alert",{0x0000,0xffff,0x7bef,0x07ff,0x07ff,0xfda0,0x07e0,0x9000}),// alert under 4.5:1
     theme("",{0x0000,0xffff,0x7bef,0x07ff,0x07ff,0xfda0,0x07e0,0xf800}),         // no name
     theme(" Lead",{0x0000,0xffff,0x7bef,0x07ff,0x07ff,0xfda0,0x07e0,0xf800}),    // leading space
     theme("Fourteen chars",{0x0000,0xffff,0x7bef,0x07ff,0x07ff,0xfda0,0x07e0,0xf800}),
     theme("Tab\tName",{0x0000,0xffff,0x7bef,0x07ff,0x07ff,0xfda0,0x07e0,0xf800}),// control character
+    theme("Paper",{0xffff,0x0000,0x738e,0x001f,0x0000,0x9a00,0x0400,0xc000}),   // light, every role readable
+    theme("Ghost",{0xffff,0xef7d,0x738e,0x001f,0x0000,0x9a00,0x0400,0xffdf}),   // text and alert invisible on white
+    theme("Fog",{0x0000,0x2965,0x3186,0x07ff,0x07ff,0xfda0,0x07e0,0xf800}),     // text just under 1.5:1, muted just over
+    theme("Dusk",{0x41e8,0xffff,0xc618,0xffe0,0xffe0,0xfda0,0x07e0,0xffff}),    // background just dark enough
+    theme("Dawn",{0x3a08,0xffff,0xc618,0xffe0,0xffe0,0xfda0,0x07e0,0xffff}),    // background just light
   };
 }
 inline std::string hex(const uint8_t *p,size_t n){std::string s;char b[3];for(size_t i=0;i<n;++i){std::snprintf(b,3,"%02x",p[i]);s+=b;}return s;}
@@ -46,11 +51,12 @@ inline std::string colors(const Palette::Colors &c) {
   return b;
 }
 inline std::string json() {
-  std::string o="{\n  \"schema\": 1,\n";
+  std::string o="{\n  \"schema\": 2,\n";
   o+="  \"roles\": [";for(unsigned r=0;r<Palette::ROLES;++r)o+=(r?",":"")+str(Palette::roleName(r));o+="],\n";
   char b[160];
-  std::snprintf(b,sizeof(b),"  \"rules\": {\"text\": %u, \"muted\": %u, \"maxBackgroundLuminance\": %u, \"maxName\": %u, \"slots\": %u, \"builtIns\": %u},\n",
-    Palette::TEXT_CONTRAST100,Palette::MUTED_CONTRAST100,Palette::MAX_BACKGROUND_LUMINANCE,Palette::Custom::MAX_NAME,Themes::SLOTS,Appearance::THEMES);o+=b;
+  std::snprintf(b,sizeof(b),"  \"rules\": {\"text\": %u, \"muted\": %u, \"invisible\": %u, \"lightBackgroundLuminance\": %u, \"maxName\": %u, \"slots\": %u, \"builtIns\": %u},\n",
+    Palette::TEXT_CONTRAST100,Palette::MUTED_CONTRAST100,Palette::INVISIBLE_CONTRAST100,Palette::LIGHT_BACKGROUND_LUMINANCE,
+    Palette::Custom::MAX_NAME,Themes::SLOTS,Appearance::THEMES);o+=b;
   o+="  \"builtIns\": [\n";
   for(unsigned t=0;t<Appearance::THEMES;++t)o+="    {\"id\": "+std::to_string(t)+", \"name\": "+str(Appearance::label(Appearance::Theme(t)))+", \"colors\": "+
     colors(Themes::builtIn(Appearance::Theme(t)))+"}"+(t+1<Appearance::THEMES?",\n":"\n");
@@ -62,17 +68,21 @@ inline std::string json() {
   o+="],\n  \"themes\": [\n";
   const auto all=themes();
   for(size_t i=0;i<all.size();++i) {
-    const auto &t=all[i];unsigned failed=Palette::ROLES;const auto problem=t.check(&failed);
+    const auto &t=all[i];const auto advice=t.advice();
     uint8_t slot[Themes::SLOT_BYTES];t.encode(slot);
+    char warnings[Palette::ADVICE_TEXT];advice.format(warnings,sizeof(warnings));
+    static const char *level[]={"ok","low","invisible"};
     o+="    {\"name\": "+str(t.name)+", \"roles\": [";
     for(unsigned r=0;r<Palette::ROLES;++r)o+=(r?", ":"")+std::to_string(t.role[r]);
-    o+="], \"problem\": "+str(Palette::problemName(problem))+", \"failedRole\": "+
-      (problem==Palette::Problem::Contrast?str(Palette::roleName(failed)):std::string("null"))+
-      ", \"slot\": "+str(base64(slot,sizeof(slot)).c_str())+", \"colors\": "+colors(t.colors())+"}"+(i+1<all.size()?",\n":"\n");
+    o+="], \"problem\": "+str(Palette::problemName(t.check()))+", \"lightBackground\": "+(advice.lightBackground?"true":"false")+
+      ", \"legibility\": [";
+    for(unsigned r=0;r<Palette::ROLES;++r)o+=(r?", ":"")+str(level[unsigned(advice.role[r])]);
+    o+="], \"warnings\": "+str(warnings)+", \"slot\": "+str(base64(slot,sizeof(slot)).c_str())+", \"colors\": "+colors(t.colors())+"}"+
+      (i+1<all.size()?",\n":"\n");
   }
   o+="  ],\n  \"requests\": [\n";
   struct R {Themes::Request::Op op;uint8_t argument;int theme;};
-  const R requests[]={{Themes::Request::Op::Put,0,0},{Themes::Request::Op::Put,3,1},{Themes::Request::Op::Delete,2,-1},
+  const R requests[]={{Themes::Request::Op::Put,0,0},{Themes::Request::Op::Put,3,1},{Themes::Request::Op::Put,2,11},{Themes::Request::Op::Delete,2,-1},
                       {Themes::Request::Op::Select,11,-1},{Themes::Request::Op::Select,4,-1},{Themes::Request::Op::Clear,0,-1}};
   for(size_t i=0;i<sizeof(requests)/sizeof(requests[0]);++i) {
     Themes::Request q;q.op=requests[i].op;q.argument=requests[i].argument;if(requests[i].theme>=0)q.theme=all[size_t(requests[i].theme)];
@@ -81,7 +91,7 @@ inline std::string json() {
       (requests[i].theme>=0?std::to_string(requests[i].theme):std::string("null"))+", \"base64\": "+str(base64(bytes,sizeof(bytes)).c_str())+"}"+
       (i+1<sizeof(requests)/sizeof(requests[0])?",\n":"\n");
   }
-  Themes::Library library;library.put(0,all[0]);library.put(3,all[1]);library.put(1,all[1]);library.remove(1);
+  Themes::Library library;library.put(0,all[0]);library.put(3,all[1]);library.put(1,all[1]);library.remove(1);library.put(2,all[11]);
   Themes::Library::Image image;library.encode(image);
   o+="  ],\n  \"library\": {\"revision\": "+std::to_string(library.revision)+", \"image\": "+str(base64(image.data(),image.size()).c_str())+
     ", \"states\": [";

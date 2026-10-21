@@ -824,5 +824,20 @@
     ],
     "published_channel": "beta",
     "channel_note": "published as beta, promoted to stable 2026-10-20"
+  },
+  {
+    "release": "0.16.0-sticks3-effects-pm",
+    "runtime_version": "0.16.0-sticks3-effects-pm",
+    "board": "M5StickS3 K150",
+    "date": "2026-10-20",
+    "binary": "LaunchLabMini.ino.bin",
+    "binary_bytes": 927984,
+    "sha256": "76793b16c9b75a0c5d04bc8a9139cdbfa8f57e49e646e37f1c1205cb7c0e25ba",
+    "application_offset": "0x10000",
+    "profiles": [
+      "qre1113",
+      "tcrt5000"
+    ],
+    "published_channel": "beta"
   }
 ]

@@ -93,7 +93,9 @@ int main() {
   }
 
   // The default milestones add nothing: format 1 stays byte for byte (above).
-  // A changed mode or table makes format 3, with or without custom themes.
+  // A changed mode or table 0.15 can hold makes format 3 (0.15's record), with
+  // or without custom themes; a table it cannot hold makes format 4.
+  static_assert(FORMAT==4 && MILESTONES_FORMAT==3,"0.15 reads formats 1-3 and refuses 4");
   {
     using Milestones::Row;using Appearance::Effect;
     assert(original.milestones.isDefault() && !original.hasMilestones);
@@ -102,15 +104,15 @@ int main() {
     assert(table.milestones.set(Milestones::Mode::Milestones,rows,3)==Milestones::Problem::None);table.hasMilestones=true;
     auto both=table;both.hasThemes=true;assert(both.themes.put(0,custom("Dragoon Storm",0x5c7f)));
     for(const auto *c:{&modeOnly,&table,&both}) {
-      assert(c->format()==FORMAT);
+      assert(c->format()==MILESTONES_FORMAT);
       Buffer encoded;const size_t length=encode(*c,"0.15.0-sticks3-test",encoded);
-      assert(get32(encoded.data()+4)==FORMAT && length==n+8+Milestones::Config::IMAGE_BYTES+(c->hasThemes?8+Themes::Library::IMAGE_BYTES:0));
+      assert(get32(encoded.data()+4)==MILESTONES_FORMAT && length==n+8+Milestones::Config::V1_IMAGE_BYTES+(c->hasThemes?8+Themes::Library::IMAGE_BYTES:0));
       Contents restored;assert(decode(encoded.data(),length,restored) && same(*c,restored));
       assert(restored.hasMilestones && restored.milestones.same(c->milestones) && restored.milestones.revision==c->milestones.revision);
       assert(restored.hasThemes==c->hasThemes && (!c->hasThemes || restored.themes==c->themes));
       for(size_t i=0;i<length;i+=5){auto bad=encoded;bad[i]^=0x20;Contents ignored;assert(!decode(bad.data(),length,ignored));}
       // Older formats cannot carry the milestones section.
-      for(uint32_t format:{LEGACY_FORMAT,THEMES_FORMAT,FORMAT+1}) {
+      for(uint32_t format:{LEGACY_FORMAT,THEMES_FORMAT,FORMAT,FORMAT+1}) {
         auto bad=encoded;put32(bad.data()+4,format);put32(bad.data()+length-4,checksum(bad.data(),length-4));
         Contents ignored;assert(!decode(bad.data(),length,ignored));
       }
@@ -118,12 +120,37 @@ int main() {
     // A checksummed record with an invalid table is rejected whole.
     {
       Buffer encoded;const size_t length=encode(table,"x",encoded);
-      const size_t body=length-4-Milestones::Config::IMAGE_BYTES;
+      const size_t body=length-4-Milestones::Config::V1_IMAGE_BYTES;
       assert(encoded[body-8]==MilestoneTable && encoded[body+8+1]==3);
       auto bad=encoded;bad[body+8+4+3]=bad[body+8+4];bad[body+8+4+4]=bad[body+8+4+1]; // row 1 rpm = row 0 rpm
-      put32(bad.data()+body+Milestones::Config::IMAGE_BYTES-4,Appearance::hash(bad.data()+body,Milestones::Config::IMAGE_BYTES-4));
+      put32(bad.data()+body+Milestones::Config::V1_IMAGE_BYTES-4,Appearance::hash(bad.data()+body,Milestones::Config::V1_IMAGE_BYTES-4));
       put32(bad.data()+length-4,checksum(bad.data(),length-4));
       Contents ignored;assert(!decode(bad.data(),length,ignored));
+    }
+    // Format 4: effect pools, more than eight rows or an effect 0.15 lacks,
+    // in the pooled section; round trip, damage and the wrong section refused.
+    {
+      auto pooled=original;pooled.hasMilestones=true;
+      const Row pools[]={{9000,Effect::Sparkles},{12000,uint64_t(1)<<unsigned(Effect::Tidal)|uint64_t(1)<<unsigned(Effect::Bloom)},{15000,Effect::Slash}};
+      assert(pooled.milestones.set(Milestones::Mode::Both,pools,3)==Milestones::Problem::None && !pooled.milestones.fitsV1());
+      auto tidal=original;tidal.hasMilestones=true;const Row one[]={{9000,Effect::Tidal}};assert(tidal.milestones.set(Milestones::Mode::Milestones,one,1)==Milestones::Problem::None);
+      auto ladder=original;ladder.hasMilestones=true;Row twelve[12];for(unsigned i=0;i<12;++i)twelve[i]={uint16_t(9000+500*i),Effect::Orbit};
+      assert(ladder.milestones.set(Milestones::Mode::Milestones,twelve,12)==Milestones::Problem::None);
+      for(const auto *c:{&pooled,&tidal,&ladder}) {
+        assert(c->format()==FORMAT);
+        Buffer encoded;const size_t length=encode(*c,"0.16.0-sticks3-test",encoded);
+        assert(get32(encoded.data()+4)==FORMAT && length==n+8+Milestones::Config::IMAGE_BYTES);
+        assert(encoded[length-4-Milestones::Config::IMAGE_BYTES-8]==MilestonePools);
+        Contents restored;assert(decode(encoded.data(),length,restored) && restored.hasMilestones && restored.milestones.same(c->milestones));
+        for(size_t i=0;i<length;i+=7){auto bad=encoded;bad[i]^=0x10;Contents ignored;assert(!decode(bad.data(),length,ignored));}
+        for(uint32_t format:{LEGACY_FORMAT,THEMES_FORMAT,MILESTONES_FORMAT,FORMAT+1}) {
+          auto bad=encoded;put32(bad.data()+4,format);put32(bad.data()+length-4,checksum(bad.data(),length-4));
+          Contents ignored;assert(!decode(bad.data(),length,ignored));
+        }
+        // The pooled record under the 0.15 section id is refused.
+        auto bad=encoded;bad[length-4-Milestones::Config::IMAGE_BYTES-8]=MilestoneTable;put32(bad.data()+length-4,checksum(bad.data(),length-4));
+        Contents ignored;assert(!decode(bad.data(),length,ignored));
+      }
     }
     // A restore writes the backup's milestones over whatever the device
     // holds, a damaged record included; a backup without them leaves them.

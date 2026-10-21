@@ -64,6 +64,8 @@ static uint32_t esp_random(){++randomCalls;return 0;}
 static constexpr unsigned MALLOC_CAP_SPIRAM=1;
 static std::vector<void *> allocations;
 static void *heap_caps_malloc(size_t bytes,unsigned){auto p=std::malloc(bytes);allocations.push_back(p);return p;}
+static void heap_caps_free(void *p){for(auto &a:allocations)if(a==p)a=nullptr;std::free(p);}
+static unsigned liveAllocations(){unsigned n=0;for(auto *a:allocations)n+=a!=nullptr;return n;}
 struct StickS3MotionAcquisition {
   bool lock(){return true;}void unlock(){}
 };
@@ -94,6 +96,7 @@ static Appearance::Bests personalBests;
 static AppearanceStore<Appearance::Bests> bestStore;
 static Appearance::Celebration bestEffect,editorEffect;
 static Milestones::Config milestones;
+static Appearance::Effect milestoneNext[Milestones::MAX_ROWS];static Milestones::Config milestonePicked;static bool milestonePicksReady=false;
 static Appearance::Effect upcomingEffect=Appearance::Effect::Off;
 static Controls::State controls;
 static PracticeHistory practice;
@@ -228,13 +231,14 @@ int main() {
     using Appearance::Effect;
     reset(Appearance::Effect::Random);assert(milestones.select(Milestones::Mode::Both));
     unsigned passes=0;
-    auto ready=[&]{for(unsigned i=0;i<milestones.count();++i)if(!soundPlayer.prepared(milestones.row(i).effect))return false;return soundPlayer.prepared(soundTarget());};
+    auto ready=[&]{for(unsigned i=0;i<milestones.count();++i)if(!soundPlayer.prepared(milestonePicks()[i]))return false;return soundPlayer.prepared(soundTarget());};
     while(!ready() && passes<2000){tickSound(Snapshot{});++passes;}
     assert(ready() && passes<2000);
     const auto pick=upcomingEffect;const unsigned rng=randomCalls;
     accepted(15500);captured();tickSound(Snapshot{});presentFrame();
     assert(bestEffect.effect()==Effect::Slash && bestEffect.milestone()==15000 && M5.Speaker.plays==1);checkClip(Effect::Slash);
-    assert(upcomingEffect==pick && randomCalls==rng);
+    // The milestone's row picks its next effect itself; Random's pick is untouched.
+    assert(upcomingEffect==pick);(void)rng;
     // Every table effect plays at once from its own buffer, one after another.
     const Effect expected[]={Effect::Sparkles,Effect::Orbit,Effect::Flames,Effect::Shockwave,Effect::Lightning};
     const float rpms[]={9100,11200,12100,13300,14800};
@@ -248,13 +252,44 @@ int main() {
     for(unsigned i=0;i<2000;++i)tickSound(Snapshot{});
     assert(soundPlayer.prepared(Effect::Orbit) && !soundPlayer.prepared(Effect::Slash) && !soundPlayer.prepared(Effect::Sparkles));
   }
+  // At most MAX_BUFFERS sounds are kept: preparing another frees the least
+  // recently used, never the one playing, and a freed sound renders again.
+  {
+    using Appearance::drawnEffect;
+    reset(Appearance::Effect::Orbit);const unsigned before=liveAllocations();
+    assert(soundPlayer.prepare(drawnEffect(0)) && soundPlayer.play(drawnEffect(0),Appearance::Sound::Low));
+    for(unsigned e=1;e<Appearance::DRAWN;++e)assert(soundPlayer.prepare(drawnEffect(e)));
+    static_assert(Appearance::DRAWN>BestEffectSpeaker::MAX_BUFFERS,"the cache is smaller than the effects");
+    assert(liveAllocations()-before==BestEffectSpeaker::MAX_BUFFERS);
+    assert(soundPlayer.prepared(drawnEffect(0)) && !soundPlayer.prepared(drawnEffect(1)));
+    for(unsigned e=Appearance::DRAWN-BestEffectSpeaker::MAX_BUFFERS+1;e<Appearance::DRAWN;++e)assert(soundPlayer.prepared(drawnEffect(e)));
+    M5.Speaker.playing=false;assert(soundPlayer.prepare(drawnEffect(1)) && soundPlayer.play(drawnEffect(1),Appearance::Sound::Low));
+    checkClip(drawnEffect(1));assert(liveAllocations()-before==BestEffectSpeaker::MAX_BUFFERS && !soundPlayer.prepared(drawnEffect(0)));
+  }
+  // An effect pool: idle passes render the row's next pick only; a pull
+  // reaching the row plays that pick, and the row's next pick is another.
+  {
+    using Appearance::Effect;
+    reset(Effect::Orbit);
+    const Milestones::Row rows[]={{9000,Effect::Sparkles},{12000,uint64_t(1)<<unsigned(Effect::Tidal)|uint64_t(1)<<unsigned(Effect::Frost)|uint64_t(1)<<unsigned(Effect::Bloom)}};
+    assert(milestones.set(Milestones::Mode::Milestones,rows,2)==Milestones::Problem::None);milestonePicksReady=false;
+    Effect previous=Effect::Off;
+    for(unsigned pull=0;pull<4;++pull) {
+      for(unsigned i=0;i<4000 && !soundPlayer.prepared(milestonePicks()[1]);++i){M5.Speaker.playing=false;tickSound(Snapshot{});}
+      const Effect next=milestonePicks()[1];
+      assert(rows[1].has(next) && next!=previous && soundPlayer.prepared(next));
+      M5.Speaker.playing=false;accepted(12500+pull);captured();tickSound(Snapshot{});presentFrame();
+      assert(bestEffect.effect()==next && bestEffect.milestone()==12000);checkClip(next);
+      previous=next;
+    }
+  }
   // These buffers live for the firmware lifetime; release fake allocations
   // here so the host harness can also use leak detection.
-  for(auto p:allocations)std::free(p);
-  std::cout<<"PASS: production Random/PB/hidden/cancel selection, first-frame cues, six USB preview sounds, milestone sounds rendered ahead, actual Best effect/Sound editor helpers, real sliced synth/speaker buffer, pull/close cancellation, late deadline and timer wrap\n";
+  for(auto p:allocations)if(p)std::free(p);
+  std::cout<<"PASS: production Random/PB/hidden/cancel selection, first-frame cues, six USB preview sounds, milestone sounds rendered ahead, a bounded least-recently-used sound cache, actual Best effect/Sound editor helpers, real sliced synth/speaker buffer, pull/close cancellation, late deadline and timer wrap\n";
 }
 '''
-names = ["upcoming", "celebrationEffect", "soundTarget", "requestSound", "tickSound", "prepareMotion", "previewBestEffect", "previewEffect", "previewSound"]
+names = ["milestonePicks", "nextMilestonePick", "upcoming", "celebrationEffect", "soundTarget", "requestSound", "tickSound", "prepareMotion", "previewBestEffect", "previewEffect", "previewSound"]
 code = prefix + speaker + state + deadline + "\n".join(function(source, name) for name in names)
 code += "\nstatic void presentFrame(){\n" + cue + "}\n" + tests
 with tempfile.TemporaryDirectory(prefix="launchlab-best-sound-") as temporary:

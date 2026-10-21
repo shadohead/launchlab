@@ -15,7 +15,8 @@
 // queue was seen empty (idle()) for QUIET_MS after the last byte, never that
 // the loop was slow: a 30 ms redraw or a long export left a continuous burst
 // looking quiet, and a stray 'n' ran on a HIL M5. The two-part forms
-// "g<pin>\n" and "E<digit>" may be typed key by key (TYPING_MS between keys);
+// "g<pin>\n" and "E<id>" may be typed key by key (TYPING_MS between keys),
+// except that an id's second digit must follow its first within QUIET_MS;
 // a pin needs its newline. Inside a continuous burst of other bytes nothing
 // can qualify.
 class UsbCommandGuard {
@@ -89,7 +90,7 @@ private:
   bool extends(char c)const {
     const bool digit=c>='0' && c<='9';
     if(pending_[0]=='g')return digit && used_<MAX;
-    if(pending_[0]=='E')return digit && used_==1;
+    if(pending_[0]=='E')return digit && used_<=2;
     return false;
   }
   bool complete(bool newline)const {

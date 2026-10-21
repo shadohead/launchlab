@@ -1,6 +1,8 @@
 #pragma once
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 // Every color the UI draws, by role (RGB565). The built-in themes keep the
@@ -74,18 +76,40 @@ constexpr uint32_t contrast100(uint16_t a,uint16_t b) {
   const uint64_t la=luminance(a)+50000,lb=luminance(b)+50000;
   return uint32_t(la>=lb?la*100/lb:lb*100/la);
 }
-// Text roles need 4.5:1 on the background (WCAG AA for normal text); muted
-// captions 3:1. The background stays dark: celebrations draw by adding light,
-// which a light background would wash out.
-constexpr uint32_t TEXT_CONTRAST100=450,MUTED_CONTRAST100=300,MAX_BACKGROUND_LUMINANCE=50000;
-inline uint32_t requiredContrast100(unsigned role){return role==Muted?MUTED_CONTRAST100:role==Background?0:TEXT_CONTRAST100;}
+// Advice, not rules: a custom theme may use any colors, and these thresholds
+// only produce warnings (the USB `T` reply, the web editor). Text roles are
+// advised 4.5:1 on the background (WCAG AA for normal text), muted captions
+// 3:1; under 1.5:1 a role is nearly invisible. A light background is allowed,
+// but celebrations draw by adding light, which it washes out.
+constexpr uint32_t TEXT_CONTRAST100=450,MUTED_CONTRAST100=300,INVISIBLE_CONTRAST100=150,LIGHT_BACKGROUND_LUMINANCE=50000;
+inline uint32_t advisedContrast100(unsigned role){return role==Muted?MUTED_CONTRAST100:role==Background?0:TEXT_CONTRAST100;}
+enum class Legibility:uint8_t {Ok,Low,Invisible};
+inline Legibility legibility(unsigned role,uint16_t color,uint16_t background) {
+  if(role==Background || role>=ROLES)return Legibility::Ok;
+  const uint32_t c=contrast100(color,background);
+  return c<INVISIBLE_CONTRAST100?Legibility::Invisible:c<advisedContrast100(role)?Legibility::Low:Legibility::Ok;
+}
+struct Advice {
+  bool lightBackground=false;
+  Legibility role[ROLES]={};
+  bool any()const{for(auto l:role)if(l!=Legibility::Ok)return true;return lightBackground;}
+  // "none", or a comma list of light_background, low_contrast:<role> and
+  // invisible:<role> in role order. 192 bytes always suffice.
+  void format(char *out,size_t n)const {
+    if(!n)return;
+    size_t at=0;out[0]=0;
+    auto put=[&](const char *a,const char *b){const int w=std::snprintf(out+at,n-at,"%s%s%s",at?",":"",a,b);if(w>0)at=std::min(n-1,at+size_t(w));};
+    if(lightBackground)put("light_background","");
+    for(unsigned r=Text;r<ROLES;++r)if(role[r]!=Legibility::Ok)put(role[r]==Legibility::Invisible?"invisible:":"low_contrast:",roleName(r));
+    if(!at)std::snprintf(out,n,"none");
+  }
+};
+constexpr size_t ADVICE_TEXT=192;
 
 // ---- custom themes -----------------------------------------------------------
-enum class Problem:uint8_t {None,Name,BackgroundTooLight,Contrast};
-inline const char *problemName(Problem p) {
-  switch(p){case Problem::Name:return "name";case Problem::BackgroundTooLight:return "background_too_light";
-    case Problem::Contrast:return "contrast";default:return "none";}
-}
+// The only refusal left is a malformed name: colors are never refused.
+enum class Problem:uint8_t {None,Name};
+inline const char *problemName(Problem p){return p==Problem::Name?"name":"none";}
 struct Custom {
   static constexpr unsigned NAME_BYTES=15,MAX_NAME=NAME_BYTES-1,BYTES=1+NAME_BYTES+2*ROLES;
   using Image=uint8_t[BYTES];
@@ -100,14 +124,13 @@ struct Custom {
     for(size_t i=length;i<bytes;++i)if(n[i])return false;
     return true;
   }
-  // The first problem, and with Contrast the role that fails.
-  Problem check(unsigned *failed=nullptr)const {
-    if(!validName(name,NAME_BYTES))return Problem::Name;
-    if(luminance(role[Background])>MAX_BACKGROUND_LUMINANCE)return Problem::BackgroundTooLight;
-    for(unsigned r=Text;r<ROLES;++r)if(contrast100(role[r],role[Background])<requiredContrast100(r)){if(failed)*failed=r;return Problem::Contrast;}
-    return Problem::None;
-  }
+  Problem check()const{return validName(name,NAME_BYTES)?Problem::None:Problem::Name;}
   bool valid()const{return check()==Problem::None;}
+  Advice advice()const {
+    Advice a;a.lightBackground=luminance(role[Background])>LIGHT_BACKGROUND_LUMINANCE;
+    for(unsigned r=Text;r<ROLES;++r)a.role[r]=legibility(r,role[r],role[Background]);
+    return a;
+  }
   Colors colors()const{return derive(role[Background],role[Text],role[Muted],role[Accent],role[Number],role[Warning],role[Ready],role[Alert]);}
   // Record: a used flag (1), the name, then each role little-endian.
   void encode(uint8_t *out)const {

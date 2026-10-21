@@ -1,7 +1,7 @@
 // Palettes and custom themes: built-ins identical to the pre-palette colors,
-// contrast and name validation, slot/library/request records, the stored
-// record's fallback and budget, Settings cycling, and the vectors the web
-// theme editor is tested against.
+// name validation, color warnings (never refusals), slot/library/request
+// records, the stored record's fallback and budget, Settings cycling, and the
+// vectors the web theme editor is tested against.
 #include "../LaunchLabMini/theme_store.h"
 #include "../LaunchLabMini/controls.h"
 #include "theme_vectors.h"
@@ -14,6 +14,11 @@
 using Appearance::Theme;
 static Palette::Custom valid(const char *name="Dragoon Storm",uint16_t accent=0x5c7f) {
   return ThemeVectors::theme(name,{0x0000,0xffff,0x7bef,accent,accent,0xfda0,0x07e0,0xf800});
+}
+
+// Field by field: the struct's padding byte after the name is indeterminate.
+static bool same(const Palette::Custom &a,const Palette::Custom &b) {
+  return !std::memcmp(a.name,b.name,sizeof(a.name)) && !std::memcmp(a.role,b.role,sizeof(a.role));
 }
 
 int main() {
@@ -36,7 +41,7 @@ int main() {
     assert(c==expected);
     // Each built-in is also a valid custom theme, so the editor can start from it.
     Palette::Custom copy=ThemeVectors::theme(Appearance::label(Theme(t)),{c.background,c.text,c.muted,c.accent,c.number,c.warning,c.ready,c.alert});
-    assert(copy.valid() && copy.colors()==c);
+    assert(copy.valid() && !copy.advice().any() && copy.colors()==c);
   }
   // Derived shades sit between the background and muted, channel by channel,
   // on any background.
@@ -48,16 +53,45 @@ int main() {
     }
   }
 
-  // Validation: names, the dark background and each role's contrast.
-  const unsigned none=Palette::ROLES;
-  struct Verdict {Palette::Problem problem;unsigned role;};
-  const Verdict verdicts[]={{Palette::Problem::None,none},{Palette::Problem::None,none},{Palette::Problem::Contrast,Palette::Muted},
-    {Palette::Problem::None,none},{Palette::Problem::BackgroundTooLight,none},{Palette::Problem::Contrast,Palette::Text},
-    {Palette::Problem::Contrast,Palette::Alert},{Palette::Problem::Name,none},{Palette::Problem::Name,none},
-    {Palette::Problem::None,none},{Palette::Problem::Name,none}};
+  // Only the name is validated; colors produce warnings. Each vector's
+  // verdict and warning text, as the USB reply and the web editor show them.
+  struct Verdict {Palette::Problem problem;const char *warnings;};
+  const Verdict verdicts[]={
+    {Palette::Problem::None,"none"},{Palette::Problem::None,"none"},{Palette::Problem::None,"low_contrast:muted"},
+    {Palette::Problem::None,"none"},{Palette::Problem::None,"light_background"},
+    {Palette::Problem::None,"low_contrast:text"},{Palette::Problem::None,"low_contrast:alert"},{Palette::Problem::Name,"none"},
+    {Palette::Problem::Name,"none"},{Palette::Problem::None,"none"},{Palette::Problem::Name,"none"},
+    {Palette::Problem::None,"light_background"},{Palette::Problem::None,"light_background,invisible:text,invisible:alert"},
+    {Palette::Problem::None,"invisible:text,low_contrast:muted"},{Palette::Problem::None,"none"},
+    {Palette::Problem::None,"light_background"}};
   const auto vectors=ThemeVectors::themes();
   assert(vectors.size()==sizeof(verdicts)/sizeof(verdicts[0]));
-  for(size_t i=0;i<vectors.size();++i){unsigned role=none;assert(vectors[i].check(&role)==verdicts[i].problem && role==verdicts[i].role);}
+  for(size_t i=0;i<vectors.size();++i) {
+    char text[Palette::ADVICE_TEXT];vectors[i].advice().format(text,sizeof(text));
+    if(vectors[i].check()!=verdicts[i].problem || std::strcmp(text,verdicts[i].warnings)) {
+      std::cerr<<"vector "<<i<<" ("<<vectors[i].name<<"): "<<Palette::problemName(vectors[i].check())<<" / "<<text<<"\n";return 1;
+    }
+    assert(vectors[i].valid()==(verdicts[i].problem==Palette::Problem::None));
+    assert(vectors[i].advice().any()==bool(std::strcmp(verdicts[i].warnings,"none")));
+  }
+  // The thresholds, role by role: under 1.5:1 nearly invisible, under the
+  // advised ratio (3:1 muted, 4.5:1 the rest) low; the background is never judged.
+  for(unsigned r=0;r<Palette::ROLES;++r)for(uint16_t bg:{0x0000,0x0006,0x7bef,0xffff})for(uint16_t c:{0x0000,0x2965,0x3186,0x5acb,0x5aeb,0x738e,0x73ae,0xffff}) {
+    const uint32_t ratio=Palette::contrast100(c,bg);
+    const auto l=Palette::legibility(r,c,bg);
+    if(r==Palette::Background)assert(l==Palette::Legibility::Ok);
+    else assert(l==(ratio<150?Palette::Legibility::Invisible:ratio<(r==Palette::Muted?300u:450u)?Palette::Legibility::Low:Palette::Legibility::Ok));
+  }
+  // A light background is any above 0.05 luminance, and is a warning only.
+  assert(Palette::luminance(0x41e8)<=Palette::LIGHT_BACKGROUND_LUMINANCE && Palette::luminance(0x3a08)>Palette::LIGHT_BACKGROUND_LUMINANCE);
+  // The longest warning list fits the reply buffer; a short buffer truncates safely.
+  {
+    Palette::Advice all;all.lightBackground=true;for(unsigned r=Palette::Text;r<Palette::ROLES;++r)all.role[r]=Palette::Legibility::Low;
+    char text[Palette::ADVICE_TEXT];all.format(text,sizeof(text));
+    assert(std::strlen(text)<sizeof(text)-1 && !std::strncmp(text,"light_background,low_contrast:text,",35) && std::strstr(text,"low_contrast:alert"));
+    char small[12];std::memset(small,'x',sizeof(small));all.format(small,sizeof(small));assert(std::strlen(small)==sizeof(small)-1);
+    Palette::Advice none;none.format(text,sizeof(text));assert(!std::strcmp(text,"none") && !none.any());
+  }
   {
     char name[Palette::Custom::NAME_BYTES]={};
     std::memcpy(name,"Ember ",6);assert(!Palette::Custom::validName(name,sizeof(name)));
@@ -69,7 +103,7 @@ int main() {
   // Slot records round trip; only flag 1 is a theme.
   {
     uint8_t slot[Themes::SLOT_BYTES];const auto t=vectors[1];t.encode(slot);
-    Palette::Custom back;assert(back.decode(slot) && !std::memcmp(&back,&t,sizeof(t)));
+    Palette::Custom back;assert(back.decode(slot) && same(back,t));
     for(uint8_t flag:{0,2,255}){slot[0]=flag;assert(!back.decode(slot));}
   }
 
@@ -80,7 +114,7 @@ int main() {
     assert(!library.available(Theme(t)) && library.effective(Theme(t))==Themes::FALLBACK);
     assert(library.colors(Theme(t))==Themes::builtIn(Themes::FALLBACK) && !std::strcmp(library.label(Theme(t)),"Pegasus Cyan"));
   }
-  assert(!library.put(4,valid()) && !library.put(0,vectors[2]) && library.revision==0);
+  assert(!library.put(4,valid()) && !library.put(0,vectors[7]) && !library.put(0,vectors[8]) && library.revision==0);
   assert(library.put(1,valid()) && library.revision==1 && library.put(1,valid()) && library.revision==1);
   assert(library.put(3,valid("Ember",0xfb20)) && library.validMask()==0b1010 && library.revision==2);
   assert(library.colors(Themes::slotTheme(1))==valid().colors() && !std::strcmp(library.label(Themes::slotTheme(3)),"Ember"));
@@ -104,11 +138,21 @@ int main() {
     for(size_t i=0;i<image.size();++i){auto bad=image;bad[i]^=1;Themes::Library rejected;assert(!rejected.decode(bad.data(),bad.size()) && rejected.empty());}
     Themes::Library rejected;assert(!rejected.decode(image.data(),image.size()-1));
   }
-  // A slot this firmware cannot accept (another flag, rules it fails) shows
+  // Light and low-contrast themes are accepted, stored and shown like any other.
+  {
+    Themes::Library light=library;
+    for(size_t i:{size_t(2),size_t(4),size_t(5),size_t(11),size_t(12),size_t(13),size_t(15)}) {
+      assert(light.put(0,vectors[i]) && light.state(0)==Themes::SlotState::Valid && light.available(Themes::slotTheme(0)));
+      assert(light.colors(Themes::slotTheme(0))==vectors[i].colors() && !std::strcmp(light.label(Themes::slotTheme(0)),vectors[i].name));
+      Themes::Library::Image stored;light.encode(stored);
+      Themes::Library back;assert(back.decode(stored.data(),stored.size()) && back.state(0)==Themes::SlotState::Valid && back==light);
+    }
+  }
+  // A slot this firmware cannot accept (another flag, a malformed name) shows
   // the default but keeps its bytes for the firmware that wrote it.
   {
     auto odd=image;odd[8+2*Themes::SLOT_BYTES]=2;odd[8+2*Themes::SLOT_BYTES+5]=0x41;
-    uint8_t failing[Themes::SLOT_BYTES];vectors[5].encode(failing);std::memcpy(odd.data()+8,failing,sizeof(failing));
+    uint8_t failing[Themes::SLOT_BYTES];vectors[8].encode(failing);std::memcpy(odd.data()+8,failing,sizeof(failing));
     Appearance::put32(odd.data()+odd.size()-4,Appearance::hash(odd.data(),odd.size()-4));
     Themes::Library kept;assert(kept.decode(odd.data(),odd.size()));
     assert(kept.state(0)==Themes::SlotState::Invalid && kept.state(2)==Themes::SlotState::Invalid && kept.validMask()==0b1010);
@@ -126,7 +170,7 @@ int main() {
       uint8_t b[Themes::Request::BYTES];q.encode(b);Themes::Request back;
       auto copy=[&]{std::array<uint8_t,Themes::Request::BYTES> a;std::memcpy(a.data(),b,sizeof(b));return a;};
       assert(back.decode(b,sizeof(b)) && back.op==op && back.argument==q.argument);
-      if(op==Op::Put)assert(!std::memcmp(&back.theme,&q.theme,sizeof(q.theme)));
+      if(op==Op::Put)assert(same(back.theme,q.theme));
       assert(!back.decode(b,sizeof(b)-1));
       for(size_t i=0;i<sizeof(b);++i){auto bad=copy();bad[i]^=4;assert(!back.decode(bad.data(),bad.size()));}
       auto reseal=[&](uint8_t *p){Appearance::put32(p+Themes::Request::BYTES-4,Appearance::hash(p,Themes::Request::BYTES-4));};
@@ -152,10 +196,15 @@ int main() {
     Preferences::failWrite=true;assert(!store.save(next) && store.pending(next));Preferences::failWrite=false;
     Preferences::shortRead=true;assert(!store.save(next));Preferences::shortRead=false;
     assert(store.save(next));
-    // Corrupt record: the default shows, uploads are refused, the bytes stay.
+    // A light theme is stored and reloaded like any other.
+    auto lit=next;assert(lit.put(3,vectors[11]) && store.save(lit));
+    {Themes::Library t;ThemeStore s;assert(s.begin(t)==ThemeStore::Status::Loaded && t.colors(Themes::slotTheme(3))==vectors[11].colors());}
+    // Corrupt record: the default shows (also for the light theme), uploads
+    // are refused, the bytes stay.
     Preferences::data["ll-appearancethemes"][20]^=0x10;const auto retained=Preferences::data;
     Themes::Library corrupt;ThemeStore damaged;assert(damaged.begin(corrupt)==ThemeStore::Status::Unreadable && corrupt.empty());
     assert(corrupt.colors(Themes::slotTheme(2))==Themes::builtIn(Themes::FALLBACK));
+    assert(corrupt.colors(Themes::slotTheme(3))==Themes::builtIn(Themes::FALLBACK) && !corrupt.available(Themes::slotTheme(3)));
     auto attempt=corrupt;assert(attempt.put(1,valid()) && !damaged.save(attempt) && Preferences::data==retained);
     // A wrong-length record is unreadable too.
     Preferences::data["ll-appearancethemes"].resize(16);
@@ -176,6 +225,7 @@ int main() {
       std::cerr<<"firmware/tests/fixtures/theme_vectors.json is stale: regenerate it with theme_fixture.cpp\n";return 1;
     }
   }
-  std::cout<<"PASS: built-in palettes identical to the pre-palette colors, integer WCAG contrast, name/background/role validation, "
+  std::cout<<"PASS: built-in palettes identical to the pre-palette colors, integer WCAG contrast, name validation, color warnings, "
+             "light and low-contrast themes accepted, "
              "slot/library/request records, default fallback for empty, invalid and unreadable themes, budget, Settings order, web vectors\n";
 }

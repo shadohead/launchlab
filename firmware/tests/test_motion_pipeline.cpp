@@ -87,6 +87,8 @@ static Appearance::Config appearance;static Appearance::Bests personalBests;stat
 static Milestones::Config milestones;
 // Random's pick is device-side (esp_random); a fixed pick keeps the fixture deterministic.
 static Appearance::Effect celebrationEffect(){return appearance.effect==Appearance::Effect::Random?Appearance::Effect::Orbit:appearance.effect;}
+// Single-effect rows here; pools are covered by test_milestones and check_best_sound_pipeline.
+static const Appearance::Effect *milestonePicks(){return nullptr;}
 static Palette::Colors ui(){return Themes::builtIn(appearance.theme);}
 static StickS3Level level;static StickS3Level::Reading drawnLevel;
 static uint64_t motionStart=0,motionEnd=0;
@@ -237,7 +239,13 @@ int main() {
   readyAfter(300,false);require(!bestEffect.badge() && bestStore.pending(personalBests),"first accepted pull establishes a silent baseline without flash writes");
   auto newer=event();newer.resultRpm=8120;prepareMotion(newer);productionStep();require(!bestEffect.badge(),"pending capture must never show a best badge");
   advance(300000);productionStep();require(bestEffect.badge() && bestEffect.moving(millis()) && bestEffect.effect()==celebrationEffect(),"strict higher accepted RPM starts once after completed capture is presented");
-  advance(2000000);productionStep();require(bestEffect.badge() && !bestEffect.moving(millis()),"bounded animation ends but static label remains");
+  // Effects run about 5 s from the recap's first frame: the recap stays up
+  // past its own 5 s until the celebration ends, then closes.
+  require(Appearance::duration(celebrationEffect())>=4800,"the 0.16 effects run about five seconds");
+  advance(4800000);productionStep();require(launchFeedback.shown() && bestEffect.moving(millis()),"the recap stays up while its celebration plays past five seconds");
+  advance(Appearance::duration(celebrationEffect())*1000ull-4800000+100000);productionStep();
+  require(launchFeedback.shown() && bestEffect.badge() && !bestEffect.moving(millis()),"bounded animation ends but static label remains");
+  advance(1000000);productionStep();require(!launchFeedback.shown(),"the recap closes a second after its celebration ends");
   toggleFeedback();toggleFeedback();require(!bestEffect.badge(),"manual replay cannot retrigger the best presentation token");
   prepareMotion(newer);advance(300000);productionStep();require(!bestEffect.badge(),"ties cannot celebrate again");
   newer.resultRpm=8200;prepareMotion(newer);advance(300000);productionStep();require(bestEffect.badge(),"next strict best can celebrate");

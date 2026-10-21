@@ -120,6 +120,14 @@ int main() {
     run.idle(100);run.send("g5");run.idle(25);assert(run.ran.back()=="E3"); // a pin needs its newline
   }
   {
+    // Effect ids from 10 have two digits, sent together; a third is a burst.
+    Run run;run.idle(100);run.send("E12\nE17");run.idle(25);
+    assert((run.ran==std::vector<std::string>{"E12","E17"}));
+    run.idle(100);run.send("E123\n");run.idle(25);assert(run.ran.size()==2);
+    // Typed key by key, a second digit after QUIET_MS is a new burst: E1 runs alone.
+    run.idle(100);run.send("E1");run.idle(25);assert(run.ran.back()=="E1");
+  }
+  {
     // Letters glued together are a burst: "qp" runs only the status letter.
     Run run;run.idle(100);run.send("qp");run.idle(30);assert((run.ran==std::vector<std::string>{"p"}));
     run.idle(100);run.send("hh");run.idle(30);assert((run.ran==std::vector<std::string>{"p"}));
@@ -139,5 +147,5 @@ int main() {
     run.send("\x93");for(char c:std::string("!x\n"))run.guard.consumed(c,run.now);
     run.send("O\n");run.idle(30);assert((run.ran==std::vector<std::string>{"v"}));
   }
-  std::cout<<"PASS: 64 x 16 random 4 KiB bursts with dangerous-letter runs, slow passes and long exports run no guarded command; burst edges neither; K/R, status polling, bare, scripted, CRLF, typed, E<d>/g<pin> and post-HIL commands still run\n";
+  std::cout<<"PASS: 64 x 16 random 4 KiB bursts with dangerous-letter runs, slow passes and long exports run no guarded command; burst edges neither; K/R, status polling, bare, scripted, CRLF, typed, E<id>/g<pin> and post-HIL commands still run\n";
 }

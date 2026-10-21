@@ -8,6 +8,7 @@ No device, user history, NVS partition or release artifact is accessed.
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -116,6 +117,7 @@ static UsbHostAwake usbAwake;
 struct {uint32_t magic=123;}sleepReceipt;
 struct Sound {unsigned stops=0;void stop(){++stops;}}soundPlayer;
 static struct {bool active=false;}soundRequest;
+@CELEBRATION_HOLD@
 struct Feedback {
   bool visible=true;void clear(){visible=false;}bool shown()const{return visible;}
   void show(uint32_t){visible=true;}bool tick(uint32_t){return false;}
@@ -441,6 +443,7 @@ def main():
     names = ["exportCpuPower", "syncNavigation", "navigate", "buttonA", "buttonB", "holdA", "holdB",
              "beginWipe", "cancelWipe", "restartAfterWipe", "commitWipe", "pollWipe", "tickDisplayPower"]
     bodies = "\n".join(function(source, name) for name in names)
+    hold = re.search(r"static constexpr uint32_t CELEBRATION_HOLD_MS=\d+;", source)
     bodies += "\n" + function(source, "recoverWipe", result="bool")
     bodies += "\n" + function(source, "runUsbCommand") + "\n" + function(source, "pollCommands")
     # Execute the exact earliest standby exclusion; the remaining existing
@@ -459,7 +462,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="launchlab-wipe-pipeline-") as temp:
         build = Path(temp)
         cpp = build / "test.cpp"
-        cpp.write_text(PREFIX + bodies + TESTS)
+        cpp.write_text(PREFIX.replace('@CELEBRATION_HOLD@', hold[0] if hold else '') + bodies + TESTS)
         executable = build / "test"
         subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17", "-O1", "-g",
                         "-fsanitize=address,undefined", "-fno-omit-frame-pointer",

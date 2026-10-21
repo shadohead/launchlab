@@ -36,18 +36,26 @@ int main(){
   Preferences::data.clear();Preferences::zeroLengthKeys.clear();
   Config config;AppearanceStore<Config> settings;assert(settings.begin(config,"a","cfg0","cfg1"));
   assert(config.theme==Theme::Classic && config.effect==Effect::Random && config.sound==Sound::Off);
-  // Stored effect values never change: Slash was added after Random.
+  // Stored effect values never change: Slash was added after Random, then
+  // the elemental and physical effects of 0.16 after Slash.
   static_assert(unsigned(Effect::Orbit)==0 && unsigned(Effect::Lightning)==4 && unsigned(Effect::Off)==5 &&
-                unsigned(Effect::Random)==6 && unsigned(Effect::Slash)==7 && EFFECTS==8 && DRAWN==6);
+                unsigned(Effect::Random)==6 && unsigned(Effect::Slash)==7 && unsigned(Effect::Tidal)==8 &&
+                unsigned(Effect::Radiance)==12 && unsigned(Effect::Spin)==13 && unsigned(Effect::Bloom)==17 &&
+                EFFECTS==18 && DRAWN==16);
   for(unsigned i=0;i<DRAWN;++i)assert(drawn(unsigned(drawnEffect(i))) && drawnIndex(drawnEffect(i))==i);
-  assert(!drawn(5) && !drawn(6) && drawn(7) && !drawn(8) && !std::strcmp(label(Effect::Slash),"Slash") && duration(Effect::Slash)==1700);
-  // Settings order Random, Orbit..Lightning, Slash, Off; Random never repeats its previous pick.
-  {Effect e=Effect::Random;unsigned seen=0;for(unsigned i=0;i<EFFECTS;++i){seen|=1u<<unsigned(e);e=nextChoice(e);}
+  for(unsigned e=0;e<EFFECTS;++e)assert(drawn(e)==(e!=5 && e!=6) && std::strlen(label(Effect(e)))<=9 && (duration(Effect(e))>0)==drawn(e));
+  assert(!drawn(EFFECTS) && !drawn(255) && !std::strcmp(label(Effect::Slash),"Slash") && duration(Effect::Slash)==5000);
+  // Every drawn effect runs about 5 s in 0.16.0 (owner: a sustain after the
+  // impact), with a sound of a hit and a short tail.
+  for(unsigned e=0;e<EFFECTS;++e)if(drawn(e))assert(duration(Effect(e))>=4800 && duration(Effect(e))<=5200 && soundDuration(Effect(e))<=2800);
+  // Settings order Random, Orbit..Lightning, Slash, Tidal..Bloom, Off; Random never repeats its previous pick.
+  {Effect e=Effect::Random;uint32_t seen=0;for(unsigned i=0;i<EFFECTS;++i){seen|=1u<<unsigned(e);e=nextChoice(e);}
    assert(e==Effect::Random && seen==(1u<<EFFECTS)-1 && nextChoice(Effect::Random)==Effect::Orbit && nextChoice(Effect::Lightning)==Effect::Slash &&
-          nextChoice(Effect::Slash)==Effect::Off && nextChoice(Effect::Off)==Effect::Random);
-   unsigned picked=0;
-   for(uint32_t bits=0;bits<200;++bits)for(unsigned prev=0;prev<EFFECTS;++prev){const Effect p=pick(bits*2654435761u,Effect(prev));assert(drawn(unsigned(p)) && p!=Effect(prev));picked|=1u<<unsigned(p);}
-   assert(picked==((1u<<5)-1 | 1u<<7));}
+          nextChoice(Effect::Slash)==Effect::Tidal && nextChoice(Effect::Radiance)==Effect::Spin && nextChoice(Effect::Bloom)==Effect::Off &&
+          nextChoice(Effect::Off)==Effect::Random && nextChoice(Effect(EFFECTS))==Effect::Random);
+   uint32_t picked=0;
+   for(uint32_t bits=0;bits<400;++bits)for(unsigned prev=0;prev<EFFECTS;++prev){const Effect p=pick(bits*2654435761u,Effect(prev));assert(drawn(unsigned(p)) && p!=Effect(prev));picked|=1u<<unsigned(p);}
+   assert(picked==((1u<<EFFECTS)-1 & ~(1u<<5 | 1u<<6)));}
   for(unsigned theme=0;theme<THEMES;++theme)for(unsigned effect=0;effect<EFFECTS;++effect){
     assert(config.select(Theme(theme),Effect(effect)) && settings.save(config));
     Config restored;AppearanceStore<Config> reader;assert(reader.begin(restored,"a","cfg0","cfg1"));
@@ -86,7 +94,7 @@ int main(){
   Celebration c;assert(!c.badge());c.queue(true,7,Effect::Orbit);c.captured(6);assert(!c.badge());
   c.captured(7);assert(c.badge() && c.effect()==Effect::Orbit && !c.moving(10));c.presented(0xfffffff0u);
   assert(c.moving(40) && c.elapsed(40)==56);c.presented(40);assert(c.elapsed(40)==56);
-  assert(c.moving(1580) && !c.moving(1600) && c.badge());
+  assert(c.moving(4980) && !c.moving(4984) && c.badge()); // Orbit runs 5000 ms from 0xfffffff0
   Celebration off;off.queue(true,9,Effect::Off);off.captured(9);off.presented(0);assert(off.badge() && !off.moving(0));
   c.clear();c.captured(7);c.presented(20);assert(!c.badge());c.queue(false,8,Effect::Orbit);c.captured(8);assert(!c.badge());
   // Canvas pixels are stored as LGFX sprites keep them: RGB565 big-endian.
@@ -114,30 +122,47 @@ int main(){
   BestEffectUI::Renderer renderer;unsigned frames=0;
   for(unsigned theme=0;theme<THEMES;++theme)for(unsigned mode=0;mode<EFFECTS;++mode) {
     bool drew=false,lower=false,glinted=false;uint32_t maxPlots=0;
-    const bool slash=Effect(mode)==Effect::Slash;
-    for(unsigned ms=0;ms<=2000;ms+=10) {
-      auto out=base;renderer.draw({out.data(),135,240},Effect(mode),ms,accent(Theme(theme)));
-      auto again=base;renderer.draw({again.data(),135,240},Effect(mode),ms,accent(Theme(theme)));
+    const Effect effect=Effect(mode);
+    // How an effect may touch the UI's own pixels. Slash cuts the readout
+    // and slides its halves; Gale leans the readout's rows sideways; Eclipse
+    // dims the readout toward the background. Every other change to UI
+    // pixels brightens header glyphs in every channel (the glint, Frost's
+    // ice and Radiance's flare).
+    const bool slash=effect==Effect::Slash,moves=slash || effect==Effect::Gale,dims=effect==Effect::Eclipse;
+    for(unsigned ms=0;ms<=5300;ms+=10) {
+      auto out=base;renderer.draw({out.data(),135,240},effect,ms,accent(Theme(theme)));
+      auto again=base;renderer.draw({again.data(),135,240},effect,ms,accent(Theme(theme)));
       assert(out==again);maxPlots=std::max(maxPlots,renderer.plots());
+      // From 3/4 of every effect the readout and header are exactly as drawn.
+      const bool settled=drawn(mode) && ms*4>=duration(effect)*3;
       for(int i=0;i<135*240;++i)if(out[i]!=base[i]) {
         const int y=i/135;drew=true;lower|=y>80;
-        // Slash moves the readout's own pixels: only in its rows and the
-        // few rows its halves slide into.
-        if(slash && y>=13-6 && y<=46+6)continue;
+        // Moved readout pixels: only in its rows and the few rows a Slash
+        // half slides into.
+        if(moves && y>=13-6 && y<=46+6){assert(!settled || !base[i]);continue;}
         if(base[i]) {
-          // Only the glint touches UI pixels: header glyphs, brighter in every channel.
           const uint16_t was=swap(base[i]),now=swap(out[i]);
-          assert(!slash && y<=46 && (now>>11)>=(was>>11) && ((now>>5)&63)>=((was>>5)&63) && (now&31)>=(was&31));glinted=true;
+          assert(!slash && y<=46 && !settled);glinted=true;
+          if(!dims)assert((now>>11)>=(was>>11) && ((now>>5)&63)>=((was>>5)&63) && (now&31)>=(was&31));
         } else assert(!halo[i]);
       }
-      if(ms>=duration(Effect(mode)))assert(out==base);
+      if(ms>=duration(effect))assert(out==base);
       ++frames;
     }
     assert(drew==drawn(mode) && glinted==(drew && !slash));
     // Full-screen effects reach behind the replay; the pixel-write bound
     // tracks the per-frame cost measured on the device.
-    if(Effect(mode)==Effect::Sparkles || Effect(mode)==Effect::Shockwave || Effect(mode)==Effect::Lightning || slash)assert(lower);
+    if(effect==Effect::Sparkles || effect==Effect::Shockwave || effect==Effect::Lightning || slash ||
+       effect==Effect::Tidal || effect==Effect::Frost || effect==Effect::Gale)assert(lower);
     assert(maxPlots<=12000);
+  }
+  // Decoration never masks itself, also across the mask's 32-pixel words: on a
+  // canvas without UI, Tidal's sea (stroked left to right, every column) has
+  // no dark columns where a word's mask was built after its neighbour was lit.
+  {
+    std::array<uint16_t,135*240> blank{};
+    renderer.draw({blank.data(),135,240},Effect::Tidal,1000,accent(Theme::Classic));
+    for(int x=0;x<135;++x){bool lit=false;for(int y=0;y<240;++y)lit|=blank[y*135+x]!=0;assert(lit);}
   }
   // A custom theme's background: the same pixels change as on black, since
   // ink is anything not of the background color; untouched pixels keep it.
@@ -175,13 +200,15 @@ int main(){
       auto at=[&](int dx,int dy){unsigned same=0;for(int y=19;y<=24;++y)for(int x=30;x<=80;++x)same+=open[(y+dy)*135+x+dx]==base[y*135+x];return same;};
       unsigned best=0;int bx=0,by=0;
       for(int dy=-6;dy<=0;++dy)for(int dx=0;dx<=14;++dx){const unsigned v=at(dx,dy);if(v>best){best=v;bx=dx;by=dy;}}
-      assert(bx>=3 && bx<=5 && by<=-4 && by>=-6 && best>=280);
+      assert(bx>=2 && bx<=3 && by==-4 && best>=280);
       // Before the split the cut glows on the glyphs left of the blade.
       auto cut=base;renderer.draw({cut.data(),135,240},Effect::Slash,80,color);
       unsigned hot=0;for(int x=10;x<=40;++x){const int y=cutY(x);if(ink(base,x,y) && cut[y*135+x]!=base[y*135+x])++hot;}
       assert(hot>5);
-      // Settled: the readout rows are exactly the original from 1.5 s on.
-      for(unsigned ms=1500;ms<1700;ms+=10){auto out=base;renderer.draw({out.data(),135,240},Effect::Slash,ms,color);assert(out==base);}
+      // Settled: every UI pixel is exactly the original from 1.5 s on,
+      // through the whole sustain (the cooling seam is background only).
+      for(unsigned ms=1500;ms<5000;ms+=250){auto out=base;renderer.draw({out.data(),135,240},Effect::Slash,ms,color);
+        for(int i=0;i<135*240;++i)if(base[i])assert(out[i]==base[i]);}
       // Closed again at 1.35 s: no part of the readout is displaced.
       auto closed=base;renderer.draw({closed.data(),135,240},Effect::Slash,1360,color);
       for(int y=13;y<=46;++y)for(int x=0;x<135;++x)if(base[y*135+x])assert(closed[y*135+x]!=0);
@@ -191,7 +218,8 @@ int main(){
     auto out=themed;renderer.draw({out.data(),135,240},Effect::Slash,600,accent(Theme::Mint),BestEffectUI::Renderer::Anchor(),bg);
     unsigned gap=0;for(int x=20;x<=114;++x){const int y=cutY(x);if(themed[y*135+x]!=swap(bg) && out[y*135+x]==swap(bg))++gap;}
     assert(gap>40);
-    for(unsigned ms=1500;ms<1700;ms+=50){auto o=themed;renderer.draw({o.data(),135,240},Effect::Slash,ms,accent(Theme::Mint),BestEffectUI::Renderer::Anchor(),bg);assert(o==themed);}
+    for(unsigned ms=1500;ms<5000;ms+=350){auto o=themed;renderer.draw({o.data(),135,240},Effect::Slash,ms,accent(Theme::Mint),BestEffectUI::Renderer::Anchor(),bg);
+      for(int i=0;i<135*240;++i)if(themed[i]!=swap(bg))assert(o[i]==themed[i]);}
   }
   // Custom theme IDs follow the built-ins in the same record, which firmware
   // without custom themes rejects (falling back to its other slot or defaults).

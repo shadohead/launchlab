@@ -4,6 +4,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <new>
+#include <variant>
 #include "appearance.h"
 
 // Personal-best sounds, one per effect and timed to it: mono 16-bit PCM at
@@ -13,7 +15,7 @@
 // ~200 Hz.
 namespace BestEffectSound {
 constexpr uint32_t RATE=16000;
-inline size_t samples(Appearance::Effect e){return size_t(Appearance::duration(e))*RATE/1000;}
+inline size_t samples(Appearance::Effect e){return size_t(Appearance::soundDuration(e))*RATE/1000;}
 
 namespace detail {
 constexpr double PI_D=3.14159265358979323846;
@@ -194,31 +196,46 @@ struct Slash {
   }
 };
 }
+}
+#include "best_effect_sound_elemental.h"
+#include "best_effect_sound_physical.h"
+namespace BestEffectSound {
+
+// One effect's generators at a time, in Settings order (Appearance::drawnIndex
+// + 1; 0 is no effect), so the Synth's size is the largest generator's, not
+// the sum of all of them.
+using Generator=std::variant<std::monostate,
+  detail::Orbit,detail::Flames,detail::Sparkles,detail::Shockwave,detail::Lightning,detail::Slash,
+  detail::Tidal,detail::Frost,detail::Gale,detail::Eclipse,detail::Radiance,
+  detail::Spin,detail::Storm,detail::Quickdraw,detail::Leaves,detail::Bloom>;
+static_assert(std::variant_size_v<Generator> == Appearance::DRAWN+1,"one generator per drawn effect");
 
 // Synthesizes one effect's sound, resumable: run() continues where the last
 // call stopped, so the sketch can render a slice per loop pass. A pure
 // function of the effect and length: any slicing gives the same samples.
 class Synth {
 public:
-  Synth(Appearance::Effect e,size_t n):effect_(e),n_(n){}
+  Synth(Appearance::Effect e,size_t n):n_(n) {
+    if(Appearance::drawn(unsigned(e)))select<1>(Appearance::drawnIndex(e)+1);
+  }
+  // Starts over for another effect, built in place: no temporary Synth on
+  // the loop task's stack.
+  void restart(Appearance::Effect e,size_t n){this->~Synth();new(this) Synth(e,n);}
   size_t run(int16_t *out,size_t count) {
     size_t written=0;
-    for(;written<count && index_<n_;++written,++index_)out[written]=limit(sample(index_*(1.0f/RATE)),index_);
+    for(;written<count && index_<n_;++written,++index_)out[written]=limit(next_(generator_,index_*(1.0f/RATE)),index_);
     return written;
   }
   bool done()const{return index_>=n_;}
   size_t index()const{return index_;}
 private:
-  float sample(float t) {
-    using Appearance::Effect;
-    switch(effect_) {
-      case Effect::Orbit:return orbit_.next(t);
-      case Effect::Flames:return flames_.next(t);
-      case Effect::Sparkles:return sparkles_.next(t);
-      case Effect::Shockwave:return shockwave_.next(t);
-      case Effect::Lightning:return lightning_.next(t);
-      case Effect::Slash:return slash_.next(t);
-      default:return 0;
+  // Builds generator I in place and points next_ at it; no std::visit, so
+  // no exception path and one indirect call per sample.
+  template<size_t I> void select(unsigned want) {
+    if constexpr(I<std::variant_size_v<Generator>) {
+      if(I!=want){select<I+1>(want);return;}
+      generator_.template emplace<I>();
+      next_=[](Generator &g,float t){return std::get_if<I>(&g)->next(t);};
     }
   }
   int16_t limit(float v,size_t i)const {
@@ -230,8 +247,9 @@ private:
     const float a=std::fabs(v),d=a-.6f,limited=d<=0?a:.6f+.35f*3*d/(1+3*d);
     return int16_t((v<0?-limited:limited)*32767);
   }
-  Appearance::Effect effect_;size_t n_,index_=0;
-  detail::Orbit orbit_;detail::Flames flames_;detail::Sparkles sparkles_;detail::Shockwave shockwave_;detail::Lightning lightning_;detail::Slash slash_;
+  size_t n_,index_=0;
+  Generator generator_;
+  float (*next_)(Generator &,float)=[](Generator &,float){return 0.0f;};
 };
 
 // Renders the effect's sound into out[0..n), normally n=samples(e).

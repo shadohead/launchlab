@@ -50,6 +50,7 @@ static PM1Idle<Bus> &pm1Idle(){static Bus bus;static PM1Idle<Bus> idle(bus);retu
 static std::vector<void *> allocations;
 static constexpr unsigned MALLOC_CAP_SPIRAM=1;
 static void *heap_caps_malloc(size_t n,unsigned){auto p=std::malloc(n);allocations.push_back(p);return p;}
+static void heap_caps_free(void *p){for(auto &a:allocations)if(a==p)a=nullptr;std::free(p);}
 static int64_t esp_timer_get_time(){return 0;}
 struct StickS3MotionAcquisition {
   bool owned=false,available=true;unsigned locks=0,unlocks=0;

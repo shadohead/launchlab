@@ -62,6 +62,8 @@ def main():
     coalesced = "HISTORY_COALESCE_MS" in source
     constants = "\n".join(re.search(r"static constexpr uint32_t " + name + r"=\d+;", source)[0]
                             for name in ["HISTORY_COALESCE_MS", "HISTORY_SAVE_RETRY_MS"]) if coalesced else ""
+    hold = re.search(r"static constexpr uint32_t CELEBRATION_HOLD_MS=\d+;", source)
+    if hold: constants += "\n" + hold[0]
     # Sketches that schedule by IMU stillness: the launcher is set down.
     still = "static HistoryCheckpoint::Stillness imuStill{true,0};\n" if "imuStill" in source else ""
     header = constants + "\n" + still + "\n".join(function(source, name) for name in ["prepareMotion", "finishMotion", "toggleFeedback", "saveHistory"])

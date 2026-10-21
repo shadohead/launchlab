@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <algorithm>
 #include <cstring>
 #include <cmath>
 
@@ -10,29 +11,38 @@ namespace Appearance {
 // The palette names are Beyblade-inspired, rather than a usage ranking.
 enum class Theme:uint8_t {Classic=0,Mint=1,Amber=2,Violet=3,GolemGreen=4,PhoenixRed=5,CobaltBlue=6,SharkPink=7,ValkyrieWhite=8,TyrannoOrange=9};
 // Stored values: each effect keeps its number, so older records keep their
-// meaning. Random came after Off, and Slash after Random.
-enum class Effect:uint8_t {Orbit,Flames,Sparkles,Shockwave,Lightning,Off,Random,Slash};
+// meaning. Random came after Off, Slash after Random, then the elemental
+// effects (Tidal..Radiance) and the physical ones (Spin..Bloom) in 0.16.
+// Firmware that predates a value rejects a record selecting it and falls
+// back to its other slot or the defaults.
+enum class Effect:uint8_t {Orbit,Flames,Sparkles,Shockwave,Lightning,Off,Random,Slash,
+  Tidal,Frost,Gale,Eclipse,Radiance,Spin,Storm,Quickdraw,Leaves,Bloom};
 // Celebration sound level; Off by default. The speaker is powered only while a sound plays.
 enum class Sound:uint8_t {Off,Low,High};
-// DRAWN effects animate: Orbit..Lightning and Slash. Off and Random do not themselves.
-constexpr unsigned THEMES=10,EFFECTS=8,DRAWN=6,SOUNDS=3;
+// DRAWN effects animate: every effect except Off and Random.
+constexpr unsigned THEMES=10,EFFECTS=18,DRAWN=16,SOUNDS=3;
 // Theme IDs THEMES.. select the user's custom theme slots (theme_library.h).
 // Firmware without custom themes rejects such a record and falls back to its
 // other slot or the defaults, as it does for any newer record.
 constexpr unsigned CUSTOM_THEMES=4,ALL_THEMES=THEMES+CUSTOM_THEMES;
 inline bool custom(Theme t){return unsigned(t)>=THEMES && unsigned(t)<ALL_THEMES;}
-inline bool drawn(unsigned e){return e<5 || e==unsigned(Effect::Slash);}
-// The drawn effects in escalating order, 0..DRAWN-1, and back.
-inline Effect drawnEffect(unsigned i){return i<5?Effect(i):Effect::Slash;}
-inline unsigned drawnIndex(Effect e){return e==Effect::Slash?5:unsigned(e);}
+inline bool drawn(unsigned e){return e<EFFECTS && e!=unsigned(Effect::Off) && e!=unsigned(Effect::Random);}
+// The drawn effects in Settings order, 0..DRAWN-1, and back: the stored
+// order without Off and Random.
+inline Effect drawnEffect(unsigned i){return Effect(i<5?i:i+2);}
+inline unsigned drawnIndex(Effect e){return unsigned(e)<5?unsigned(e):unsigned(e)-2;}
 inline const char *label(Theme t){static const char *s[]={"Pegasus Cyan","Wolf Mint","Wizard Gold","Meteor Purple","Golem Green","Phoenix Red","Cobalt Blue","Shark Pink","Valkyrie White","Tyranno Orange"};return unsigned(t)<THEMES?s[unsigned(t)]:s[0];}
-inline const char *label(Effect e){static const char *s[]={"Orbit","Flames","Sparkles","Shockwave","Lightning","Off","Random","Slash"};return unsigned(e)<EFFECTS?s[unsigned(e)]:s[0];}
+inline const char *label(Effect e) {
+  static const char *s[]={"Orbit","Flames","Sparkles","Shockwave","Lightning","Off","Random","Slash",
+    "Tidal","Frost","Gale","Eclipse","Radiance","Spin","Storm","Quickdraw","Leaves","Bloom"};
+  static_assert(sizeof(s)/sizeof(s[0])==EFFECTS,"one label per effect");
+  return unsigned(e)<EFFECTS?s[unsigned(e)]:s[0];
+}
 // Settings order: Random first, then each drawn effect, Off last.
 inline Effect nextChoice(Effect e) {
   if(e==Effect::Random)return Effect::Orbit;
-  if(e==Effect::Off)return Effect::Random;
-  if(e==Effect::Slash)return Effect::Off;
-  return drawnEffect(drawnIndex(e)+1);
+  if(!drawn(unsigned(e)))return Effect::Random;
+  const unsigned i=drawnIndex(e)+1;return i<DRAWN?drawnEffect(i):Effect::Off;
 }
 // A Random pick: any drawn effect except the previous one.
 inline Effect pick(uint32_t bits,Effect previous) {
@@ -41,7 +51,22 @@ inline Effect pick(uint32_t bits,Effect previous) {
 }
 inline const char *label(Sound s){static const char *n[]={"Off","Low","High"};return unsigned(s)<SOUNDS?n[unsigned(s)]:n[0];}
 inline uint16_t accent(Theme t){static constexpr uint16_t c[]={0x07ff,0x8ff9,0xff10,0xc5bf,0x77e6,0xfa8a,0x5c7f,0xfb9f,0xffff,0xfd00};return unsigned(t)<THEMES?c[unsigned(t)]:c[0];}
-inline uint32_t duration(Effect e){static constexpr uint16_t ms[]={1600,1800,1600,1300,1500,0,0,1700};return unsigned(e)<EFFECTS?ms[unsigned(e)]:0;}
+inline uint32_t duration(Effect e) {
+  static constexpr uint16_t ms[]={5000,5100,5000,4900,5000,0,0,5000,
+    5000,5000,4800,5200,5000,  // Tidal, Frost, Gale, Eclipse, Radiance
+    5000,5100,4900,5000,5100}; // Spin, Storm, Quickdraw, Leaves, Bloom
+  static_assert(sizeof(ms)/sizeof(ms[0])==EFFECTS,"one duration per effect");
+  return unsigned(e)<EFFECTS?ms[unsigned(e)]:0;
+}
+// How long each effect's sound runs, from the effect's start: the hit and a
+// short tail, never a drone under a long effect, and never past the effect.
+inline uint32_t soundDuration(Effect e) {
+  static constexpr uint16_t ms[]={1700,1800,1600,1300,1500,0,0,1700,
+    2600,2600,2600,2800,2700,  // Tidal, Frost, Gale, Eclipse, Radiance
+    2600,2600,2300,2500,2600}; // Spin, Storm, Quickdraw, Leaves, Bloom
+  static_assert(sizeof(ms)/sizeof(ms[0])==EFFECTS,"one sound length per effect");
+  return unsigned(e)<EFFECTS?std::min<uint32_t>(ms[unsigned(e)],duration(e)):0;
+}
 inline uint32_t hash(const uint8_t *p,size_t n){uint32_t h=2166136261u;while(n--){h^=*p++;h*=16777619u;}return h;}
 inline uint32_t get32(const uint8_t *p){return uint32_t(p[0])|uint32_t(p[1])<<8|uint32_t(p[2])<<16|uint32_t(p[3])<<24;}
 inline void put32(uint8_t *p,uint32_t v){for(unsigned i=0;i<4;++i)p[i]=uint8_t(v>>(8*i));}

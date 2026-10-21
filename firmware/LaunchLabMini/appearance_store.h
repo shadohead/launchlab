@@ -21,6 +21,7 @@ public:
       if(n!=image.size() || prefs_.getBytes(keys_[i],image.data(),image.size())!=image.size() || !candidate.decode(image.data(),image.size()))continue;
       if(!found || int32_t(candidate.generation()-value.generation())>0){value=candidate;slot_=i;found=true;}
     }
+    present_=present;
     if(present && !found){damaged_=true;ready_=replaceUnreadable;saved_=value.generation();return false;}
     saved_=value.generation();return true;
   }
@@ -35,7 +36,9 @@ public:
   }
   bool ready()const{return ready_;}
   bool damaged()const{return damaged_;}
+  // Whether either key existed at begin(): false on a device that never saved this record.
+  bool present()const{return present_;}
   bool pending(const Value &v)const{return v.generation()!=saved_;}
 private:
-  Preferences prefs_;const char *keys_[2]={};uint32_t saved_=0;unsigned slot_=0;bool ready_=false,damaged_=false;
+  Preferences prefs_;const char *keys_[2]={};uint32_t saved_=0;unsigned slot_=0;bool ready_=false,damaged_=false,present_=false;
 };

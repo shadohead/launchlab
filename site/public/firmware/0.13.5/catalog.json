@@ -517,6 +517,15 @@
       "md5": "65a835b561e0752eb722d217ac607b59",
       "elfSha256": "060421164e6257cf59620874ab51f93ad3da5951cc7d72afb98e80c3a9c7d8b7",
       "sensor": "qre1113"
+    },
+    {
+      "version": "0.16.0",
+      "runtime": "0.16.0-sticks3-effects-pm",
+      "size": 927984,
+      "sha256": "76793b16c9b75a0c5d04bc8a9139cdbfa8f57e49e646e37f1c1205cb7c0e25ba",
+      "md5": "3d1dc2352042caf50408b97aa8c1092c",
+      "elfSha256": "3b938150b69141965d5b6055dec26d6be3e1789bf9b35586185ace2b75e9a1a0",
+      "sensor": "qre1113"
     }
   ]
 }

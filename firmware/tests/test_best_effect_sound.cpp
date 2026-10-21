@@ -10,7 +10,9 @@ int main() {
   assert(BestEffectSound::samples(Effect::Off)==0 && BestEffectSound::samples(Effect::Random)==0);
   for(unsigned e=0;e<Appearance::DRAWN;++e) {
     const auto effect=Appearance::drawnEffect(e);const size_t n=BestEffectSound::samples(effect);
-    assert(n==Appearance::duration(effect)*BestEffectSound::RATE/1000);
+    assert(n==Appearance::soundDuration(effect)*BestEffectSound::RATE/1000 && Appearance::soundDuration(effect)<=Appearance::duration(effect));
+    // A hit and a short tail, not a drone under a long effect.
+    assert(Appearance::soundDuration(effect)>=1000 && Appearance::soundDuration(effect)<=2800);
     std::vector<int16_t> a(n),b(n);
     BestEffectSound::render(effect,a.data(),n);BestEffectSound::render(effect,b.data(),n);
     assert(a==b);
