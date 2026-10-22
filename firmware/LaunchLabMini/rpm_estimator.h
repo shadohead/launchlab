@@ -2,7 +2,9 @@
 #include <cstdint>
 namespace RpmEstimator {
 enum class Mode:uint8_t { ThreeTurn, SingleTurn };
-static constexpr Mode DEFAULT_MODE=Mode::ThreeTurn;
+// A unit with no saved method (new, never changed, or after Wipe all) uses
+// the default; a saved method always wins.
+static constexpr Mode DEFAULT_MODE=Mode::SingleTurn;
 inline bool valid(uint8_t value){return value<=uint8_t(Mode::SingleTurn);}
 inline Mode next(Mode mode){return mode==Mode::ThreeTurn?Mode::SingleTurn:Mode::ThreeTurn;}
 inline const char *name(Mode mode){return mode==Mode::ThreeTurn?"three_turn_peak":"single_turn_peak";}

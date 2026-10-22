@@ -22,9 +22,12 @@ def function(name):
 prefix=r'''
 #include "controls.h"
 #include "appearance_store.h"
+#include "milestone_store.h"
 #include "theme_library.h"
 #include "analog_tachometer.h"
 #include "rpm_estimator_setting.h"
+#include "brightness.h"
+#include "device_wipe.h"
 #include "display_flip_setting.h"
 #include "display_orientation.h"
 #include "sensor_profile_setting.h"
@@ -47,7 +50,7 @@ prefix+=practice_ui[practice_ui.index('namespace PracticeUI {'):practice_ui.inde
 prefix+=r'''
 static Appearance::Config appearance;static Appearance::Bests personalBests;static Themes::Library themeLibrary;
 static AppearanceStore<Appearance::Bests> bestStore;static AppearanceStore<Appearance::Config> appearanceStore;static Appearance::Celebration bestEffect;
-static Milestones::Config milestones;static AppearanceStore<Milestones::Config> milestoneStore;
+static Milestones::Config milestones;static MilestoneStore milestoneStore;
 static uint32_t clockMs=10000;static uint32_t millis(){return clockMs;}
 static unsigned soundPreviews=0,effectPreviews=0;static void previewSound(){++soundPreviews;}static void previewEffect(){++effectPreviews;}
 using Controls::Page;
@@ -58,7 +61,7 @@ static bool wipeFailed=false,wipeBlocked=false;
 static struct {void cancel(){}}restoreRx;
 static void beginWipe();static void cancelWipe();
 static bool tournamentMode=false,historyPage=false,dirty=false,diagnostics=false,demo=false,motionDemo=false,motionPending=false,settingsSaveError=false,restorePreview=false,displayFlipped=false;
-static uint8_t brightnessPercent=40;
+static uint8_t brightnessPercent=Brightness::DEFAULT_PERCENT;
 static uint32_t historyOffset=0,newSessionAt=0,tournamentHintUntil=0;
 enum class TournamentView:uint8_t{RecordingOnly,Rpm};
 static TournamentView tournamentView=TournamentView::RecordingOnly;
@@ -84,6 +87,9 @@ struct Prefs:Preferences {
   size_t putBytes(const char *key,const void *data,size_t size){++writes;return Preferences::putBytes(key,data,size);}
 }prefs;
 static uint8_t backlightValue(){return (unsigned(brightnessPercent)*255+50)/100;}
+// The default brightness, its next step and their backlight values.
+static constexpr unsigned BRIGHT=Brightness::DEFAULT_PERCENT;
+static constexpr unsigned light(unsigned percent){return (percent*255+50)/100;}
 struct Snapshot{AnalogTachometer::Phase phase=AnalogTachometer::Phase::Ready;uint32_t launches=0;
   bool ready=true,suspended=false,opticalIdle=true,signalFault=false;uint8_t pin=1;
   RpmEstimator::Mode estimator=RpmEstimator::DEFAULT_MODE;StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;};
@@ -111,8 +117,8 @@ struct Acquisition {
 }acquisition;
 // Every NVS write happens inside a checkpoint, except the boot-load fixtures.
 static void writeGuard(){assert(acquisition.held || directWrites);}
-struct {struct {unsigned brightness=102,rotation=0;void setBrightness(unsigned value){brightness=value;}void setRotation(unsigned value){rotation=value;}uint8_t getRotation()const{return rotation;}}Display;}M5;
-struct {template<class... T>void printf(const char*,T...){}void println(const char*){}}Serial;
+struct {struct {unsigned brightness=light(BRIGHT),rotation=0;void setBrightness(unsigned value){brightness=value;}void setRotation(unsigned value){rotation=value;}uint8_t getRotation()const{return rotation;}}Display;}M5;
+struct {std::string last;template<class... T>void printf(const char *format,T...){last=format;}void println(const char *text){last=text;}}Serial;
 '''
 # Exercise the actual startup/wake setting load and LCD mapping, in addition
 # to the full edit handlers. No copied physical-orientation implementation.
@@ -123,6 +129,18 @@ prefix+='\nstatic void restoreDisplayAtBoot(){'+load_statement+boot_rotation+'}\
 mount_load_start=source.index('  if(!MountOrientationSetting::load(')
 mount_load=source[mount_load_start:source.index('liveMount=mountMode;',mount_load_start)+len('liveMount=mountMode;')]
 prefix+='\nstatic void restoreMountAtBoot(){'+mount_load+'assert(liveMount==mountMode && imuAcquisition.setMount(mountMode));}\n'
+# The sketch's own boot loads of the RPM method, sensor profile, sleep and
+# brightness, with their notices: everything from the RPM load up to the
+# display flip load, which restoreDisplayAtBoot covers.
+settings_start=source.index('  if(!RpmEstimatorSetting::load(prefs,rpmEstimator))')
+settings_load=source[settings_start:load_start]
+assert 'Brightness::load(prefs,brightnessPercent)' in settings_load
+prefix+='\nstatic void restoreSettingsAtBoot(){'+settings_load+'}\n'
+# The sketch's own boot load of the milestone record (Celebrate mode and
+# table), including the one-time import of 0.15's record.
+milestone_start=source.index('  milestoneStore.begin(milestones);')
+milestone_load=source[milestone_start:source.index('  if(!effectSetStore.begin(',milestone_start)]
+prefix+='\nstatic void restoreMilestonesAtBoot(){'+milestone_load+'}\n'
 visible_start=source.index('static bool visibleDisplayFlipped()')
 prefix+='\n'+source[visible_start:source.index('}',visible_start)+1]+'\n'
 tests=r'''
@@ -130,18 +148,119 @@ static void reset(){
   controls={};appearance={};appearanceStore={};bestEffect={};tournamentMode=historyPage=dirty=diagnostics=demo=motionDemo=motionPending=settingsSaveError=restorePreview=displayFlipped=false;
   gestureA={};gestureB={};wipeConfirmation={};wipeFailed=wipeBlocked=false;
   historyOffset=newSessionAt=tournamentHintUntil=0;historyView=PracticeUI::View::Recent;tournamentView=TournamentView::RecordingOnly;
-  practice={};demoPractice={};latestMotion={};launchFeedback={};inactivity={};brightnessPercent=40;rpmEstimator=RpmEstimator::DEFAULT_MODE;sensorProfile=StickS3SensorProfile::DEFAULT_MODE;
-  acquisition={};prefs={};M5.Display.brightness=102;M5.Display.rotation=2;
+  practice={};demoPractice={};latestMotion={};launchFeedback={};inactivity={};brightnessPercent=BRIGHT;rpmEstimator=RpmEstimator::DEFAULT_MODE;sensorProfile=StickS3SensorProfile::DEFAULT_MODE;
+  acquisition={};prefs={};M5.Display.brightness=light(BRIGHT);M5.Display.rotation=2;
   mountMode=liveMount=MountOrientation::Mode::Top;imuAcquisition={};level={};drawnLevel={};lastLevelSampleUs=0;
   clockMs=10000;settingsSave={};extPower=directWrites=false;
   Preferences::data.clear();Preferences::zeroLengthKeys.clear();Preferences::failWrite=Preferences::shortRead=false;Preferences::beforeWrite=writeGuard;
   assert(prefs.begin("controls-test",false));assert(appearanceStore.begin(appearance,"controls-appearance","cfg0","cfg1"));
-  milestones={};milestoneStore={};assert(milestoneStore.begin(milestones,"controls-appearance","mile0","mile1",true));
+  milestones={};milestoneStore={};milestoneStore.begin(milestones,"controls-appearance");assert(milestoneStore.ready());
 }
 static void retry(uint32_t ms){clockMs+=ms;saveSettings(millis(),acquisition.snapshot());}
 static uint8_t stored(const char *key){uint8_t value=0;assert(prefs.getBytes(key,&value,1)==1);return value;}
+// Boot on the store as it is: the RPM method and brightness the sketch runs
+// with, and whether boot wrote anything (it never migrates a record).
+static void boot(){Serial.last.clear();rpmEstimator=RpmEstimator::Mode(99);brightnessPercent=0;prefs.writes=0;restoreSettingsAtBoot();}
+static void freshStore(){reset();assert(prefs.begin("launchlab-mini",false));directWrites=true;}
+// A minimal DeviceWipe store over the fake NVS map, so the real wipe
+// transaction decides which namespaces are erased.
+struct WipeStore {
+  bool clearFlash(){return true;}
+  static std::string key(const char *space,const char *name){return std::string(space)+name;}
+  DeviceWipe::State inspectIntent(){
+    const auto i=Preferences::data.find(key(DeviceWipe::INTENT_SPACE,DeviceWipe::INTENT_KEY));
+    if(i==Preferences::data.end())return DeviceWipe::State::Clean;
+    return i->second==std::vector<unsigned char>(std::begin(DeviceWipe::INTENT_BYTES),std::end(DeviceWipe::INTENT_BYTES))?
+      DeviceWipe::State::Pending:DeviceWipe::State::Invalid;
+  }
+  bool setIntent(){Preferences::data[key(DeviceWipe::INTENT_SPACE,DeviceWipe::INTENT_KEY)]={std::begin(DeviceWipe::INTENT_BYTES),std::end(DeviceWipe::INTENT_BYTES)};return true;}
+  bool clearNamespace(const char *space){
+    if(!DeviceWipe::ownedNamespace(space))return false;
+    for(auto i=Preferences::data.begin();i!=Preferences::data.end();)i=i->first.rfind(space,0)==0?Preferences::data.erase(i):std::next(i);
+    return true;
+  }
+  bool clearIntent(){Preferences::data.erase(key(DeviceWipe::INTENT_SPACE,DeviceWipe::INTENT_KEY));return true;}
+};
+static void bootDefaults() {
+  // The owner's choice for a unit with no saved value (2026-10-21).
+  static_assert(RpmEstimator::DEFAULT_MODE==RpmEstimator::Mode::SingleTurn && Brightness::DEFAULT_PERCENT==30);
+  static_assert(Milestones::DEFAULT_MODE==Milestones::Mode::Both);
+  static_assert(Brightness::valid(Brightness::DEFAULT_PERCENT));
+  // New unit: the defaults, and nothing is written.
+  freshStore();boot();
+  assert(rpmEstimator==RpmEstimator::DEFAULT_MODE && brightnessPercent==Brightness::DEFAULT_PERCENT && !prefs.writes && Serial.last.empty());
+  assert(Preferences::data.empty());
+  // Updated from 0.15 or 0.17 having changed other settings but never these
+  // two: there is no record of them, so the unit moves to the defaults.
+  freshStore();assert(prefs.putUChar("sleep_min",5)==1 && DisplayFlipSetting::save(prefs,true) && SensorProfileSetting::save(prefs,StickS3SensorProfile::Mode::Tcrt));
+  {const auto before=Preferences::data;boot();
+   assert(rpmEstimator==RpmEstimator::DEFAULT_MODE && brightnessPercent==Brightness::DEFAULT_PERCENT && Preferences::data==before && !prefs.writes);}
+  // Every saved choice wins over the defaults and is never rewritten,
+  // including the old defaults (3-turn average, 40%) saved by earlier firmware.
+  for(auto method:{RpmEstimator::Mode::ThreeTurn,RpmEstimator::Mode::SingleTurn})for(unsigned percent=10;percent<=100;percent+=10) {
+    freshStore();assert(RpmEstimatorSetting::save(prefs,method) && prefs.putUChar(Brightness::KEY,uint8_t(percent))==1);
+    const auto before=Preferences::data;boot();
+    assert(rpmEstimator==method && brightnessPercent==percent && Preferences::data==before && !prefs.writes && Serial.last.empty());
+  }
+  // Invalid records: the defaults are used, the bytes are kept and each
+  // notice names the default it fell back to.
+  for(uint8_t percent:{0,5,45,110,255}) {
+    freshStore();assert(RpmEstimatorSetting::save(prefs,RpmEstimator::Mode::ThreeTurn) && prefs.putUChar(Brightness::KEY,percent)==1);
+    Preferences::data["launchlab-minirpm_method"][2]=7;const auto before=Preferences::data;boot();
+    assert(rpmEstimator==RpmEstimator::DEFAULT_MODE && brightnessPercent==Brightness::DEFAULT_PERCENT && Preferences::data==before && !prefs.writes);
+    assert(Serial.last.rfind("BRIGHTNESS_SETTING_NOTICE invalid_saved_value_using_default_pct=",0)==0);
+  }
+  {freshStore();assert(RpmEstimatorSetting::save(prefs,RpmEstimator::Mode::ThreeTurn));Preferences::data["launchlab-minirpm_method"][2]=7;
+   boot();assert(rpmEstimator==RpmEstimator::DEFAULT_MODE && brightnessPercent==Brightness::DEFAULT_PERCENT);
+   assert(Serial.last=="RPM_SETTING_NOTICE invalid_record_retained_using_default=%s\n");}
+  // Wipe all erases the saved choices with the rest, so the unit restarts on the defaults.
+  freshStore();assert(RpmEstimatorSetting::save(prefs,RpmEstimator::Mode::ThreeTurn) && prefs.putUChar(Brightness::KEY,40)==1);
+  {WipeStore store;assert(DeviceWipe::begin(store)==DeviceWipe::Result::Complete && Preferences::data.empty());}
+  boot();assert(rpmEstimator==RpmEstimator::DEFAULT_MODE && brightnessPercent==Brightness::DEFAULT_PERCENT && !prefs.writes && Serial.last.empty());
+  directWrites=false;
+}
+// Boot the milestone record as the sketch does: its RAM copy starts as the
+// defaults (a static Config) and only a readable saved record replaces it.
+static void bootMilestones(){Serial.last.clear();milestones=Milestones::Config{};milestoneStore={};restoreMilestonesAtBoot();}
+static void saveMilestones(Milestones::Mode mode,bool v1=false) {
+  Milestones::Config c;
+  if(v1){Milestones::V1Record r;AppearanceStore<Milestones::V1Record> s;assert(s.begin(r,"ll-appearance","mile0","mile1",true));
+    assert(r.table.select(mode));if(r.table.isDefault())++r.table.revision;assert(s.save(r));return;}
+  MilestoneStore s;s.begin(c);assert(s.ready());
+  assert(c.select(mode));if(c.isDefault())++c.revision;assert(s.save(c));
+}
+static void bootCelebrateDefault() {
+  using Milestones::Mode;
+  const auto fresh=[](){freshStore();directWrites=true;};
+  // New unit: Both with the default table, nothing written.
+  fresh();bootMilestones();
+  assert(milestones.mode()==Milestones::DEFAULT_MODE && milestones.isDefault() && milestones.count()==Milestones::DEFAULT_COUNT);
+  assert(Preferences::data.empty() && Serial.last.empty());
+  // Updated from 0.15 or 0.17 having changed other settings but never Celebrate: no record, so the default.
+  fresh();assert(prefs.putUChar("sleep_min",5)==1 && RpmEstimatorSetting::save(prefs,RpmEstimator::Mode::ThreeTurn));
+  {const auto before=Preferences::data;bootMilestones();assert(milestones.isDefault() && Preferences::data==before);}
+  // A saved mode wins, from this firmware's record or 0.15's, the old default (New best) included.
+  for(bool v1:{false,true})for(auto mode:{Mode::Best,Mode::Milestones,Mode::Both}) {
+    fresh();saveMilestones(mode,v1);assert(!Preferences::data.empty());const auto before=Preferences::data;bootMilestones();
+    assert(milestones.mode()==mode && Preferences::data==before);
+    assert(v1?Serial.last=="MILESTONE_NOTICE imported_v1_table":Serial.last.empty());
+  }
+  // A damaged record: the defaults, the bytes kept, the notice.
+  for(bool v1:{false,true}) {
+    fresh();saveMilestones(Mode::Best,v1);
+    for(auto &item:Preferences::data)if(item.first.rfind("ll-appearance",0)==0)item.second[item.second.size()/2]^=0xff;
+    const auto before=Preferences::data;bootMilestones();
+    assert(milestones.isDefault() && Preferences::data==before && Serial.last=="MILESTONE_NOTICE invalid_record_using_defaults");
+  }
+  // Wipe all erases the record, so the unit restarts on the default.
+  fresh();saveMilestones(Mode::Best);
+  {WipeStore store;assert(DeviceWipe::begin(store)==DeviceWipe::Result::Complete && Preferences::data.empty());}
+  bootMilestones();assert(milestones.isDefault() && milestones.mode()==Milestones::DEFAULT_MODE && Serial.last.empty());
+  directWrites=false;milestones={};milestoneStore={};
+}
 static void edit(unsigned row){controls.page=Page::Settings;controls.setting=row;syncNavigation();buttonA();assert(controls.page==Page::Edit);}
 int main(){
+  bootDefaults();bootCelebrateDefault();
   reset();restoreMountAtBoot();assert(mountMode==MountOrientation::Mode::Top && !prefs.writes);
   for(auto selected:{MountOrientation::Mode::Sidecar,MountOrientation::Mode::Top}) {
     directWrites=true;assert(MountOrientationSetting::save(prefs,selected));directWrites=false;const auto stored=Preferences::data;
@@ -156,33 +275,33 @@ int main(){
   }
   reset();buttonA();holdB();assert(!launchFeedback.shown() && controls.page==Page::Main);
   reset();edit(2);acquisition.state.phase=AnalogTachometer::Phase::Launch;buttonB();
-  assert(controls.draft==50 && brightnessPercent==40 && M5.Display.brightness==102 && restorePreview);
+  assert(controls.draft==BRIGHT+10 && brightnessPercent==BRIGHT && M5.Display.brightness==light(BRIGHT) && restorePreview);
   acquisition.state.phase=AnalogTachometer::Phase::Ready;previewSetting();
-  assert(M5.Display.brightness==128 && !restorePreview);holdB();assert(M5.Display.brightness==102 && !prefs.writes);
+  assert(M5.Display.brightness==light(BRIGHT+10) && !restorePreview);holdB();assert(M5.Display.brightness==light(BRIGHT) && !prefs.writes);
   reset();buttonA();assert(launchFeedback.shown());buttonB();assert(!launchFeedback.shown() && controls.page==Page::Menu);
   buttonA();assert(controls.page==Page::HistoryMenu);buttonA();assert(controls.page==Page::History);
   assert(practice.accept(1,true,6000,millis()));buttonB();holdB();assert(controls.page==Page::HistoryMenu);
   holdB();holdB();assert(controls.page==Page::Main && !historyPage);
-  reset();edit(2);buttonB();assert(controls.draft==50 && brightnessPercent==40 && M5.Display.brightness==128 && !prefs.writes);
-  holdB();assert(controls.page==Page::Settings && brightnessPercent==40 && M5.Display.brightness==102 && !prefs.writes);
-  edit(2);buttonB();buttonA();assert(controls.page==Page::Settings && brightnessPercent==50 && M5.Display.brightness==128 && prefs.writes && !settingsSaveError);
-  assert(!settingsSave.pending() && stored("bright_pct")==50 && acquisition.begins==1 && acquisition.begins==acquisition.ends && !acquisition.held);
+  reset();edit(2);buttonB();assert(controls.draft==BRIGHT+10 && brightnessPercent==BRIGHT && M5.Display.brightness==light(BRIGHT+10) && !prefs.writes);
+  holdB();assert(controls.page==Page::Settings && brightnessPercent==BRIGHT && M5.Display.brightness==light(BRIGHT) && !prefs.writes);
+  edit(2);buttonB();buttonA();assert(controls.page==Page::Settings && brightnessPercent==BRIGHT+10 && M5.Display.brightness==light(BRIGHT+10) && prefs.writes && !settingsSaveError);
+  assert(!settingsSave.pending() && stored(Brightness::KEY)==BRIGHT+10 && acquisition.begins==1 && acquisition.begins==acquisition.ends && !acquisition.held);
   // Applying the unchanged value closes the editor without a checkpoint.
   edit(2);buttonA();assert(controls.page==Page::Settings && acquisition.begins==1 && !settingsSave.pending());
   // The reported failure: pressing A jiggles the launcher, so the owner sees a
   // fresh strong mark at that instant. Apply still takes the value, and the
   // record follows once the signal is quiet, without another press.
   edit(2);buttonB();acquisition.quietSignal=false;buttonA();
-  assert(controls.page==Page::Settings && !settingsSaveError && brightnessPercent==60 && M5.Display.brightness==153);
-  assert(settingsSave.pending()==SettingsSave::Brightness && !acquisition.refusals && stored("bright_pct")==50);
+  assert(controls.page==Page::Settings && !settingsSaveError && brightnessPercent==BRIGHT+20 && M5.Display.brightness==light(BRIGHT+20));
+  assert(settingsSave.pending()==SettingsSave::Brightness && !acquisition.refusals && stored(Brightness::KEY)==BRIGHT+10);
   retry(20);assert(!acquisition.refusals && settingsSave.pending()); // No request while the owner would refuse.
-  acquisition.quietSignal=true;retry(20);assert(!settingsSave.pending() && stored("bright_pct")==60);
+  acquisition.quietSignal=true;retry(20);assert(!settingsSave.pending() && stored(Brightness::KEY)==BRIGHT+20);
   // A mark that reaches the owner after the idle snapshot: one refusal, then
   // a bounded retry (no IMU quiet wait on every UI tick).
   edit(2);buttonB();acquisition.refuseNext=true;buttonA();
-  assert(controls.page==Page::Settings && brightnessPercent==70 && acquisition.refusals==1 && settingsSave.refusals()==1 && settingsSave.pending());
+  assert(controls.page==Page::Settings && brightnessPercent==BRIGHT+30 && acquisition.refusals==1 && settingsSave.refusals()==1 && settingsSave.pending());
   retry(SettingsSave::RETRY_MS-1);assert(settingsSave.pending() && acquisition.refusals==1);
-  retry(1);assert(!settingsSave.pending() && stored("bright_pct")==70 && acquisition.begins==acquisition.ends);
+  retry(1);assert(!settingsSave.pending() && stored(Brightness::KEY)==BRIGHT+30 && acquisition.begins==acquisition.ends);
   reset();edit(3);assert(!visibleDisplayFlipped());buttonB();assert(!displayFlipped && visibleDisplayFlipped() && M5.Display.rotation==0 && !prefs.writes);
   holdB();assert(!visibleDisplayFlipped() && M5.Display.rotation==2 && !prefs.writes);
   // A failed write keeps the applied choice and its record pending, retried
@@ -208,16 +327,17 @@ int main(){
   acquisition.state.phase=AnalogTachometer::Phase::Ready;motionPending=true;retry(20);assert(!prefs.writes && !acquisition.refusals);
   motionPending=false;retry(20);assert(!settingsSave.pending() && stored("sleep_min")==10 && !acquisition.refusals);
   reset();assert(practice.accept(1,true,6000,millis()));const auto session=practice.session()->number;
-  edit(1);buttonB();assert(rpmEstimator==RpmEstimator::Mode::ThreeTurn && practice.session()->number==session);
+  const auto otherMethod=RpmEstimator::next(RpmEstimator::DEFAULT_MODE);
+  edit(1);buttonB();assert(rpmEstimator==RpmEstimator::DEFAULT_MODE && practice.session()->number==session);
   holdB();assert(practice.accept(2,true,6100,millis()) && practice.session()->number==session);
-  edit(1);buttonB();buttonA();assert(rpmEstimator==RpmEstimator::Mode::SingleTurn && acquisition.estimatorChanges==1 && acquisition.state.estimator==rpmEstimator);
+  edit(1);buttonB();buttonA();assert(rpmEstimator==otherMethod && acquisition.estimatorChanges==1 && acquisition.state.estimator==rpmEstimator);
   assert(practice.accept(3,true,6200,millis()) && practice.session()->number==session+1 && practice.size()==3);
   // A metric switch the owner refuses keeps the old live metric, record and
   // session until it succeeds; the choice itself is kept and retried.
   reset();assert(practice.accept(1,true,6000,millis()));const auto metricSession=practice.session()->number;
   edit(1);buttonB();acquisition.failEstimator=true;buttonA();
-  assert(controls.page==Page::Settings && rpmEstimator==RpmEstimator::Mode::SingleTurn && acquisition.state.estimator==RpmEstimator::Mode::ThreeTurn && settingsSave.failed());
-  RpmEstimator::Mode saved;assert(RpmEstimatorSetting::load(prefs,saved) && saved==RpmEstimator::Mode::ThreeTurn);
+  assert(controls.page==Page::Settings && rpmEstimator==otherMethod && acquisition.state.estimator==RpmEstimator::DEFAULT_MODE && settingsSave.failed());
+  RpmEstimator::Mode saved;assert(RpmEstimatorSetting::load(prefs,saved) && saved==RpmEstimator::DEFAULT_MODE);
   assert(practice.accept(2,true,6100,millis()) && practice.session()->number==metricSession);
   acquisition.failEstimator=false;retry(SettingsSave::FAILED_RETRY_MS);
   assert(acquisition.state.estimator==rpmEstimator && !settingsSave.pending() && RpmEstimatorSetting::load(prefs,saved) && saved==rpmEstimator);
@@ -318,24 +438,26 @@ int main(){
   // the look alone.
   {
     using Milestones::Mode;const auto row=unsigned(Controls::Setting::Celebrate);
-    reset();const unsigned effects=effectPreviews,sounds=soundPreviews;edit(row);assert(controls.draft==uint8_t(Mode::Best));buttonB();
-    assert(controls.draft==uint8_t(Mode::Milestones) && milestones.mode()==Mode::Best && !prefs.writes && effectPreviews==effects && soundPreviews==sounds);
-    holdB();assert(milestones.mode()==Mode::Best && !prefs.writes);
-    edit(row);buttonB();buttonB();assert(controls.draft==uint8_t(Mode::Both));buttonB();assert(controls.draft==uint8_t(Mode::Best));
+    // B steps through the modes in order, from the default.
+    const auto step=[](unsigned k){return Mode((unsigned(Milestones::DEFAULT_MODE)+k)%Milestones::MODES);};
+    reset();const unsigned effects=effectPreviews,sounds=soundPreviews;edit(row);assert(controls.draft==uint8_t(step(0)));buttonB();
+    assert(controls.draft==uint8_t(step(1)) && milestones.mode()==step(0) && !prefs.writes && effectPreviews==effects && soundPreviews==sounds);
+    holdB();assert(milestones.mode()==step(0) && !prefs.writes);
+    edit(row);buttonB();buttonB();assert(controls.draft==uint8_t(step(2)));buttonB();assert(controls.draft==uint8_t(step(0)));
     buttonB();buttonB();acquisition.state.phase=AnalogTachometer::Phase::Launch;buttonA();
-    assert(controls.page==Page::Settings && milestones.mode()==Mode::Both && settingsSave.pending()==SettingsSave::Milestones && !prefs.writes);
+    assert(controls.page==Page::Settings && milestones.mode()==step(2) && settingsSave.pending()==SettingsSave::Milestones && !prefs.writes);
     acquisition.state.phase=AnalogTachometer::Phase::Ready;retry(20);
     assert(!settingsSave.pending() && acquisition.begins==acquisition.ends);
-    Milestones::Config reread;AppearanceStore<Milestones::Config> reader;
-    assert(reader.begin(reread,"controls-appearance","mile0","mile1",true) && reread.mode()==Mode::Both && reread.same(milestones));
+    Milestones::Config reread;MilestoneStore reader;
+    assert(reader.begin(reread,"controls-appearance") && reread.mode()==step(2) && reread.same(milestones));
     assert(appearance.theme==Appearance::Theme::Classic && appearance.effect==Appearance::Effect::Random);
     // A damaged record shows the defaults and the next Apply replaces it.
-    reset();Preferences::data["controls-appearancemile0"]={1,2,3};Preferences::data["controls-appearancemile1"]={4,5,6};milestoneStore={};
-    assert(!milestoneStore.begin(milestones,"controls-appearance","mile0","mile1",true) && milestoneStore.damaged() && milestoneStore.ready());
+    reset();Preferences::data["controls-appearancempool0"]={1,2,3};Preferences::data["controls-appearancempool1"]={4,5,6};milestoneStore={};
+    assert(!milestoneStore.begin(milestones,"controls-appearance") && milestoneStore.damaged() && milestoneStore.ready());
     assert(milestones.isDefault());
-    edit(row);buttonB();buttonA();assert(controls.page==Page::Settings && !settingsSaveError && milestones.mode()==Mode::Milestones && !settingsSave.pending());
-    Milestones::Config fixed;AppearanceStore<Milestones::Config> again;
-    assert(again.begin(fixed,"controls-appearance","mile0","mile1",true) && !again.damaged() && fixed.mode()==Mode::Milestones);
+    edit(row);buttonB();buttonA();assert(controls.page==Page::Settings && !settingsSaveError && milestones.mode()==step(1) && !settingsSave.pending());
+    Milestones::Config fixed;MilestoneStore again;
+    assert(again.begin(fixed,"controls-appearance") && !again.damaged() && fixed.mode()==step(1));
   }
   reset();holdA();assert(tournamentMode && tournamentView==TournamentView::RecordingOnly);
   buttonA();holdB();assert(tournamentMode && !launchFeedback.shown());buttonB();assert(tournamentView==TournamentView::Rpm);

@@ -35,10 +35,14 @@ public:
     slot_=next;saved_=value.generation();damaged_=false;return true;
   }
   bool ready()const{return ready_;}
+  // Whether both slots hold a record, so the next save replaces one in place.
+  bool bothSlots(){return ready_ && prefs_.isKey(keys_[0]) && prefs_.isKey(keys_[1]);}
   bool damaged()const{return damaged_;}
   // Whether either key existed at begin(): false on a device that never saved this record.
   bool present()const{return present_;}
   bool pending(const Value &v)const{return v.generation()!=saved_;}
+  // The generation the store holds now (saved or loaded).
+  uint32_t savedGeneration()const{return saved_;}
 private:
   Preferences prefs_;const char *keys_[2]={};uint32_t saved_=0;unsigned slot_=0;bool ready_=false,damaged_=false,present_=false;
 };

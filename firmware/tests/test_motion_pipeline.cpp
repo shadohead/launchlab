@@ -254,8 +254,9 @@ int main() {
   acquisition.state.phase=AnalogTachometer::Phase::Ready;productionStep();completeReplay();
   require(!bestStore.pending(personalBests),"PB-only pending record flushes after the ordinary quiet interval");
   Appearance::Bests reboot;AppearanceStore<Appearance::Bests> restored;
-  require(restored.begin(reboot,"pipeline-best","best0","best1") && reboot.rpm[0]==8200,"verified record survives reboot");
-  require(!reboot.observe(0,0,true,8200),"restored tie stays silent after reboot");
+  require(restored.begin(reboot,"pipeline-best","best0","best1") &&
+    reboot.rpm[unsigned(StickS3SensorProfile::DEFAULT_MODE)*2+unsigned(RpmEstimator::DEFAULT_MODE)]==8200,"verified record survives reboot");
+  require(!reboot.observe(unsigned(StickS3SensorProfile::DEFAULT_MODE),unsigned(RpmEstimator::DEFAULT_MODE),true,8200),"restored tie stays silent after reboot");
   ++cases;
   reset();Preferences::data.clear();assert(bestStore.begin(personalBests,"pipeline-retry","best0","best1"));readyAfter(300,false);
   launchFeedback.clear();lastAcceptedAt=millis()-10000;Preferences::failWrite=true;saveHistory(millis(),acquisition.snapshot());

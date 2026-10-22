@@ -49,6 +49,7 @@ PREFIX = r'''
 #include "cpu_power.h"
 #include "usb_awake.h"
 #include "rpm_estimator.h"
+#include "brightness.h"
 #include "sensor_profile_setting.h"
 #include "mount_orientation.h"
 #include "device_backup.h"
@@ -100,7 +101,7 @@ static bool wipeCheckpointHeld=false,wipeBootRecovery=false,wipeRestartRequested
 static bool motionPending=false,dirty=false,diagnostics=false,historyPage=false,demo=false,motionDemo=false,tournamentMode=false;
 static bool extPower=false,stress=false,restorePreview=false,settingsSaveError=false,displayFlipped=false;
 static bool celebrationSound=false,soundPreview=false,lastFault=false,effectWasMoving=false;
-static uint8_t brightnessPercent=40;
+static uint8_t brightnessPercent=Brightness::DEFAULT_PERCENT;
 static uint32_t lastDraw=0,lastStatus=0,lastRevision=0,newSessionAt=0,tournamentHintUntil=0,uiStalls=0,historyOffset=0;
 static AnalogTachometer::Phase lastPhase=AnalogTachometer::Phase::Ready;
 namespace PracticeUI {enum class View:uint8_t{Recent,Best,Trend,Battery,Settings};}
@@ -193,7 +194,7 @@ static void saveHistory(uint32_t,const Snapshot &){normal();}
 // erase attempt: one would write old RAM, the other resume the held checkpoint.
 static void saveSettings(uint32_t,const Snapshot &){normal();}static void releaseOrphanCheckpoint(uint32_t,const Snapshot &){normal();}
 struct SettingsSave {enum Item:uint16_t {Pin=128,ExtPower=256};void mark(uint16_t){normal();}bool pending()const{return false;}}settingsSave;
-static void pollBattery(uint32_t,const Snapshot &){normal();}static void tickPowerLog(uint32_t,const Snapshot &){normal();}
+static void pollBattery(uint32_t,const Snapshot &){normal();}static void tickPowerLog(uint32_t,const Snapshot &){normal();}static void tickHistoryLog(uint32_t,const Snapshot &){normal();}
 static void pollUsbAwake(uint32_t,const Snapshot &){normal();}static void tickSound(const Snapshot &){normal();}
 // Side-key power-off has its own production harness; its wipe guard is tested there.
 static bool powerKeyRequested=false;static uint32_t powerKeyRequestedAt=0;
@@ -214,10 +215,12 @@ struct NvsStore {
     writerGuard();assert(marker==State::Pending && ownedNamespace(name));++clears;
     records.erase(name);return clears!=failClear; // Failure may follow partial mutation.
   }
+  inline static unsigned flashClears=0;
+  bool clearFlash(){writerGuard();assert(marker==State::Pending && clears>=NAMESPACE_COUNT);++flashClears;return true;}
   bool clearIntent(){writerGuard();++removals;if(failRemove)return false;marker=State::Clean;return true;}
   static void seed(State state=State::Clean) {
     marker=state;records.clear();for(const auto *name:NAMESPACES)records[name]="old synthetic RAM image";
-    records["unrelated"]="must survive";inspections=intents=clears=removals=failClear=0;
+    records["unrelated"]="must survive";inspections=intents=clears=removals=failClear=flashClears=0;
     failIntent=failRemove=boot=false;
   }
 };
@@ -292,7 +295,7 @@ static void physicalAndUsb() {
   acquisition.events.push_back(acquisition.snapshot());Serial.feed("Rtxgn");
   stepAt(start+3000,true);
   assert(wipeComplete && wipeBlocked && wipeCheckpointHeld && acquisition.suspended);
-  assert(Store::clears==DeviceWipe::NAMESPACE_COUNT && Store::removals==1 && Store::marker==DeviceWipe::State::Clean);
+  assert(Store::clears==DeviceWipe::NAMESPACE_COUNT && Store::flashClears==1 && Store::removals==1 && Store::marker==DeviceWipe::State::Clean);
   assert(Store::records.size()==1 && Store::records.at("unrelated")=="must survive");
   assert(normalWrites==writes && acquisition.eventDrains==drains && !restarts && !acquisition.resumes);
   step(true);assert(!restarts && normalWrites==writes);

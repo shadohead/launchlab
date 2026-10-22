@@ -4,6 +4,12 @@
 #include "acquisition.h"
 #include "level_indicator.h"
 #include "practice_store.h"
+#include "history_log.h"
+#include "spiffs_flash.h"
+#if LAUNCHLAB_HIL
+// Test builds: the NVS write faults (hil.h) also slow, fail or arm the history log writes.
+namespace Hil{inline bool nvsWrite(const char *key,size_t bytes);}
+#endif
 #include "practice_ui.h"
 #include "power_status.h"
 #include "sensor_idle.h"
@@ -24,6 +30,7 @@
 #include "shake_wake.h"
 #include "wake_ui_state.h"
 #include "rpm_estimator_setting.h"
+#include "brightness.h"
 #include "display_flip_setting.h"
 #include "display_orientation.h"
 #include "sensor_profile_setting.h"
@@ -36,6 +43,7 @@
 #include "launch_feedback.h"
 #include "appearance_store.h"
 #include "milestones.h"
+#include "milestone_store.h"
 #include "effect_set.h"
 #include "best_effect_ui.h"
 #include "screens_ui.h"
@@ -54,11 +62,11 @@
 #define LOOP_HELPER __attribute__((noinline))
 #if LAUNCHLAB_HIL
 // Test-only hardware-in-the-loop build; never a release. See tools/hil.
-static constexpr char VERSION[] = "0.17.0-sticks3-anime-hil-pm";
+static constexpr char VERSION[] = "0.18.0-sticks3-anime-hil-pm";
 #elif LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = "0.17.0-sticks3-anime-pm";
+static constexpr char VERSION[] = "0.18.0-sticks3-anime-pm";
 #else
-static constexpr char VERSION[] = "0.17.0-sticks3-anime";
+static constexpr char VERSION[] = "0.18.0-sticks3-anime";
 #endif
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ
@@ -79,13 +87,21 @@ static Appearance::Config appearance;
 static Appearance::Bests personalBests;
 static AppearanceStore<Appearance::Config> appearanceStore;
 static AppearanceStore<Appearance::Bests> bestStore;
+// Automatic saves (history, bests, the power log) go to the history log in
+// the spiffs partition (history_log.h): program-only writes the ADC rides,
+// no checkpoint and no NVS while the device is in use. NVS keeps 0.15-0.17's
+// records as the mirror written at sleep, power-off and restore. Without the
+// log (another layout found there), they go to NVS in a checkpoint as before.
+static SpiffsFlash spiffsFlash;static HistoryLog::Store<SpiffsFlash> historyLog;
+static uint32_t loggedHistory=0,loggedBests=0;
+static uint32_t powerMirror=0;  // checksum of the power log NVS holds
 // The user's custom themes (theme IDs THEMES..), beside the appearance record.
 static Themes::Library themeLibrary;
 static ThemeStore themeStore;
 // The Celebrate mode and the RPM milestone table, one record beside them. A
 // damaged record shows the defaults and is replaced by the next change.
 static Milestones::Config milestones;
-static AppearanceStore<Milestones::Config> milestoneStore;
+static MilestoneStore milestoneStore;
 // Each row's next effect, picked from its pool ahead of the pull that plays
 // it, so its sound is rendered in time; picked again after it plays (never
 // the same twice in a row when the pool has more) and when the table changes.
@@ -129,6 +145,11 @@ static uint32_t lastDraw=0,lastStatus=0,lastRevision=0,maxDrawUs=0,maxEffectUs=0
 // HIL only: each recap effect pass since the last E preview (elapsed ms, us),
 // listed by `!effectframes`, to see where in an effect its time goes.
 static struct {uint16_t elapsed[128],us[128];unsigned count=0;} effectFrames;
+#ifdef BEST_EFFECT_PROFILE
+// A profiling debug build only: each pass's cycles per renderer stage, for
+// `!effectstages`.
+static struct {uint16_t elapsed[64];uint32_t us[64],cycles[64][BestEffectUI::Renderer::STAGES];unsigned count=0;} effectStages;
+#endif
 #endif
 static uint32_t lastImuPoll=0,maxImuPollUs=0;
 static StickS3Level::Reading drawnLevel;
@@ -152,7 +173,7 @@ static SettingsSave settingsSave;
 // A stopped, non-resting ADC owner outlasting this is a lost checkpoint reply.
 static constexpr uint32_t ORPHAN_CHECKPOINT_MS=1000;
 static bool orphanSeen=false;static uint32_t orphanSince=0;
-static uint8_t brightnessPercent=40;
+static uint8_t brightnessPercent=Brightness::DEFAULT_PERCENT;
 static bool displayFlipped=false;
 static RpmEstimator::Mode rpmEstimator=RpmEstimator::DEFAULT_MODE;
 static StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;
@@ -312,7 +333,7 @@ static bool savePowerLog(){
   lastPowerSaveTry=millis();
   if(!powerLogReady)return false;powerLog.checksum=PowerDiagnostics::hash(powerLog);
   const bool ok=powerPrefs.putBytes("log",&powerLog,sizeof(powerLog))==sizeof(powerLog);
-  if(ok)powerLogDirty=false;return ok;
+  if(ok){powerLogDirty=false;powerMirror=powerLog.checksum;}return ok;
 }
 LOOP_HELPER static void exportPowerLog(){
   Serial.printf("POWER_LOG schema=1 boots=%lu power_button_wakes=%lu shake_wakes=%lu other_wakes=%lu sleeps=%lu awake_s=%llu known_sleep_s=%llu unknown_sleep_intervals=%lu charging_awake_s=%llu led_awake_s=%llu boost_awake_s=%llu display_awake_s=%llu records=%lu storage_ready=%d unsaved=%d current_ma=unavailable\n",
@@ -336,6 +357,15 @@ LOOP_HELPER static void tickPowerLog(uint32_t now,const Snapshot &s){
     // Record the attempt first: a vetoed checkpoint must not repeat the IMU
     // quiet wait on every UI tick. The dirty log stays pending.
     lastPowerSaveTry=now;
+    if(historyLog.isOpen()) {
+      // To the log, beside history: no checkpoint (sleep and power-off write NVS).
+      powerLog.checksum=PowerDiagnostics::hash(powerLog);
+#if LAUNCHLAB_HIL
+      if(Hil::nvsWrite("log",sizeof(powerLog)))return;
+#endif
+      if(historyLog.savePower(powerLog,powerMirror))powerLogDirty=false;else Serial.println("POWER_LOG_NOTICE log_save_failed");
+      return;
+    }
     if(!acquisition.request(Action::IdleCheckpointBegin,s.launches))return;
     if(!savePowerLog())Serial.println("POWER_LOG_NOTICE checkpoint_failed");acquisition.request(Action::CheckpointEnd);
   }
@@ -404,9 +434,10 @@ LOOP_HELPER static void status() {
   Serial.printf("UI_STATUS page=%u menu=%u history=%u setting=%u draft=%u recording=%s\n",
     unsigned(controls.page),controls.menu,controls.history,controls.setting,controls.draft,
     s.resting?"idle_paused":LAUNCHLAB_MOTION_ADC_GATE?"motion_gated":"always");
-  Serial.printf("PERF acquisition_core=0 ui_core=%d processing_pct=%.2f max_batch_us=%lu frame_budget_us=5120 max_read_gap_us=%lu stack_free=%lu invalid_frames=%lu lost_events=%lu max_draw_us=%lu max_effect_us=%lu ui_stalls=%lu stress=%d heap_free=%lu psram_free=%lu usb_drain_timeouts=%lu usb_rejected_commands=%lu\n",
-    xPortGetCoreID(),s.processingPercent,(unsigned long)s.maxBatchUs,(unsigned long)s.maxReadGapUs,
-    (unsigned long)s.stackFree,(unsigned long)s.invalidFrames,(unsigned long)s.lostEvents,
+  Serial.printf("PERF acquisition_core=0 ui_core=%d processing_pct=%.2f max_batch_us=%lu frame_budget_us=%lu max_read_gap_us=%lu stack_free=%lu invalid_frames=%lu lost_events=%lu adc_stalls=%lu max_draw_us=%lu max_effect_us=%lu ui_stalls=%lu stress=%d heap_free=%lu psram_free=%lu usb_drain_timeouts=%lu usb_rejected_commands=%lu\n",
+    xPortGetCoreID(),s.processingPercent,(unsigned long)s.maxBatchUs,
+    (unsigned long)(uint64_t(StickS3Acquisition::FRAME_BYTES/SOC_ADC_DIGI_RESULT_BYTES)*1000000/StickS3Acquisition::SAMPLE_HZ),(unsigned long)s.maxReadGapUs,
+    (unsigned long)s.stackFree,(unsigned long)s.invalidFrames,(unsigned long)s.lostEvents,(unsigned long)s.stalls,
     (unsigned long)maxDrawUs,(unsigned long)maxEffectUs,(unsigned long)uiStalls,stress,
     (unsigned long)ESP.getFreeHeap(),(unsigned long)ESP.getFreePsram(),(unsigned long)UsbTx::drainTimeouts,(unsigned long)usbCommands.rejected);
   heapStatus();nvsStatus();
@@ -419,18 +450,18 @@ LOOP_HELPER static void status() {
   Serial.printf("HISTORY_STATUS records=%u sessions=%u session=%lu session_pulls=%lu session_avg=%.1f generation=%lu pending=%d store_ready=%d save_errors=%lu saves=%lu max_save_us=%lu page=%s view=%u offset=%u demo=%d ui_stack_free=%lu\n",
     practice.size(),practice.sessions(),session?(unsigned long)session->number:0ul,
     session?(unsigned long)session->count:0ul,session?session->mean():0,
-    (unsigned long)practice.generation(),practiceStore.pending(practice),practiceStore.ready(),
+    (unsigned long)practice.generation(),historyUnsaved(),practiceStore.ready() || historyLog.isOpen(),
     (unsigned long)saveErrors,(unsigned long)saveCount,(unsigned long)maxSaveUs,
     diagnostics?"signal":historyPage?"history":"live",unsigned(historyView),historyOffset,demo,
     (unsigned long)uxTaskGetStackHighWaterMark(nullptr));
-  const bool pendingHistory=practiceStore.pending(practice);
+  const bool pendingHistory=historyUnsaved();
   const uint32_t pendingMs=pendingHistory && historyPendingSince?now-historyPendingSince:0;
   const uint32_t quietMs=now-lastAcceptedAt;
   const uint32_t coalesceMs=HistoryCheckpoint::automaticQuietMs(now,imuStill,pendingMs,HISTORY_COALESCE_MS);
   const uint32_t flushDue=quietMs>=coalesceMs?0u:coalesceMs-quietMs;
   const uint32_t retryRemaining=saveError && now-lastSaveTry<HISTORY_SAVE_RETRY_MS?HISTORY_SAVE_RETRY_MS-(now-lastSaveTry):0;
   Serial.printf("HISTORY_PENDING unsaved_pulls=%lu pending_ms=%lu flush_due_ms=%lu coalesce_ms=%lu max_pending_ms=%lu retry_remaining_ms=%lu\n",
-    (unsigned long)practiceStore.pendingCount(practice),(unsigned long)pendingMs,
+    (unsigned long)(historyLog.isOpen()?practice.generation()-loggedHistory:practiceStore.pendingCount(practice)),(unsigned long)pendingMs,
     (unsigned long)(pendingHistory?flushDue:0),(unsigned long)coalesceMs,(unsigned long)HistoryCheckpoint::MAX_PENDING_MS,(unsigned long)retryRemaining);
   Serial.printf("POWER_STATUS auto_off_s=%lu wake=shake sleep=imu_only sensor_rail=L2_off_in_battery_standby idle_s=%lu off_in_s=%lu battery_valid=%d battery_mv=%u battery_pct=%d charging=%s max_battery_poll_us=%lu auto_off_inhibited=%d\n",
     (unsigned long)(inactivity.timeout()/1000),(unsigned long)(inactivity.elapsed(now)/1000),(unsigned long)((inactivity.remaining(now)+999)/1000),
@@ -681,6 +712,13 @@ LOOP_HELPER static void draw(const Snapshot &s) {
       if(effectFrames.count<128 && bestEffect.moving(millis())){
         effectFrames.elapsed[effectFrames.count]=uint16_t(bestEffect.elapsed(millis()));
         effectFrames.us[effectFrames.count++]=uint16_t(std::min<int64_t>(65535,esp_timer_get_time()-effectStarted));}
+#ifdef BEST_EFFECT_PROFILE
+      if(effectStages.count<64 && bestEffect.moving(millis())) {
+        const unsigned n=effectStages.count++;effectStages.elapsed[n]=uint16_t(bestEffect.elapsed(millis()));
+        effectStages.us[n]=uint32_t(esp_timer_get_time()-effectStarted);
+        std::memcpy(effectStages.cycles[n],bestEffectRenderer.stage,sizeof(effectStages.cycles[n]));
+      }
+#endif
 #endif
     }
   } else {
@@ -952,7 +990,7 @@ static void writeSettings() {
     if(current && SensorProfileSetting::save(prefs,sensorProfile))saved|=SettingsSave::Sensor;
   }
   if((items&SettingsSave::Sleep) && prefs.putUChar("sleep_min",inactivity.minutes())==1)saved|=SettingsSave::Sleep;
-  if((items&SettingsSave::Brightness) && prefs.putUChar("bright_pct",brightnessPercent)==1)saved|=SettingsSave::Brightness;
+  if((items&SettingsSave::Brightness) && prefs.putUChar(Brightness::KEY,brightnessPercent)==1)saved|=SettingsSave::Brightness;
   if((items&SettingsSave::Flip) && DisplayFlipSetting::save(prefs,displayFlipped))saved|=SettingsSave::Flip;
   if(items&SettingsSave::Mount) {
     bool current=liveMount==mountMode;
@@ -1198,9 +1236,46 @@ LOOP_HELPER static void exportHistory() {
       (unsigned long)s.number,(unsigned long)s.count,s.mean(),s.best,(unsigned long)s.seconds);
   }
 }
+// History and bests newer than their saved copy: the log's when it is open, else NVS's.
+static bool historyUnsaved(){return historyLog.isOpen()?practice.generation()!=loggedHistory:practiceStore.pending(practice);}
+static bool bestsUnsaved(){return historyLog.isOpen()?personalBests.generation()!=loggedBests:bestStore.pending(personalBests);}
+static bool logHistory() {
+#if LAUNCHLAB_HIL
+  if(Hil::nvsWrite("history",PracticeHistory::IMAGE_BYTES))return false;
+#endif
+  if(!historyLog.saveHistory(practice,practiceStore.savedGeneration()))return false;
+  loggedHistory=practice.generation();return true;
+}
+static bool logBests() {
+#if LAUNCHLAB_HIL
+  if(Hil::nvsWrite("best",32))return false;
+#endif
+  if(!historyLog.saveBests(personalBests,bestStore.savedGeneration()))return false;
+  loggedBests=personalBests.generation();return true;
+}
+// At boot, before sampling starts: the first boot of 0.18 formats the
+// partition (blank, erased or another firmware's bytes) in under a second.
+static void openHistoryLog() {
+  if(!spiffsFlash.begin()){Serial.println("HISTORY_LOG_BOOT state=no_partition");return;}
+  const int64_t started=esp_timer_get_time();
+  using Open=HistoryLog::Store<SpiffsFlash>::Log::Open;
+  const auto opened=historyLog.open(spiffsFlash);
+  Serial.printf("HISTORY_LOG_BOOT state=%s ready_sectors=%u us=%lld\n",opened==Open::Ready?"ready":opened==Open::Formatted?"formatted":
+    opened==Open::Unsupported?"unsupported_layout":"failed",historyLog.isOpen()?historyLog.log().readyCount():0u,
+    (long long)(esp_timer_get_time()-started));
+}
+// At most one sector erase (14-30 ms, the ADC rides it) a second while
+// nothing is being measured, so a save never has to erase.
+LOOP_HELPER static void tickHistoryLog(uint32_t now,const Snapshot &s) {
+  static uint32_t lastErase=0;
+  if(!historyLog.isOpen() || now-lastErase<1000 || s.suspended || motionPending ||
+     (s.phase!=AnalogTachometer::Phase::Ready && s.phase!=AnalogTachometer::Phase::Paused))return;
+  lastErase=now;historyLog.readyAhead();
+}
 LOOP_HELPER static void saveHistory(uint32_t now,const Snapshot &s) {
-  const bool history=practiceStore.pending(practice) && practiceStore.ready();
-  const bool best=bestStore.pending(personalBests) && bestStore.ready();
+  const bool logged=historyLog.isOpen();
+  const bool history=logged?historyUnsaved():practiceStore.pending(practice) && practiceStore.ready();
+  const bool best=logged?bestsUnsaved():bestStore.pending(personalBests) && bestStore.ready();
   // Failed writes must leave enough uninterrupted quiet for detector rearm.
   const uint32_t retryMs=saveError?HISTORY_SAVE_RETRY_MS:1000;
   // A sensor fault (signal held on the low rail) keeps the detector in Hold
@@ -1217,6 +1292,18 @@ LOOP_HELPER static void saveHistory(uint32_t now,const Snapshot &s) {
   // No maximum-age override: a long practice bout stays in RAM until quiet.
   // Automatic sleep still forces a verified flush before entering standby.
   lastSaveTry=now;
+  if(logged) {
+    // Program-only writes: the ADC keeps sampling, so a pull that starts now
+    // is measured however long the write takes.
+    const int64_t started=esp_timer_get_time();
+    const bool saved=(!history || logHistory()) && (!best || logBests());
+    maxSaveUs=std::max(maxSaveUs,uint32_t(esp_timer_get_time()-started));
+    if(saved){++saveCount;saveError=false;historyPendingSince=0;}else {++saveErrors;saveError=true;}
+    lastSaveTry=millis();
+    Serial.printf("HISTORY_SAVE ok=%d generation=%lu duration_us=%lu store=log\n",saved,
+      (unsigned long)practice.generation(),(unsigned long)(esp_timer_get_time()-started));
+    dirty=true;return;
+  }
   if(!acquisition.request(fault?Action::IdleCheckpointBegin:Action::HistoryIdleCheckpointBegin,s.launches))return;
   const int64_t started=esp_timer_get_time();
   const bool saved=(!history || practiceStore.save(practice)) && (!best || bestStore.save(personalBests));
@@ -1416,12 +1503,16 @@ LOOP_HELPER static void finishRestore(const Snapshot &s) {
   const auto &settings=contents->settings;
   const bool saved=practiceStore.save(contents->practice) && appearanceStore.save(contents->look) &&
     bestStore.save(contents->bests) && (!contents->hasMotion || motionStore.save(contents->motion)) &&
-    prefs.putUChar("sleep_min",settings.sleepMinutes)==1 && prefs.putUChar("bright_pct",settings.brightness)==1 &&
+    prefs.putUChar("sleep_min",settings.sleepMinutes)==1 && prefs.putUChar(Brightness::KEY,settings.brightness)==1 &&
     RpmEstimatorSetting::save(prefs,settings.rpmMethod) && SensorProfileSetting::save(prefs,settings.sensorProfile) &&
     DisplayFlipSetting::save(prefs,settings.flipped) && MountOrientationSetting::save(prefs,settings.mount) &&
     (!contents->hasThemes || themeStore.save(contents->themes,true)) &&
     (!contents->hasMilestones || milestoneStore.save(contents->milestones)) &&
     (!contents->hasEffectSet || effectSetStore.save(contents->effectSet));
+  // The log gets the restored records too, mirrored to what NVS now holds,
+  // so the next boot loads them whichever copy it picks.
+  if(saved && historyLog.isOpen() && !(historyLog.saveHistory(contents->practice,contents->practice.generation()) &&
+     historyLog.saveBests(contents->bests,contents->bests.generation())))Serial.println("RESTORE_NOTICE history_log_write_failed");
   if(!saved) {
     if(!acquisition.request(Action::CheckpointEnd))Serial.println("RESTORE_ERROR ADC checkpoint resume failed");
     // Earlier records may already hold the restored values; restoring again is safe.
@@ -1456,7 +1547,7 @@ LOOP_HELPER static void listThemes() {
   // colors=any: any colors are accepted (0.14 and 0.15 refused light or low-contrast themes).
   Serial.printf("THEME_LIST slots=%u selected=%u showing=%u store=%s revision=%lu nvs_available=%d nvs_needed=%u colors=any\n",
     Themes::SLOTS,unsigned(appearance.theme),unsigned(themeLibrary.effective(appearance.theme)),ThemeStore::name(themeStore.status()),
-    (unsigned long)themeLibrary.revision,known?int(available):-1,ThemeStore::NEEDED_ENTRIES);
+    (unsigned long)themeLibrary.revision,known?int(available):-1,themeStore.neededEntries());
   for(unsigned i=0;i<Themes::SLOTS;++i) {
     char data[(Themes::SLOT_BYTES+2)/3*4+1]={};
     DeviceBackup::base64Lines(themeLibrary.raw(i),Themes::SLOT_BYTES,96,[&](const char *line){strncpy(data,line,sizeof(data)-1);});
@@ -1519,8 +1610,8 @@ LOOP_HELPER static void finishThemeRequest(const Snapshot &s) {
     Serial.printf("THEME_OK op=%s slot=%u revision=%lu unchanged=1 warnings=%s\n",op,slot,(unsigned long)themeLibrary.revision,warnings);themeReply();return;
   }
   unsigned available=0;
-  if(request->op==Op::Put && (!nvsAvailable(available) || !ThemeStore::fits(available))) {
-    Serial.printf("THEME_ERROR op=put slot=%u reason=nvs_space available_entries=%u needed_entries=%u written=0\n",slot,available,ThemeStore::NEEDED_ENTRIES);
+  if(request->op==Op::Put && (!nvsAvailable(available) || available<themeStore.neededEntries())) {
+    Serial.printf("THEME_ERROR op=put slot=%u reason=nvs_space available_entries=%u needed_entries=%u written=0\n",slot,available,themeStore.neededEntries());
     themeReply();return;
   }
   if(motionPending || s.phase==AnalogTachometer::Phase::Launch || !acquisition.request(Action::IdleCheckpointBegin,s.launches))return fail("busy");
@@ -1554,24 +1645,24 @@ LOOP_HELPER static void pollThemeRequest(const Snapshot &s) {
 static void milestoneReply(){UsbTx::drain(100);}
 static const char *milestoneStoreName(){return !milestoneStore.ready()?"unavailable":milestoneStore.damaged()?"damaged":"ok";}
 // An upload must leave room for a history rewrite in the 20 KB NVS.
-static constexpr unsigned MILESTONE_NEEDED_ENTRIES=NvsBudget::blobEntries(Milestones::Config::IMAGE_BYTES)+
-  NvsBudget::blobEntries(PracticeHistory::IMAGE_BYTES);
 LOOP_HELPER static void listMilestones() {
   unsigned available=0;const bool known=nvsAvailable(available);
   Milestones::Config::Image image;milestones.encode(image);
   char data[(Milestones::Config::IMAGE_BYTES+2)/3*4+1]={};
   DeviceBackup::base64Lines(image.data(),image.size(),96,[&](const char *line){strncpy(data,line,sizeof(data)-1);});
-  Serial.printf("MILESTONE_LIST version=2 mode=%s rows=%u max_rows=%u min_rpm=%u max_rpm=%u effects=%u revision=%lu store=%s default=%d nvs_available=%d nvs_needed=%u data=%s%s\n",
+  Serial.printf("MILESTONE_LIST version=3 mode=%s rows=%u max_rows=%u min_rpm=%u max_rpm=%u effects=%u revision=%lu store=%s default=%d nvs_available=%d nvs_needed=%u data=%s%s\n",
     Milestones::name(milestones.mode()),milestones.count(),Milestones::MAX_ROWS,unsigned(Milestones::MIN_RPM),unsigned(Milestones::MAX_RPM),Appearance::EFFECTS,
-    (unsigned long)milestones.revision,milestoneStoreName(),milestones.isDefault(),known?int(available):-1,MILESTONE_NEEDED_ENTRIES,data,effectSetFields());
+    (unsigned long)milestones.revision,milestoneStoreName(),milestones.isDefault(),known?int(available):-1,milestoneStore.neededEntries(milestones),data,effectSetFields());
   // effect/effect_id name the pool's first effect, as 0.15 listed its one.
   const auto *picks=milestonePicks();
   for(unsigned i=0;i<milestones.count();++i) {
-    const auto &r=milestones.row(i);char names[400]="";size_t used=0;
-    for(unsigned e=0;e<Appearance::EFFECTS;++e)if(r.has(Appearance::Effect(e)))
+    // A pool of every drawn effect names about 600 characters.
+    const auto &r=milestones.row(i);static char names[16*Appearance::EFFECTS];size_t used=0;names[0]=0;
+    for(unsigned e=0;e<Appearance::EFFECTS && used<sizeof(names);++e)if(r.has(Appearance::Effect(e)))
       used+=snprintf(names+used,sizeof(names)-used,"%s%s",used?"+":"",Appearance::label(Appearance::Effect(e)));
-    Serial.printf("MILESTONE_ROW index=%u rpm=%u effect=%s effect_id=%u pool=%016llx effects=%s next=%s\n",i,unsigned(r.rpm),
-      Appearance::label(r.first()),unsigned(r.first()),(unsigned long long)r.pool,names,Appearance::label(picks[i]));
+    char pool[33];r.pool.hex(pool);
+    Serial.printf("MILESTONE_ROW index=%u rpm=%u effect=%s effect_id=%u pool=%s effects=%s next=%s\n",i,unsigned(r.rpm),
+      Appearance::label(r.first()),unsigned(r.first()),pool,names,Appearance::label(picks[i]));
   }
   Serial.println("MILESTONE_LIST_END");milestoneReply();
 }
@@ -1597,8 +1688,9 @@ LOOP_HELPER static void finishMilestoneRequest(const Snapshot &s) {
   }
   if(next.generation()==milestones.generation())++next.revision;
   unsigned available=0;
-  if(!nvsAvailable(available) || available<MILESTONE_NEEDED_ENTRIES) {
-    Serial.printf("MILESTONE_ERROR op=%s reason=nvs_space available_entries=%u needed_entries=%u written=0\n",op,available,MILESTONE_NEEDED_ENTRIES);
+  const unsigned needed=milestoneStore.neededEntries(next);
+  if(!nvsAvailable(available) || available<needed) {
+    Serial.printf("MILESTONE_ERROR op=%s reason=nvs_space available_entries=%u needed_entries=%u written=0\n",op,available,needed);
     milestoneReply();return;
   }
   if(motionPending || s.phase==AnalogTachometer::Phase::Launch || !acquisition.request(Action::IdleCheckpointBegin,s.launches))return fail("busy");
@@ -1618,9 +1710,14 @@ LOOP_HELPER static void finishMilestoneRequest(const Snapshot &s) {
 // effect_set.h) replaces the set, checked whole and saved inside an idle
 // checkpoint, or nothing changes. Replies are MILESTONE_OK / MILESTONE_ERROR.
 static const char *effectSetStoreName(){return !effectSetStore.ready()?"unavailable":effectSetStore.damaged()?"damaged":"ok";}
-// An upload must leave room for a history rewrite in the 20 KB NVS.
+// An upload must leave room for a history rewrite in the 20 KB NVS, and keep
+// the reserve when it fills an empty slot.
 static constexpr unsigned EFFECT_SET_NEEDED_ENTRIES=NvsBudget::blobEntries(EffectSet::Config::IMAGE_BYTES)+
   NvsBudget::blobEntries(PracticeHistory::IMAGE_BYTES);
+static unsigned effectSetNeededEntries() {
+  const unsigned own=NvsBudget::blobEntries(EffectSet::Config::IMAGE_BYTES);
+  return NvsBudget::optionalNeeded(own,effectSetStore.bothSlots()?0:own,NvsBudget::blobEntries(PracticeHistory::IMAGE_BYTES));
+}
 // MILESTONE_LIST's effect set fields, each after a space.
 static const char *effectSetFields() {
   static char text[96];char mask[33];effectSet.mask().hex(mask);
@@ -1658,8 +1755,9 @@ LOOP_HELPER static bool finishEffectSetRequest(const Snapshot &s) {
   }
   if(next.generation()==effectSet.generation())++next.revision;
   unsigned available=0;
-  if(!nvsAvailable(available) || available<EFFECT_SET_NEEDED_ENTRIES) {
-    Serial.printf("MILESTONE_ERROR op=%s reason=nvs_space available_entries=%u needed_entries=%u written=0\n",op,available,EFFECT_SET_NEEDED_ENTRIES);
+  const unsigned needed=effectSetNeededEntries();
+  if(!nvsAvailable(available) || available<needed) {
+    Serial.printf("MILESTONE_ERROR op=%s reason=nvs_space available_entries=%u needed_entries=%u written=0\n",op,available,needed);
     milestoneReply();return true;
   }
   if(motionPending || s.phase==AnalogTachometer::Phase::Launch || !acquisition.request(Action::IdleCheckpointBegin,s.launches))return fail("busy");
@@ -1828,14 +1926,19 @@ void setup() {
   Serial.printf("POWER_KEY_BOOT btn_cfg_valid=%d btn_cfg=0x%02x configured=%d\n",bootKeyConfigRead,bootKeyConfig,keyConfigured);
   if(!recoverWipe())return;
   prefs.begin("launchlab-mini",false);
+  openHistoryLog();
   powerLogReady=powerPrefs.begin("ll-power",false);
   PowerDiagnostics::fresh(powerLog);
+  bool powerInNvs=false;
   if(powerLogReady && powerPrefs.isKey("log")){
     PowerDiagnostics::Image loaded;
     if(powerPrefs.getBytesLength("log")==sizeof(loaded) && powerPrefs.getBytes("log",&loaded,sizeof(loaded))==sizeof(loaded)
-      && PowerDiagnostics::valid(loaded))powerLog=loaded;
+      && PowerDiagnostics::valid(loaded)){powerLog=loaded;powerInNvs=true;powerMirror=loaded.checksum;}
     else {powerLogReady=false;Serial.println("POWER_LOG_NOTICE invalid_existing_log_retained");}
   }
+  {std::unique_ptr<PowerDiagnostics::Image> logged(new(std::nothrow) PowerDiagnostics::Image);uint32_t mirrored=0;
+   const bool inLog=logged && historyLog.isOpen() && historyLog.loadPower(*logged,mirrored);
+   if(HistoryLog::pick(inLog,mirrored,powerInNvs,powerMirror)==HistoryLog::Source::Log)powerLog=*logged;}
   ++powerLog.boots;
   const bool wakingFromStandby=powerLog.pendingSleep;
   uint8_t loggedWake=pm1WakeValid?pm1WakeFlags:0;
@@ -1873,29 +1976,29 @@ void setup() {
     Serial.printf("WAKE_UI_RESTORE valid=%d consumed=%d tournament=%d display=%s history=%d page=%u\n",
       valid,consumed,tournamentMode,tournamentViewName(),historyPage,unsigned(historyView));
   }
-  if(!RpmEstimatorSetting::load(prefs,rpmEstimator))Serial.println("RPM_SETTING_NOTICE invalid_record_retained_using_three_turn_default");
+  if(!RpmEstimatorSetting::load(prefs,rpmEstimator))
+    Serial.printf("RPM_SETTING_NOTICE invalid_record_retained_using_default=%s\n",RpmEstimator::name(RpmEstimator::DEFAULT_MODE));
   if(!SensorProfileSetting::load(prefs,sensorProfile))Serial.println("SENSOR_SETTING_NOTICE invalid_record_retained_using_standard_default");
   const uint8_t sleepMinutes=prefs.getUChar("sleep_min",InactivityTimer::DEFAULT_MINUTES);
   if(!inactivity.setMinutes(sleepMinutes))Serial.println("SLEEP_SETTING_NOTICE invalid_saved_value_using_3_min");
-  const uint8_t savedBrightness=prefs.getUChar("bright_pct",40);
-  if(savedBrightness>=10 && savedBrightness<=100 && savedBrightness%10==0)brightnessPercent=savedBrightness;
-  else Serial.println("BRIGHTNESS_SETTING_NOTICE invalid_saved_value_using_40_pct");
+  if(!Brightness::load(prefs,brightnessPercent))
+    Serial.printf("BRIGHTNESS_SETTING_NOTICE invalid_saved_value_using_default_pct=%u\n",unsigned(Brightness::DEFAULT_PERCENT));
   if(!DisplayFlipSetting::load(prefs,displayFlipped))Serial.println("DISPLAY_SETTING_NOTICE invalid_record_retained_using_flip_off_default");
   if(!MountOrientationSetting::load(prefs,mountMode))Serial.println("MOUNT_SETTING_NOTICE invalid_record_retained_using_top_default");
   liveMount=mountMode;
   if(!appearanceStore.begin(appearance,"ll-appearance","cfg0","cfg1"))Serial.println("APPEARANCE_NOTICE invalid_record_retained_using_defaults");
-  if(!bestStore.begin(personalBests,"ll-bests","best0","best1"))Serial.println("BEST_NOTICE invalid_record_retained_celebration_disabled");
+  const bool bestsInNvs=bestStore.begin(personalBests,"ll-bests","best0","best1") && bestStore.present();
+  if(!bestStore.ready() || bestStore.damaged())Serial.println("BEST_NOTICE invalid_record_retained_celebration_disabled");
+  {Appearance::Bests logged;uint32_t mirrored=0;const bool inLog=historyLog.isOpen() && historyLog.loadBests(logged,mirrored);
+   const auto from=HistoryLog::pick(inLog,mirrored,bestsInNvs,personalBests.generation());
+   if(from==HistoryLog::Source::Log)personalBests=logged;
+   loggedBests=from==HistoryLog::Source::Log?personalBests.generation():~personalBests.generation();}
   if(themeStore.begin(themeLibrary)==ThemeStore::Status::Unreadable)Serial.println("THEME_NOTICE invalid_record_retained_using_default_colors");
-  // The pooled record (0.16) has its own keys. Until it is first saved, 0.15's
-  // record is read and carried over; 0.15's keys are never written again, so
-  // a unit rolled back to 0.15 keeps the last table 0.15 wrote.
-  if(!milestoneStore.begin(milestones,"ll-appearance","mpool0","mpool1",true))
-    Serial.println(milestoneStore.damaged()?"MILESTONE_NOTICE invalid_record_using_defaults":"MILESTONE_NOTICE storage_unavailable_using_defaults");
-  else if(!milestoneStore.present()) {
-    Milestones::V1Record legacy;AppearanceStore<Milestones::V1Record> legacyStore;
-    if(legacyStore.begin(legacy,"ll-appearance","mile0","mile1",true) && legacyStore.present()){milestones=legacy.table;Serial.println("MILESTONE_NOTICE imported_v1_table");}
-    else if(legacyStore.damaged())Serial.println("MILESTONE_NOTICE invalid_record_using_defaults");
-  }
+  // 0.17's slots, a packed record for a wider table, else 0.15's carried over (milestone_store.h).
+  milestoneStore.begin(milestones);
+  if(!milestoneStore.ready())Serial.println("MILESTONE_NOTICE storage_unavailable_using_defaults");
+  else if(milestoneStore.damaged())Serial.println("MILESTONE_NOTICE invalid_record_using_defaults");
+  else if(milestoneStore.source()==MilestoneStore::Source::Legacy)Serial.println("MILESTONE_NOTICE imported_v1_table");
   if(!effectSetStore.begin(effectSet,"ll-appearance","eset0","eset1",true))
     Serial.println(effectSetStore.damaged()?"EFFECT_SET_NOTICE invalid_record_using_defaults":"EFFECT_SET_NOTICE storage_unavailable_using_defaults");
   controls.customThemes=themeLibrary.validMask();controls.offeredEffects=effectSet.mask();
@@ -1904,6 +2007,17 @@ void setup() {
   if(pin<1 || pin>10)pin=1;
   extPower=prefs.getBool("ext5v",false);
   saveError=!practiceStore.begin(practice);
+  // Newest wins between the log and NVS (history_log.h); a copy only in NVS is logged at the next save.
+  if(historyLog.isOpen()) {
+    std::unique_ptr<PracticeHistory> logged(new(std::nothrow) PracticeHistory);uint32_t mirrored=0;
+    const bool inLog=logged && historyLog.loadHistory(*logged,mirrored);
+    const auto from=HistoryLog::pick(inLog,mirrored,practiceStore.found(),practiceStore.savedGeneration());
+    if(from==HistoryLog::Source::Log){practice=*logged;saveError=false;}
+    loggedHistory=from==HistoryLog::Source::Log?practice.generation():~practice.generation();
+    Serial.printf("HISTORY_LOG_LOAD from=%s log_generation=%lu mirrored=%lu nvs_generation=%lu nvs_found=%d\n",
+      from==HistoryLog::Source::Log?"log":from==HistoryLog::Source::Nvs?"nvs":"none",inLog?(unsigned long)logged->generation():0ul,
+      (unsigned long)mirrored,(unsigned long)practiceStore.savedGeneration(),practiceStore.found());
+  }
   // Reclaim the orphaned RF calibration blob found in ll-practice; the history
   // save it would otherwise crowd out matters far more. Boot only, before ADC.
   if(practiceStore.hasOrphan())Serial.printf("NVS_RECLAIM key=ll-practice/%s removed=%d\n",PracticeStore::ORPHAN_KEY,practiceStore.removeOrphan());
@@ -1940,7 +2054,8 @@ void setup() {
   inactivity.begin(millis(),(pm1WakeValid && (pm1WakeFlags&0x20)) || wakeCause==ESP_SLEEP_WAKEUP_EXT0);
   Serial.printf("BOOT %s ppr=1 min_rpm=1000 min_mark=%.0f edge_fraction=%.2f sample_hz=50000 task_core=0\n",VERSION,
     StickS3SensorProfile::minMark(sensorProfile),StickS3SensorProfile::EDGE_SWING_FRACTION);
-  Serial.printf("RPM_SETTING_BOOT selected=%s default=three_turn_peak legacy_history=retained_metric_not_encoded\n",RpmEstimator::name(rpmEstimator));
+  Serial.printf("RPM_SETTING_BOOT selected=%s default=%s legacy_history=retained_metric_not_encoded\n",RpmEstimator::name(rpmEstimator),
+    RpmEstimator::name(RpmEstimator::DEFAULT_MODE));
   Serial.println("READY commands: p status, P power log, C CPU power profiling, a/c tap A, h tap B, o hold A, b hold B, d diagnostics, n new session, u history export, K backup export, R backup restore, L custom themes, T theme request, M milestones, U milestone request, e motion export, q synthetic recap, E<0-4,7> best effect preview, t synthetic history, y/z storage check, v screen, w recorder export, x ext5V, g<N> GPIO, s stress, j UI stall");
 #if LAUNCHLAB_HIL
   hilBoot();
@@ -2003,6 +2118,9 @@ LOOP_HELPER static void previewBestEffect(Appearance::Effect effect) {
   maxEffectUs=maxDrawUs=0;dirty=true;
 #if LAUNCHLAB_HIL
   effectFrames.count=0;
+#ifdef BEST_EFFECT_PROFILE
+  effectStages.count=0;
+#endif
 #endif
   Serial.printf("EFFECT_PREVIEW effect=%s duration_ms=%lu launch=%lu sound_render_us=%lu bests_unchanged=1\n",Appearance::label(effect),
     (unsigned long)Appearance::duration(effect),(unsigned long)latestMotion.number,(unsigned long)renderUs);
@@ -2160,8 +2278,8 @@ LOOP_HELPER static void tickSensorIdle(uint32_t now,Snapshot &s) {
 #endif
   const bool blocked=usbBlocks || inactivity.unusedShake() || wipeBlocked ||
     controls.page!=Controls::Page::Main || historyPage || diagnostics || tournamentMode ||
-    motionPending || launchFeedback.shown() || practiceStore.pending(practice) ||
-    bestStore.pending(personalBests) || settingsSave.pending() || !imuAcquisition.running() || Serial.available();
+    motionPending || launchFeedback.shown() || historyUnsaved() ||
+    bestsUnsaved() || settingsSave.pending() || !imuAcquisition.running() || Serial.available();
   const bool opticalIdle=s.ready && !s.suspended && !s.signalFault && s.opticalIdle &&
     s.phase==AnalogTachometer::Phase::Ready;
   const auto action=sensorIdle.decide(now,esp_timer_get_time(),imu.activity,inactivity.elapsed(now),
@@ -2243,6 +2361,7 @@ void loop() {
   releaseOrphanCheckpoint(now,s);
   pollBattery(now,s);
   tickPowerLog(now,s);
+  tickHistoryLog(now,s);
   pollUsbAwake(now,s);
   tickSound(s);
 #if LAUNCHLAB_MOTION_ADC_GATE

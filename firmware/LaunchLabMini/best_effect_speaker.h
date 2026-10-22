@@ -43,10 +43,10 @@ public:
     const int64_t started=esp_timer_get_time();
     synth_.run(buffers_[i]+synth_.index(),std::min(slice,BestEffectSound::samples(e)-synth_.index()));
     const uint32_t spent=uint32_t(esp_timer_get_time()-started);renderUs_+=spent;maxSliceUs_=std::max(maxSliceUs_,spent);
-    if(synth_.done()){rendered_|=decltype(rendered_)(1)<<i;target_=Appearance::Effect::Off;}
+    if(synth_.done()){rendered_[i]=true;target_=Appearance::Effect::Off;}
     return prepared(e);
   }
-  bool prepared(Appearance::Effect e)const{return Appearance::drawn(unsigned(e)) && ((rendered_>>Appearance::drawnIndex(e))&1u);}
+  bool prepared(Appearance::Effect e)const{return Appearance::drawn(unsigned(e)) && rendered_[Appearance::drawnIndex(e)];}
   bool play(Appearance::Effect e,Appearance::Sound level) {
     // Rendering is the sketch's job, a slice per idle pass; play only what is ready.
     if(level==Appearance::Sound::Off || !prepared(e))return false;
@@ -79,7 +79,7 @@ public:
   void status(Appearance::Sound level) {
     unsigned buffers=0;for(const auto *b:buffers_)buffers+=b!=nullptr;
     static char rendered[512];std::strcpy(rendered,"none");size_t used=0;
-    for(unsigned i=0;i<Appearance::DRAWN;++i)if((rendered_>>i)&1u)
+    for(unsigned i=0;i<Appearance::DRAWN;++i)if(rendered_[i])
       used+=snprintf(rendered+used,sizeof(rendered)-used,"%s%s",used?",":"",Appearance::label(Appearance::drawnEffect(i)));
     Serial.printf("SOUND_STATUS level=%s configured=%d buffers=%u evictions=%lu rendered=%s powered=%d playing=%d plays=%lu stops=%lu lock_misses=%lu render_us=%lu max_slice_us=%lu max_begin_us=%lu max_end_us=%lu\n",
       Appearance::label(level),configured_,buffers,(unsigned long)evictions_,rendered,begun_,playing(),
@@ -100,12 +100,13 @@ private:
         if(oldest==Appearance::DRAWN || used_[j]<used_[oldest])oldest=j;
       }
       if(count<MAX_BUFFERS || oldest==Appearance::DRAWN)return;
-      heap_caps_free(buffers_[oldest]);buffers_[oldest]=nullptr;rendered_&=~(decltype(rendered_)(1)<<oldest);++evictions_;
+      heap_caps_free(buffers_[oldest]);buffers_[oldest]=nullptr;rendered_[oldest]=false;++evictions_;
       if(target_==Appearance::drawnEffect(oldest))target_=Appearance::Effect::Off;
     }
   }
   StickS3MotionAcquisition &imu_;
-  int16_t *buffers_[Appearance::DRAWN]={};uint64_t rendered_=0;uint32_t used_[Appearance::DRAWN]={},clock_=0,evictions_=0;unsigned playingIndex_=Appearance::DRAWN;
+  // More drawn effects than a 64-bit mask holds since 0.18: one flag each.
+  int16_t *buffers_[Appearance::DRAWN]={};bool rendered_[Appearance::DRAWN]={};uint32_t used_[Appearance::DRAWN]={},clock_=0,evictions_=0;unsigned playingIndex_=Appearance::DRAWN;
   BestEffectSound::Synth synth_{Appearance::Effect::Off,0};
   Appearance::Effect target_=Appearance::Effect::Off;
   bool configured_=false,begun_=false;

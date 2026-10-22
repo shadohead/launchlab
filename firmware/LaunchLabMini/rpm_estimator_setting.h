@@ -1,7 +1,7 @@
 #pragma once
 #include <Preferences.h>
 #include "rpm_estimator.h"
-// A new versioned key only. Missing means the restored three-turn default;
+// A new versioned key only. Missing means RpmEstimator::DEFAULT_MODE;
 // invalid bytes are retained. Existing sleep/GPIO/history/reference keys stay intact.
 class RpmEstimatorSetting {
 public:

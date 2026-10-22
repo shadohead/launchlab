@@ -21,6 +21,7 @@ struct Mask {
   constexpr Mask()=default;
   constexpr Mask(uint64_t low,uint64_t high=0):lo(low),hi(high){}
   constexpr bool has(unsigned e)const{return e<64?(lo>>e)&1:e<BITS?(hi>>(e-64))&1:false;}
+  constexpr bool has(Effect e)const{return has(unsigned(e));}
   constexpr Mask operator|(Mask m)const{return {lo|m.lo,hi|m.hi};}
   constexpr Mask operator&(Mask m)const{return {lo&m.lo,hi&m.hi};}
   constexpr Mask operator~()const{return {~lo,~hi};}

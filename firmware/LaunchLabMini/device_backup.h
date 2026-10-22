@@ -6,6 +6,7 @@
 #include <memory>
 #include <new>
 #include "appearance.h"
+#include "brightness.h"
 #include "milestones.h"
 #include "effect_set.h"
 #include "launch_motion.h"
@@ -35,19 +36,22 @@ namespace DeviceBackup {
 // adds the effect set section (9), written only when the set differs from the
 // default; its custom themes and milestones (the pooled section) are optional.
 // A backup with the default set stays format 1 to 4 byte for byte, so older
-// firmware and updaters keep reading it. Older firmware refuses a newer format
-// before writing anything. Every format restores here.
-constexpr uint32_t MAGIC=0x4b424c4c,FORMAT=5,POOLS_FORMAT=4,MILESTONES_FORMAT=3,THEMES_FORMAT=2,LEGACY_FORMAT=1; // "LLBK"
+// firmware and updaters keep reading it. Format 6 (0.18) carries a table
+// whose pools hold an effect past value 63, which the 64-bit pools of 0.16
+// and 0.17 cannot, in the pooled section as the 128-bit record; its effect
+// set section is optional. Any other backup is written as format 1 to 5 byte
+// for byte. Older firmware refuses a newer format before writing anything.
+// Every format restores here.
+constexpr uint32_t MAGIC=0x4b424c4c,FORMAT=6,EFFECT_SET_FORMAT=5,POOLS_FORMAT=4,MILESTONES_FORMAT=3,THEMES_FORMAT=2,LEGACY_FORMAT=1; // "LLBK"
 constexpr unsigned HEADER_BYTES=44,RUNTIME_BYTES=32;
 enum Section:uint8_t {Practice=1,Look=2,Bests=3,Motion=4,Settings=5,CustomThemes=6,MilestoneTable=7,MilestonePools=8,OfferedEffects=9};
 
 struct UserSettings {
-  uint8_t sleepMinutes=InactivityTimer::DEFAULT_MINUTES,brightness=40;
+  uint8_t sleepMinutes=InactivityTimer::DEFAULT_MINUTES,brightness=Brightness::DEFAULT_PERCENT;
   RpmEstimator::Mode rpmMethod=RpmEstimator::DEFAULT_MODE;
   StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;
   bool flipped=false;
   MountOrientation::Mode mount=MountOrientation::Mode::Top;
-  static bool validBrightness(uint8_t value){return value>=10 && value<=100 && value%10==0;}
 };
 
 struct Contents {
@@ -61,18 +65,19 @@ struct Contents {
   // themes only when the backup carries them.
   bool hasThemes=false;
   Themes::Library themes;
-  // Format 3 or 4: the milestones record. A restore replaces the device's
-  // milestones only when the backup carries them.
+  // Format 3, 4 or 6 (or 5, optional): the milestones record. A restore
+  // replaces the device's milestones only when the backup carries them.
   bool hasMilestones=false;
   Milestones::Config milestones;
-  // Format 5: the effect set record. A restore replaces the device's set
-  // only when the backup carries it.
+  // Format 5 (or 6, optional): the effect set record. A restore replaces the
+  // device's set only when the backup carries it.
   bool hasEffectSet=false;
   EffectSet::Config effectSet;
   char runtime[RUNTIME_BYTES+1]={};
   bool themesSection()const{return hasThemes || Appearance::custom(look.theme);}
   uint32_t format()const{
-    return hasEffectSet?FORMAT:hasMilestones?(milestones.fitsV1()?MILESTONES_FORMAT:POOLS_FORMAT):themesSection()?THEMES_FORMAT:LEGACY_FORMAT;
+    if(hasMilestones && !milestones.fitsV2())return FORMAT;
+    return hasEffectSet?EFFECT_SET_FORMAT:hasMilestones?(milestones.fitsV1()?MILESTONES_FORMAT:POOLS_FORMAT):themesSection()?THEMES_FORMAT:LEGACY_FORMAT;
   }
 };
 
@@ -106,10 +111,11 @@ inline size_t encode(const Contents &c,const char *runtime,Buffer &out) {
   const uint32_t format=c.format();
   if(c.themesSection()){Themes::Library::Image themes;c.themes.encode(themes);section(CustomThemes,themes.data(),themes.size());}
   if(format==MILESTONES_FORMAT){Milestones::Config::V1Image table;c.milestones.encodeV1(table);section(MilestoneTable,table.data(),table.size());}
-  if(format==POOLS_FORMAT || (format==FORMAT && c.hasMilestones)){
-    Milestones::Config::Image table;c.milestones.encode(table);section(MilestonePools,table.data(),table.size());
+  if(format==POOLS_FORMAT || (format==EFFECT_SET_FORMAT && c.hasMilestones)){
+    Milestones::Config::V2Image table;c.milestones.encodeV2(table);section(MilestonePools,table.data(),table.size());
   }
-  if(format==FORMAT){EffectSet::Config::Image set;c.effectSet.encode(set);section(OfferedEffects,set.data(),set.size());}
+  if(format==FORMAT){Milestones::Config::Image table;c.milestones.encode(table);section(MilestonePools,table.data(),table.size());}
+  if(format==EFFECT_SET_FORMAT || (format==FORMAT && c.hasEffectSet)){EffectSet::Config::Image set;c.effectSet.encode(set);section(OfferedEffects,set.data(),set.size());}
   put32(out.data(),MAGIC);put32(out.data()+4,format);put32(out.data()+8,uint32_t(p+4));
   std::strncpy(reinterpret_cast<char *>(out.data()+12),runtime,RUNTIME_BYTES);
   out[12+RUNTIME_BYTES-1]=0;
@@ -119,10 +125,10 @@ inline size_t encode(const Contents &c,const char *runtime,Buffer &out) {
 
 // All-or-nothing: every record must pass its own validation, each section may
 // appear once, and history, appearance, bests and settings are all required.
-// Custom themes appear in format 2 (always) and 3-5 (optional); milestones in
-// format 3 (0.15's record) or 4 (the pooled record), and always there, or in
-// format 5 (the pooled record, optional); the effect set in format 5 only, and
-// always.
+// Custom themes appear in format 2 (always) and 3-6 (optional); milestones in
+// format 3 (0.15's record), 4 (0.16's pooled record) or 6 (0.18's 128-bit
+// pooled record), and always there, or in format 5 (0.16's pooled record,
+// optional); the effect set in format 5 (always) or 6 (optional).
 inline bool decode(const uint8_t *data,size_t n,Contents &out) {
   const uint32_t format=n>=8?get32(data+4):0;
   if(n<HEADER_BYTES+4 || n>MAX_BYTES || get32(data)!=MAGIC || format<LEGACY_FORMAT || format>FORMAT || get32(data+8)!=n ||
@@ -134,7 +140,7 @@ inline bool decode(const uint8_t *data,size_t n,Contents &out) {
   while(p<n-4) {
     if(n-4-p<8 || data[p+1] || data[p+2] || data[p+3])return false;
     const uint8_t id=data[p];const uint32_t length=get32(data+p+4);const uint8_t *body=data+p+8;
-    const uint8_t last=format==FORMAT?OfferedEffects:format==POOLS_FORMAT?MilestonePools:format==MILESTONES_FORMAT?MilestoneTable:
+    const uint8_t last=format>=EFFECT_SET_FORMAT?OfferedEffects:format==POOLS_FORMAT?MilestonePools:format==MILESTONES_FORMAT?MilestoneTable:
       format==THEMES_FORMAT?CustomThemes:Settings;
     if(length>n-4-p-8 || id<Practice || id>last || (seen&(1u<<id)) || (format>=POOLS_FORMAT && id==MilestoneTable))return false;
     seen|=1u<<id;
@@ -144,7 +150,9 @@ inline bool decode(const uint8_t *data,size_t n,Contents &out) {
       case Look:ok=c->look.decode(body,length);break;
       case CustomThemes:ok=c->themes.decode(body,length);c->hasThemes=ok;break;
       case MilestoneTable:ok=length==Milestones::Config::V1_IMAGE_BYTES && c->milestones.decode(body,length);c->hasMilestones=ok;break;
-      case MilestonePools:ok=length==Milestones::Config::IMAGE_BYTES && c->milestones.decode(body,length);c->hasMilestones=ok;break;
+      case MilestonePools:
+        ok=length==(format==FORMAT?Milestones::Config::IMAGE_BYTES:Milestones::Config::V2_IMAGE_BYTES) && c->milestones.decode(body,length);
+        c->hasMilestones=ok;break;
       case OfferedEffects:ok=c->effectSet.decode(body,length);c->hasEffectSet=ok;break;
       case Bests:ok=c->bests.decode(body,length);break;
       case Motion:{
@@ -159,7 +167,7 @@ inline bool decode(const uint8_t *data,size_t n,Contents &out) {
         // zero (Top); older firmware rejects Sidecar before writing anything.
         if(length!=SETTINGS_BYTES || body[6] || body[7])break;
         auto &s=c->settings;
-        ok=InactivityTimer::validMinutes(body[0]) && UserSettings::validBrightness(body[1]) &&
+        ok=InactivityTimer::validMinutes(body[0]) && Brightness::valid(body[1]) &&
           RpmEstimator::valid(body[2]) && StickS3SensorProfile::valid(body[3]) && body[4]<=1 && MountOrientation::valid(body[5]);
         if(ok){s.sleepMinutes=body[0];s.brightness=body[1];s.rpmMethod=RpmEstimator::Mode(body[2]);
           s.sensorProfile=StickS3SensorProfile::Mode(body[3]);s.flipped=body[4];s.mount=MountOrientation::Mode(body[5]);}
@@ -169,11 +177,11 @@ inline bool decode(const uint8_t *data,size_t n,Contents &out) {
     if(!ok)return false;
     p+=8+length;
   }
-  // Format 2 exists to carry the custom themes, formats 3 and 4 the
+  // Format 2 exists to carry the custom themes, formats 3, 4 and 6 the
   // milestones and format 5 the effect set.
   const unsigned required=(1u<<Practice)|(1u<<Look)|(1u<<Bests)|(1u<<Settings)|
     (format==THEMES_FORMAT?1u<<CustomThemes:0u)|(format==MILESTONES_FORMAT?1u<<MilestoneTable:0u)|
-    (format==POOLS_FORMAT?1u<<MilestonePools:0u)|(format==FORMAT?1u<<OfferedEffects:0u);
+    (format==POOLS_FORMAT || format==FORMAT?1u<<MilestonePools:0u)|(format==EFFECT_SET_FORMAT?1u<<OfferedEffects:0u);
   if(p!=n-4 || (seen&required)!=required)return false;
   out=*c;return true;
 }

@@ -249,7 +249,7 @@ int main() {
       assert(bestEffect.effect()==expected[i] && M5.Speaker.plays==2+i);checkClip(expected[i]);
     }
     // With New best only, idle passes leave the milestone effects unrendered.
-    reset(Appearance::Effect::Orbit);
+    reset(Appearance::Effect::Orbit);assert(milestones.select(Milestones::Mode::Best));
     for(unsigned i=0;i<2000;++i)tickSound(Snapshot{});
     assert(soundPlayer.prepared(Effect::Orbit) && !soundPlayer.prepared(Effect::Slash) && !soundPlayer.prepared(Effect::Sparkles));
   }

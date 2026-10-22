@@ -41,7 +41,10 @@ int main(){
   static_assert(unsigned(Effect::Orbit)==0 && unsigned(Effect::Lightning)==4 && unsigned(Effect::Off)==5 &&
                 unsigned(Effect::Random)==6 && unsigned(Effect::Slash)==7 && unsigned(Effect::Tidal)==8 &&
                 unsigned(Effect::Radiance)==12 && unsigned(Effect::Spin)==13 && unsigned(Effect::Bloom)==17 &&
-                unsigned(Effect::Crimson)==18 && unsigned(Effect::Ravage)==42 && EFFECTS==43 && DRAWN==41);
+                unsigned(Effect::Crimson)==18 && unsigned(Effect::Ravage)==42 && unsigned(Effect::Haymaker)==43 &&
+                unsigned(Effect::Volley)==63 && unsigned(Effect::Starfall)==64 && unsigned(Effect::Sharkfin)==72 && unsigned(Effect::Slingshot)==73 && unsigned(Effect::Blink)==82 && EFFECTS==83 && DRAWN==81);
+  // Labels are unique: the web and the USB lines name effects by label.
+  for(unsigned a=0;a<EFFECTS;++a)for(unsigned b=a+1;b<EFFECTS;++b)assert(std::strcmp(label(Effect(a)),label(Effect(b))));
   for(unsigned i=0;i<DRAWN;++i)assert(drawn(unsigned(drawnEffect(i))) && drawnIndex(drawnEffect(i))==i);
   for(unsigned e=0;e<EFFECTS;++e)assert(drawn(e)==(e!=5 && e!=6) && std::strlen(label(Effect(e)))<=9 && (duration(Effect(e))>0)==drawn(e));
   assert(!drawn(EFFECTS) && !drawn(255) && !std::strcmp(label(Effect::Slash),"Slash") && duration(Effect::Slash)==5000);
@@ -49,13 +52,14 @@ int main(){
   // impact), with a sound of a hit and a short tail.
   for(unsigned e=0;e<EFFECTS;++e)if(drawn(e))assert(duration(Effect(e))>=4800 && duration(Effect(e))<=5200 && soundDuration(Effect(e))<=2800);
   // Settings order Random, Orbit..Lightning, Slash, Tidal..Bloom, Off; Random never repeats its previous pick.
-  {Effect e=Effect::Random;uint64_t seen=0;for(unsigned i=0;i<EFFECTS;++i){seen|=uint64_t(1)<<unsigned(e);e=nextChoice(e);}
-   assert(e==Effect::Random && seen==(uint64_t(1)<<EFFECTS)-1 && nextChoice(Effect::Random)==Effect::Orbit && nextChoice(Effect::Lightning)==Effect::Slash &&
-          nextChoice(Effect::Slash)==Effect::Tidal && nextChoice(Effect::Radiance)==Effect::Spin && nextChoice(Effect::Bloom)==Effect::Crimson && nextChoice(Effect::Ravage)==Effect::Off &&
+  {Effect e=Effect::Random;std::array<bool,EFFECTS> seen{};for(unsigned i=0;i<EFFECTS;++i){assert(!seen[unsigned(e)]);seen[unsigned(e)]=true;e=nextChoice(e);}
+   assert(e==Effect::Random && nextChoice(Effect::Random)==Effect::Orbit && nextChoice(Effect::Lightning)==Effect::Slash &&
+          nextChoice(Effect::Slash)==Effect::Tidal && nextChoice(Effect::Radiance)==Effect::Spin && nextChoice(Effect::Bloom)==Effect::Crimson &&
+          nextChoice(Effect::Ravage)==Effect::Haymaker && nextChoice(Effect::Volley)==Effect::Starfall && nextChoice(Effect::Sharkfin)==Effect::Slingshot && nextChoice(Effect::Blink)==Effect::Off &&
           nextChoice(Effect::Off)==Effect::Random && nextChoice(Effect(EFFECTS))==Effect::Random);
-   uint64_t picked=0;
-   for(uint32_t bits=0;bits<1000;++bits)for(unsigned prev=0;prev<EFFECTS;++prev){const Effect p=pick(bits*2654435761u,Effect(prev));assert(drawn(unsigned(p)) && p!=Effect(prev));picked|=uint64_t(1)<<unsigned(p);}
-   assert(picked==(((uint64_t(1)<<EFFECTS)-1) & ~(uint64_t(1)<<5 | uint64_t(1)<<6)));}
+   std::array<bool,EFFECTS> picked{};
+   for(uint32_t bits=0;bits<1000;++bits)for(unsigned prev=0;prev<EFFECTS;++prev){const Effect p=pick(bits*2654435761u,Effect(prev));assert(drawn(unsigned(p)) && p!=Effect(prev));picked[unsigned(p)]=true;}
+   for(unsigned v=0;v<EFFECTS;++v)assert(picked[v]==drawn(v));}
   for(unsigned theme=0;theme<THEMES;++theme)for(unsigned effect=0;effect<EFFECTS;++effect){
     assert(config.select(Theme(theme),Effect(effect)) && settings.save(config));
     Config restored;AppearanceStore<Config> reader;assert(reader.begin(restored,"a","cfg0","cfg1"));
@@ -125,13 +129,21 @@ int main(){
     const Effect effect=Effect(mode);
     // How an effect may touch the UI's own pixels. Slash cuts the readout
     // and slides its halves; Gale leans the readout's rows sideways, Glitch
-    // tears a few rows by a pixel or two and Rupture ripples them; Eclipse
-    // and Umbra dim the readout toward the background (never below 3:1) and
-    // Rupture flashes it crimson. Every other change to UI pixels brightens
+    // tears a few rows by a pixel or two, Rupture ripples them, Zipper
+    // opens them like a mouth, Elastic stretches them and Slingshot knocks
+    // their foot sideways; Eclipse, Umbra, Sequel (its sepia) and Presence
+    // dim the readout toward the background (never below 3:1) and Rupture
+    // flashes it crimson. Every other change to UI pixels brightens
     // header glyphs in every channel (the glint, Frost's ice, Radiance's
     // flare and the anime sets' flares).
-    const bool slash=effect==Effect::Slash,moves=slash || effect==Effect::Gale || effect==Effect::Glitch || effect==Effect::Rupture;
-    const bool dims=effect==Effect::Eclipse || effect==Effect::Umbra || effect==Effect::Rupture;
+    const bool slash=effect==Effect::Slash,moves=slash || effect==Effect::Gale || effect==Effect::Glitch || effect==Effect::Rupture ||
+      effect==Effect::Zipper || effect==Effect::Elastic || effect==Effect::Slingshot;
+    const bool dims=effect==Effect::Eclipse || effect==Effect::Umbra || effect==Effect::Rupture || effect==Effect::Sequel ||
+      effect==Effect::Presence;
+    // Boundless covers every row below the readout's halo (row 46 on here)
+    // until covers(), anything going there, and gives them back exactly.
+    const uint32_t cover=BestEffectUI::Renderer::covers(effect);
+    assert(cover*4<=duration(effect)*3);
     for(unsigned ms=0;ms<=5300;ms+=10) {
       auto out=base;renderer.draw({out.data(),135,240},effect,ms,accent(Theme(theme)));
       auto again=base;renderer.draw({again.data(),135,240},effect,ms,accent(Theme(theme)));
@@ -140,6 +152,7 @@ int main(){
       const bool settled=drawn(mode) && ms*4>=duration(effect)*3;
       for(int i=0;i<135*240;++i)if(out[i]!=base[i]) {
         const int y=i/135;drew=true;lower|=y>80;
+        if(ms<cover && y>=46)continue;
         // Moved readout pixels: only in its rows and the few rows a Slash
         // half slides into.
         if(moves && y>=13-6 && y<=46+6){assert(!settled || !base[i]);continue;}
@@ -169,13 +182,16 @@ int main(){
   }
   // A custom theme's background: the same pixels change as on black, since
   // ink is anything not of the background color; untouched pixels keep it.
+  // Rows an effect covers (below the readout's halo, row 46 on) may land on
+  // a UI pixel's own colour, so they are left out while covered.
   {
     const uint16_t bg=0x0841;std::array<uint16_t,135*240> themed=base;
     for(auto &p:themed)if(!p)p=swap(bg);
     for(unsigned mode=0;mode<DRAWN;++mode)for(unsigned ms:{40u,300u,700u,1200u}) {
       auto black=base;renderer.draw({black.data(),135,240},drawnEffect(mode),ms,accent(Theme::Mint));
       auto out=themed;renderer.draw({out.data(),135,240},drawnEffect(mode),ms,accent(Theme::Mint),BestEffectUI::Renderer::Anchor(),bg);
-      for(int i=0;i<135*240;++i)assert((out[i]!=themed[i])==(black[i]!=base[i]));
+      const int rows=ms<BestEffectUI::Renderer::covers(drawnEffect(mode))?46:240;
+      for(int i=0;i<rows*135;++i)assert((out[i]!=themed[i])==(black[i]!=base[i]));
     }
   }
   // Slash: the blade cuts the readout along a line rising 0.3 to the right

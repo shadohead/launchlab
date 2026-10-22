@@ -21,6 +21,12 @@ public:
   static constexpr unsigned NEEDED_ENTRIES=NvsBudget::blobEntries(Themes::Library::IMAGE_BYTES)+
     NvsBudget::blobEntries(PracticeHistory::IMAGE_BYTES);
   static bool fits(unsigned availableEntries){return availableEntries>=NEEDED_ENTRIES;}
+  // What a put needs free: NEEDED_ENTRIES to rewrite the record, more when
+  // there is none yet (NvsBudget::optionalNeeded keeps the reserve).
+  unsigned neededEntries()const {
+    const unsigned own=NvsBudget::blobEntries(Themes::Library::IMAGE_BYTES);
+    return NvsBudget::optionalNeeded(own,status_==Status::Empty?own:0,NvsBudget::blobEntries(PracticeHistory::IMAGE_BYTES));
+  }
 
   Status begin(Themes::Library &library) {
     library=Themes::Library{};

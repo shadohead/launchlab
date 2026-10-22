@@ -21,6 +21,7 @@ public:
         history=*candidate;slot_=slot;found=true;
       }
     }
+    found_=found;
     if(present && !found){ready_=false;return false;}
     savedGeneration_=history.generation();return true;
   }
@@ -47,6 +48,10 @@ public:
   bool hasOrphan(){return ready_ && prefs_.isKey(ORPHAN_KEY);}
   bool removeOrphan(){return ready_ && prefs_.remove(ORPHAN_KEY) && !prefs_.isKey(ORPHAN_KEY);}
   bool ready()const{return ready_;}
+  // Whether begin() read a record, and the generation NVS holds now: the
+  // value the history log records as mirrored (history_log.h).
+  bool found()const{return found_;}
+  uint32_t savedGeneration()const{return savedGeneration_;}
   bool pending(const PracticeHistory &history)const{return history.generation()!=savedGeneration_;}
   uint32_t pendingCount(const PracticeHistory &history)const{return history.generation()-savedGeneration_;}
 private:
@@ -54,5 +59,5 @@ private:
   PracticeHistory::Image image_{};
   uint32_t savedGeneration_=0;
   unsigned slot_=0;
-  bool ready_=false;
+  bool ready_=false,found_=false;
 };

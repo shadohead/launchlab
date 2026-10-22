@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+from history_log_glue import HELPERS, closed, glue
 
 
 def close(text, opening, left="(", right=")"):
@@ -66,7 +67,7 @@ def main():
     if hold: constants += "\n" + hold[0]
     # Sketches that schedule by IMU stillness: the launcher is set down.
     still = "static HistoryCheckpoint::Stillness imuStill{true,0};\n" if "imuStill" in source else ""
-    header = constants + "\n" + still + "\n".join(function(source, name) for name in ["prepareMotion", "finishMotion", "toggleFeedback", "saveHistory"])
+    header = constants + "\n" + still + closed(source) + "\n".join(function(source, name) for name in ["prepareMotion", "finishMotion", "toggleFeedback", "saveHistory"])
     if "celebrationBadge()" in source:
         start = source.index("static const char *celebrationBadge()")
         header = source[start:close(source, source.index("{", start), "{", "}") + 1] + "\n" + header

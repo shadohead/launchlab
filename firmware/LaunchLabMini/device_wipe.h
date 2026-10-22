@@ -27,6 +27,8 @@ inline bool ownedNamespace(const char *space) {
 //   setIntent() commits the complete canonical marker durably.
 //   clearNamespace(name) commits erasure and verifies absence through a fresh
 //     handle. Missing namespaces are already clear; other errors fail closed.
+//   clearFlash() erases the spiffs partition (the history log and any later
+//     store there, docs/FIRMWARE_FLASH_LAYOUT.md); no partition is clear.
 //   clearIntent() commits marker removal. Core verifies its absence last.
 // Calls must be serialized against every app writer. After any final confirmed
 // attempt, the caller must prevent old RAM records from being saved or used,
@@ -39,6 +41,7 @@ template<class Store> State inspect(Store &store) {
 namespace Detail {
 template<class Store> Result finish(Store &store) {
   for(const auto *space:NAMESPACES)if(!store.clearNamespace(space))return Result::Failed;
+  if(!store.clearFlash())return Result::Failed;
   if(!store.clearIntent())return Result::Failed;
   return inspect(store)==State::Clean?Result::Complete:Result::Failed;
 }

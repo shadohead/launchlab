@@ -38,7 +38,7 @@ int main(){
   auto frame=[&](Effect e,unsigned ms,uint16_t accentColor){
     Frame out=base;renderer.draw({out.data(),135,240},e,ms,accentColor);return out;
   };
-  auto model=[&]{return 1100+1.8*renderer.plots()+1.0*renderer.probes()+13.0*renderer.scans();};
+  auto model=[&]{return renderer.modelledUs();};
 
   for(unsigned e=0;e<5;++e){
     const Effect effect=effects[e];

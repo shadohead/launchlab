@@ -3,7 +3,7 @@
 // best_effect_sound.h, which includes this file before the Synth: fixed
 // seeds, no libm per sample, content above about 200 Hz, timed to the
 // animation. Each is a hit with a short tail and is silent after LENGTH
-// seconds, well inside its effect's five-second animation.
+// seconds, inside its effect's five-second animation.
 namespace BestEffectSound {
 namespace detail {
 // The tail's fade: full until 0.3 s before the end, then smoothly to silence.
@@ -39,46 +39,57 @@ struct Rupture {
     return v*sorceryTail(t,LENGTH);
   }
 };
-// Boundless (Unlimited Void): a crystalline chime as the sign closes, a
-// rising whoosh and an airy chord as the boundary opens, then a flood of
-// quick high pings that swell with each wave and thin out.
+// Boundless (the first Unlimited Void): a breath drawn in and a rising whine
+// as the eyes open and glow; a hard white flash at the burst (a noise crack and a
+// glassy ping); a bright wash as the white floods the screen; soft thuds of
+// ink as the blots swallow it; then the void opens on a deep, slowly beating
+// chord with a high shimmer of pings that thins out (the close is silent:
+// sounds stop by 2.8 s).
 struct Boundless {
-  static constexpr float OPEN=.5f,LENGTH=2.4f;static constexpr int BELL=4,PAD=4;
-  Noise noise{0xbb67ae85u};Smooth low,wide,tick;Osc bell[BELL],pad[PAD],ping;Decay ring[BELL],pip;bool rang=false;
-  uint32_t bellStep[BELL],padStep[PAD],slot=~0u,pingStep=0;float at=0;bool live=false,fired=false;
+  static constexpr float BURST=.45f,WHITE=.55f,HOLES=.74f,VOID=1.08f,LENGTH=2.8f;static constexpr int PAD=4,BLOTS=8;
+  Noise noise{0xbb67ae85u};Smooth low,wide,thud,air,wash,washLow;Osc whine,ping,pad[PAD],shimmer,drop;
+  Decay crack,glass,flood,blot,sparkle;
+  uint32_t padStep[PAD],pingStep=Osc::step(3951.1f),slot=~0u,sparkStep=0;int blotted=0;
+  bool burst=false,flooded=false;float at=0;bool live=false,fired=false;
   Boundless() {
-    static constexpr float hz[]={1568.0f,2349.3f,3136.0f,4699.6f},rate[]={4,6,8,11},chord[]={523.3f,659.3f,784.0f,1046.5f};
-    for(int k=0;k<BELL;++k){bellStep[k]=Osc::step(hz[k]);ring[k].set(rate[k]);}
+    // A, E, A, C#: a wide A major, all above 200 Hz.
+    static constexpr float chord[]={220.0f,329.6f,440.0f,554.4f};
     for(int k=0;k<PAD;++k)padStep[k]=Osc::step(chord[k]);
-    pip.set(38);
+    crack.set(40);glass.set(5);flood.set(9);blot.set(22);sparkle.set(40);
   }
   float next(float t) {
     if(t>=LENGTH)return 0;
     const float x=noise.next();float v=0;
-    // The sign: a soft rising hiss, then the chime.
-    if(t<OPEN)v+=.18f*smooth(t*(1/.4f))*(wide.next(x,.25f)-low.next(x,.08f));
-    if(t>=OPEN-.03f) {
-      static constexpr float level[]={.32f,.22f,.15f,.08f};
-      if(!rang){for(int k=0;k<BELL;++k)ring[k].trigger(level[k]);rang=true;}
-      const float attack=smooth((t-OPEN+.03f)*(1/.003f));
-      for(int k=0;k<BELL;++k)v+=attack*ring[k].next()*bell[k].advance(bellStep[k]);
+    // The eyes: a breath drawn in, the whine rising under it.
+    if(t<BURST) {
+      const float s=t*(1/BURST);
+      v+=.22f*s*s*(wide.next(x,.18f+.3f*s)-low.next(x,.06f))+.1f*smooth(s*3)*whine.next(420+680*s*s);
     }
-    if(t>=OPEN) {
-      const float a=t-OPEN;
-      // The opening whoosh: a band of noise sweeping up.
-      if(a<.6f){const float swell=smooth(a*(1/.15f))*(1-smooth((a-.25f)*(1/.35f)));v+=.4f*swell*(wide.next(x,.15f+.5f*a)-low.next(x,.08f+.2f*a));}
-      // The void's chord, pulsing with the inward waves (every 0.4 s).
-      const float wave=SINE[uint32_t(a*(1/.4f)*1024)&1023],env=smooth(a*(1/.3f))*(1-smooth((t-1.2f)*(1/.6f)));
+    // The flash: a crack of noise and a bright glass ping.
+    if(t>=BURST) {
+      if(!burst){crack.trigger(1);glass.trigger(.35f);burst=true;}
+      v+=.7f*crack.next()*(x-air.next(x,.2f))+glass.next()*ping.advance(pingStep);
+    }
+    // The white floods the screen: a bright wash of noise.
+    if(t>=WHITE && !flooded){flood.trigger(.5f);flooded=true;}
+    if(flood.level>.002f)v+=flood.next()*(wash.next(x,.6f)-washLow.next(x,.15f));
+    // Ink: a soft, low thud as each blot blooms.
+    const int due=t<HOLES?0:std::min(BLOTS,1+int((t-HOLES)*(1/.03f)));
+    if(due>blotted){blot.trigger(.4f-.025f*blotted);blotted=due;}
+    if(blot.level>.002f)v+=blot.next()*(1.4f*thud.next(x,.05f)+.25f*drop.next(240+70*blotted));
+    // The void: a deep chord beating slowly, and a high shimmer of pings.
+    if(t>=VOID-.05f) {
+      const float a=t-VOID,env=smooth((a+.05f)*(1/.25f))*(1-smooth((t-2.0f)*(1/.8f)));
+      const float beat=.75f+.25f*SINE[uint32_t(std::max(0.0f,a)*1.7f*1024)&1023];
       float chord=0;for(int k=0;k<PAD;++k)chord+=pad[k].advance(padStep[k]);
-      v+=.1f*env*(.7f+.3f*wave)*chord;
-      // The flood of information: quick high pings.
-      const float density=smooth((a-.3f)*(1/.2f))*(1-smooth((t-1.4f)*(1/.8f)));
-      const uint32_t now=uint32_t(t*28);
-      if(now!=slot){slot=now;at=(slot+rnd(slot,61))*(1/28.0f);live=rnd(slot,62)<density;fired=false;}
-      if(live && !fired && t>=at){static constexpr float scale[]={2093.0f,2349.3f,2637.0f,3136.0f,3520.0f,4186.0f,4698.6f};
-        pip.trigger(.13f+.07f*rnd(slot,63));pingStep=Osc::step(scale[hash(slot*7+1)%7]);fired=true;}
-      if(pip.level>.001f)v+=pip.next()*ping.advance(pingStep);
+      v+=.13f*env*beat*chord;
+      const float density=.8f*smooth((a-.1f)*(1/.2f))*(1-smooth((t-1.9f)*(1/.6f)));
+      const uint32_t now=uint32_t(t*18);
+      if(now!=slot){slot=now;at=(slot+rnd(slot,71))*(1/18.0f);live=rnd(slot,72)<density;fired=false;}
+      if(live && !fired && t>=at){static constexpr float scale[]={1760.0f,2217.5f,2637.0f,3520.0f,4434.9f};
+        sparkle.trigger(.08f+.05f*rnd(slot,73));sparkStep=Osc::step(scale[hash(slot*5+3)%5]);fired=true;}
     }
+    if(sparkle.level>.001f)v+=sparkle.next()*shimmer.advance(sparkStep);
     return v*sorceryTail(t,LENGTH);
   }
 };

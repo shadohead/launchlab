@@ -7,14 +7,15 @@
 // `pools`, a four-row table with an effect pool: a format 4 backup
 // (backup-export-pools.txt).
 // With `effect-set`, four offered effects and the pooled table: a format 5
-// backup (backup-export-effect-set.txt).
+// backup (backup-export-effect-set.txt). With `wide`, the same with a pool
+// holding effects past value 63: a format 6 backup (backup-export-wide.txt).
 #include "../LaunchLabMini/device_backup.h"
 #include <cstdio>
 
 #include <cstring>
 
 int main(int argc,char **argv) {
-  const bool effectSet=argc>1 && !std::strcmp(argv[1],"effect-set");
+  const bool wide=argc>1 && !std::strcmp(argv[1],"wide"),effectSet=wide || (argc>1 && !std::strcmp(argv[1],"effect-set"));
   const bool themes=argc>1 && !std::strcmp(argv[1],"themes"),pools=effectSet || (argc>1 && !std::strcmp(argv[1],"pools")),milestones=pools || (argc>1 && !std::strcmp(argv[1],"milestones"));
   DeviceBackup::Contents c;
   for(uint32_t i=1;i<=40;++i)c.practice.accept(i,true,5000+i*37,i*20000);
@@ -38,14 +39,15 @@ int main(int argc,char **argv) {
   }
   if(pools) {
     const uint64_t pool=uint64_t(1)<<unsigned(Appearance::Effect::Tidal)|uint64_t(1)<<unsigned(Appearance::Effect::Frost)|uint64_t(1)<<unsigned(Appearance::Effect::Bloom);
-    const Milestones::Row rows[]={{9000,Appearance::Effect::Sparkles},{10500,pool},{12000,Appearance::Effect::Lightning},{15000,Appearance::Effect::Slash}};
+    const Milestones::Pool widePool=EffectSet::flag(Appearance::Effect::Haymaker)|EffectSet::flag(Appearance::Effect::Starfall)|EffectSet::flag(Appearance::Effect::Blink);
+    const Milestones::Row rows[]={{9000,Appearance::Effect::Sparkles},{10500,pool},{12000,wide?widePool:Milestones::Pool(EffectSet::flag(Appearance::Effect::Lightning))},{15000,Appearance::Effect::Slash}};
     c.hasMilestones=c.milestones.set(Milestones::Mode::Both,rows,4)==Milestones::Problem::None;
   }
   if(effectSet) {
     using Appearance::Effect;using EffectSet::flag;
-    c.hasEffectSet=c.effectSet.set(flag(Effect::Slash)|flag(Effect::Tidal)|flag(Effect::Crimson)|flag(Effect::Ravage))==EffectSet::Problem::None;
+    c.hasEffectSet=c.effectSet.set(flag(Effect::Slash)|flag(Effect::Tidal)|flag(Effect::Crimson)|flag(Effect::Ravage)|(wide?flag(Effect::Sharkfin):EffectSet::Mask()))==EffectSet::Problem::None;
   }
-  const char *runtime=effectSet?"0.17.0-sticks3-anime-pm":pools?"0.16.0-sticks3-effects-pm":milestones?"0.15.0-sticks3-milestone-pm":"0.11.0-sticks3-themes-backup";
+  const char *runtime=wide?"0.18.0-sticks3-anime-pm":effectSet?"0.17.0-sticks3-anime-pm":pools?"0.16.0-sticks3-effects-pm":milestones?"0.15.0-sticks3-milestone-pm":"0.11.0-sticks3-themes-backup";
   DeviceBackup::Buffer buffer;const size_t n=DeviceBackup::encode(c,runtime,buffer);
   // Unrelated log lines interleave with a real export; the parser must skip them.
   std::printf("RPM_STATE state=ready t_us=1 contrast=900.0 noise=4.0\n");

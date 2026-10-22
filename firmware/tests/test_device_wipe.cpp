@@ -131,6 +131,12 @@ struct Nvs {
     *out=nextIterator++;iterators[*out]=true;return leave(Ok);
   }
   static void release(Iterator i){enter("release","",false);assert(iterators.erase(i)==1);leave(Ok);}
+  static inline unsigned flashErases=0;
+  static int eraseFlash() {
+    assert(pending() && emptyApps()); // after every namespace, before the journal goes
+    if(!enter("erase-flash","spiffs"))return Error;
+    ++flashErases;return leave(Ok);
+  }
 };
 using Store=DeviceWipe::BasicNvsStore<Nvs>;
 

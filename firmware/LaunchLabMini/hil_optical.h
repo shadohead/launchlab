@@ -16,6 +16,10 @@
 #include "freertos/FreeRTOS.h"
 
 namespace Hil {
+// !adcstall: until this time (esp_timer us) the acquisition owner drops every
+// frame it reads, as a DMA that stopped with its interrupt held off past the
+// ring delivers none: reads find nothing and nothing reports an overflow.
+inline std::atomic<int64_t> adcSilentUntil{0};
 // Shared start of a scripted pull (host clock, us). 0 = no pull scheduled.
 inline std::atomic<int64_t> pullStartUs{0};
 inline std::atomic<uint32_t> pullCount{0};

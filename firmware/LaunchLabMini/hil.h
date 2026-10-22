@@ -309,6 +309,18 @@ LOOP_HELPER static void hilCommand(char *line) {
       used+=snprintf(line+used,sizeof(line)-used," %u:%u",unsigned(effectFrames.elapsed[i]),unsigned(effectFrames.us[i]));
     Hil::replyLine(line);return;
   }
+#ifdef BEST_EFFECT_PROFILE
+  if(!strcmp(cmd,"effectstages")) {
+    // A profiling build only: per recap effect pass since the last E
+    // preview, elapsed ms, us and the renderer's cycles per stage.
+    for(unsigned i=0;i<effectStages.count;++i) {
+      char line[200];size_t used=snprintf(line,sizeof(line),"HIL_EFFECT_STAGE elapsed=%u us=%lu cycles=",unsigned(effectStages.elapsed[i]),(unsigned long)effectStages.us[i]);
+      for(int s=0;s<BestEffectUI::Renderer::STAGES && used<sizeof(line)-12;++s)used+=snprintf(line+used,sizeof(line)-used,s?",%lu":"%lu",(unsigned long)effectStages.cycles[i][s]);
+      Hil::replyLine(line);delay(2);
+    }
+    Hil::reply("HIL_EFFECT_STAGES count=%u\n",effectStages.count);return;
+  }
+#endif
   if(!strcmp(cmd,"set")) {
     // The real Apply path: checkpoint, NVS write, resume, error state.
     const unsigned row=unsigned(num(-1)),value=unsigned(num(-1));
@@ -345,9 +357,11 @@ LOOP_HELPER static void hilCommand(char *line) {
     // boot must fall back to the default mode and table.
     const auto s=acquisition.snapshot();bool ok=false;
     if(acquisition.request(Action::IdleCheckpointBegin,s.launches)) {
-      Preferences store;uint8_t junk[Milestones::Config::IMAGE_BYTES];std::memset(junk,0x5a,sizeof(junk));
-      ok=store.begin("ll-appearance",false) && store.putBytes("mpool0",junk,sizeof(junk))==sizeof(junk) &&
-        store.putBytes("mpool1",junk,sizeof(junk))==sizeof(junk);store.end();
+      Preferences store;uint8_t junk[Milestones::Config::V2_IMAGE_BYTES];std::memset(junk,0x5a,sizeof(junk));
+      ok=store.begin("ll-appearance",false);
+      for(const char *key:{Milestones::KEY0,Milestones::KEY1})
+        ok=ok && store.putBytes(key,junk,sizeof(junk))==sizeof(junk);
+      store.end();
       acquisition.request(Action::CheckpointEnd);
     }
     Hil::reply("HIL_OK milecorrupt ok=%d\n",ok);return;
@@ -364,15 +378,86 @@ LOOP_HELPER static void hilCommand(char *line) {
     }
     Hil::reply("HIL_OK esetcorrupt ok=%d\n",ok);return;
   }
+  if(!strcmp(cmd,"newerforget")) {
+    // Removes the records firmware 0.16 and later add to ll-appearance (the
+    // milestone table, the effect set, and the mwide0/mwide1 table records of
+    // pre-release 0.18 test builds), inside an ADC checkpoint, so the store
+    // looks as a 0.15 unit's does; upgrade_check.py then installs 0.15 over
+    // it. Other records stay.
+    const auto s=acquisition.snapshot();bool ok=false;unsigned removed=0;
+    if(acquisition.request(Action::IdleCheckpointBegin,s.launches)) {
+      Preferences store;ok=store.begin("ll-appearance",false);
+      for(const char *key:{Milestones::KEY0,Milestones::KEY1,"mwide0","mwide1","eset0","eset1"})
+        if(ok && store.isKey(key)){ok=store.remove(key);removed+=ok;}
+      store.end();
+      // 0.18's history log: without its superblocks the partition reads as
+      // unformatted, as on a unit 0.18 never ran on (0.18 formats it at boot).
+      SpiffsFlash flash;
+      if(ok && flash.begin())for(uint32_t at:FlashLayout::SUPER_OFFSET)ok=flash.erase(at,FlashLayout::SECTOR) && ok;
+      acquisition.request(Action::CheckpointEnd);
+    }
+    Hil::reply("HIL_OK newerforget ok=%d removed=%u\n",ok,removed);return;
+  }
+  if(!strcmp(cmd,"adcstall")) {
+    // !adcstall <ms>: no frames reach the owner for ms (Hil::adcSilentUntil);
+    // the silence watchdog must notice within 250 ms and restart the ADC.
+    const uint32_t ms=std::min(2000u,unsigned(num(300)));
+    Hil::adcSilentUntil=esp_timer_get_time()+int64_t(ms)*1000;Hil::reply("HIL_OK adcstall ok=1 ms=%lu\n",(unsigned long)ms);return;
+  }
+  if(!strcmp(cmd,"logstatus")) {
+    // The history log: open, sectors ready, erase counts, newest records.
+    uint32_t low=0,high=0;
+    if(historyLog.isOpen()){low=~0u;for(unsigned i=0;i<historyLog.log().sectors();++i){low=std::min(low,historyLog.log().eraseCount(i));high=std::max(high,historyLog.log().eraseCount(i));}}
+    const auto h=historyLog.log().newest(HistoryLog::History),b=historyLog.log().newest(HistoryLog::Bests),pw=historyLog.log().newest(HistoryLog::Power);
+    Hil::reply("HIL_OK logstatus open=%d ready=%u erases_min=%u erases_max=%u history=%d bests=%d power=%d logged=%lu generation=%lu\n",historyLog.isOpen(),
+      historyLog.isOpen()?historyLog.log().readyCount():0u,unsigned(low),unsigned(high),h.found,b.found,pw.found,(unsigned long)loggedHistory,(unsigned long)practice.generation());
+    return;
+  }
+  if(!strcmp(cmd,"nvsfill")) {
+    // !nvsfill <entries>: filler blobs in a test namespace (ll-hil-fill)
+    // taking about that many NVS entries, replacing any earlier filler; 0
+    // removes it. For the free-entry sweep that sets the NVS reserve.
+    const unsigned want=unsigned(num(0));
+    const auto s=acquisition.snapshot();bool ok=false;unsigned taken=0,keys=0;
+    if(acquisition.request(Action::IdleCheckpointBegin,s.launches)) {
+      Preferences store;ok=store.begin("ll-hil-fill",false) && store.clear();
+      static uint8_t chunk[(40-3)*32];std::memset(chunk,0xa5,sizeof(chunk));
+      while(ok && taken+4<=want) {
+        const unsigned entries=std::min(40u,want-taken);char key[8];snprintf(key,sizeof(key),"f%u",keys++);
+        const size_t bytes=size_t(entries-3)*32;
+        ok=store.putBytes(key,chunk,bytes)==bytes;taken+=entries;
+      }
+      store.end();acquisition.request(Action::CheckpointEnd);
+    }
+    Hil::reply("HIL_OK nvsfill ok=%d entries=%u keys=%u\n",ok,taken,keys);return;
+  }
+  if(!strcmp(cmd,"legacytable")) {
+    // !legacytable write: 0.15's table record in both of its slots (mile0,
+    // mile1), as 0.15 leaves it after two saves, so nvs_tight can build the
+    // fullest state a unit upgraded from 0.15 reaches. !legacytable forget
+    // removes both. Inside an ADC checkpoint; 0.18 itself never writes them.
+    const char *what=arg();const bool write=what && !strcmp(what,"write");
+    const auto s=acquisition.snapshot();bool ok=false;unsigned n=0;
+    if((write || (what && !strcmp(what,"forget"))) && acquisition.request(Action::IdleCheckpointBegin,s.launches)) {
+      Preferences store;ok=store.begin("ll-appearance",false);
+      for(const char *key:{Milestones::V1_KEY0,Milestones::V1_KEY1}) {
+        Milestones::V1Record r;r.table.revision=++n;Milestones::V1Record::Image image;r.encode(image);
+        if(write)ok=ok && store.putBytes(key,image.data(),image.size())==image.size();
+        else if(ok && store.isKey(key))ok=store.remove(key);
+      }
+      store.end();acquisition.request(Action::CheckpointEnd);
+    }
+    Hil::reply("HIL_OK legacytable ok=%d\n",ok);return;
+  }
   if(!strcmp(cmd,"cycle")) {
     // !cycle <presses>: the Best effect editor through the real controls and
     // navigation: open it from Settings (BeginEdit), press B, list each draft
     // (stored effect values), then cancel the edit and go home. Nothing saves.
-    const unsigned presses=std::min(64u,unsigned(num(Appearance::DRAWN+2)));
+    const unsigned presses=std::min(128u,unsigned(num(Appearance::DRAWN+2)));
     if(controls.page==Controls::Page::Edit)cancelSettingEdit();
     controls.page=Controls::Page::Settings;controls.setting=unsigned(Controls::Setting::BestEffect);syncNavigation();
     buttonA();
-    static char line[48+64*4];size_t used=snprintf(line,sizeof(line),"HIL_CYCLE page=%u start=%u values=",unsigned(controls.page),unsigned(controls.draft));
+    static char line[48+128*4];size_t used=snprintf(line,sizeof(line),"HIL_CYCLE page=%u start=%u values=",unsigned(controls.page),unsigned(controls.draft));
     for(unsigned i=0;i<presses && controls.page==Controls::Page::Edit;++i) {
       buttonB();used+=snprintf(line+used,sizeof(line)-used,"%s%u",i?",":"",unsigned(controls.draft));
     }

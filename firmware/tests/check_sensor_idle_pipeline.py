@@ -11,6 +11,7 @@ import argparse
 import pathlib
 import subprocess
 import tempfile
+from history_log_glue import HELPERS, closed, glue
 
 parser = argparse.ArgumentParser()
 parser.add_argument('firmware', nargs='?', type=pathlib.Path,
@@ -197,7 +198,7 @@ int main(){
 with tempfile.TemporaryDirectory(prefix='launchlab_sensor_idle_') as tmp:
     root = pathlib.Path(tmp)
     cpp = root / 'sensor_idle_pipeline.cpp'
-    cpp.write_text(fixture + '\n' + tick + '\n' + tests)
+    cpp.write_text(fixture + '\n' + closed(source) + tick + '\n' + tests)
     executable = root / 'sensor_idle_pipeline'
     subprocess.run(['c++', '-std=c++17', '-O1', '-g', '-fsanitize=address,undefined',
                     '-fno-omit-frame-pointer',

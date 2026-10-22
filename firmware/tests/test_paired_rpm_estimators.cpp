@@ -97,7 +97,6 @@ struct OpticalTrace {
 };
 int main() {
   auto config=ready();assert(!config.singleTurnPeak && config.trackSingleTurnPeak);
-  assert(RpmEstimator::DEFAULT_MODE==RpmEstimator::Mode::ThreeTurn);
   for(unsigned tail:{1u,2u,3u}) {
     auto d=ready();auto old=oldReady();square(d,10000,12);square(old,10000,12);
     square(d,4000,tail);square(old,4000,tail);feed(d,1700000,240);feed(old,1700000,240);

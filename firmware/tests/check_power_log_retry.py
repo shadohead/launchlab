@@ -8,6 +8,7 @@ import argparse
 import pathlib
 import subprocess
 import tempfile
+from history_log_glue import HELPERS, glue
 
 parser = argparse.ArgumentParser()
 parser.add_argument("sketch", nargs="?", type=pathlib.Path,
@@ -141,7 +142,7 @@ int main(){
 '''
 with tempfile.TemporaryDirectory() as tmp:
     cpp = pathlib.Path(tmp) / "test.cpp"
-    cpp.write_text(prefix + function("savePowerLog()") + "\n" + function("tickPowerLog(") + test)
+    cpp.write_text(prefix + glue(source, ()) + function("savePowerLog()") + "\n" + function("tickPowerLog(") + test)
     executable = pathlib.Path(tmp) / "test"
     command = ["c++", "-std=c++17", "-O1", "-g", "-fsanitize=address,undefined",
                "-fno-omit-frame-pointer", "-I" + str(args.sketch.parent), "-I" + str(args.sketch.parent.parent / "LaunchLabRpm"), str(cpp), "-o", str(executable)]

@@ -6,6 +6,7 @@
 // prints it with the argument `effect-set`.
 #pragma once
 #include <cstdio>
+#include <initializer_list>
 #include <string>
 #include <vector>
 #include "../LaunchLabMini/device_backup.h"
@@ -16,16 +17,16 @@ using Appearance::Effect;using EffectSet::flag;using EffectSet::Mask;
 inline Mask of(std::initializer_list<unsigned> ids){Mask m;for(unsigned e:ids)m|=flag(e);return m;}
 // Valid sets and one failing each rule.
 inline std::vector<Mask> masks() {
-  Mask anime;for(unsigned e=18;e<Appearance::EFFECTS;++e)anime|=flag(e);
+  Mask anime,later;for(unsigned e=18;e<43;++e)anime|=flag(e);for(unsigned e=43;e<Appearance::EFFECTS;++e)later|=flag(e);
   return {
     EffectSet::DEFAULT_MASK,EffectSet::ALL,of({7}),of({0,18,42}),anime,of({2,8,13,23,33,38}),
+    later,                               // 0.18's eight sets
+    of({1,63}),of({2,64}),of({0,43,63,64,82}),  // either side of the 64-bit limit
     Mask(),                              // nothing offered
     EffectSet::DEFAULT_MASK|flag(5),      // Off
     of({6}),                             // Random
-    of({0,43}),                          // past the last effect
-    of({1,63}),
-    of({2,64}),                          // a bit only the 128-bit mask can carry
-    of({3,127}),
+    of({0,Appearance::EFFECTS}),         // past the last effect
+    of({3,127}),                         // the mask's last bit
   };
 }
 inline std::string hex(const uint8_t *p,size_t n){std::string s;char b[3];for(size_t i=0;i<n;++i){std::snprintf(b,3,"%02x",p[i]);s+=b;}return s;}
@@ -61,14 +62,14 @@ inline std::string json() {
   // From a saved effect outside the set: the next offered one after it.
   o+="  \"next\": [";
   bool first=true;
-  for(Mask mask:{of({0,18,42}),of({7}),of({2,8,13,23,33,38})})for(unsigned from:{0u,4u,5u,6u,7u,12u,17u,18u,30u,41u,42u}) {
+  for(Mask mask:{of({0,18,42}),of({7}),of({2,8,13,23,33,38}),of({0,43,63,64,82})})for(unsigned from:{0u,4u,5u,6u,7u,12u,17u,18u,30u,41u,42u,43u,63u,64u,72u,82u}) {
     std::snprintf(b,sizeof(b),"%s{\"mask\":\"%s\",\"from\":%u,\"next\":%u}",first?"":",",hexMask(mask).c_str(),from,unsigned(EffectSet::next(Effect(from),mask)));o+=b;first=false;
   }
   o+="],\n";
   // Random picks for a few random words and previous picks.
   o+="  \"picks\": [";
   first=true;
-  for(Mask mask:{EffectSet::DEFAULT_MASK,of({7}),of({0,18,42}),of({2,8,13,23,33,38})})for(unsigned previous:{0u,5u,7u,18u,42u})for(uint32_t bits:{0u,1u,2u,5u,0x9e3779b9u,0xffffffffu}) {
+  for(Mask mask:{EffectSet::DEFAULT_MASK,of({7}),of({0,18,42}),of({2,8,13,23,33,38}),of({0,43,63,64,82})})for(unsigned previous:{0u,5u,7u,18u,42u,64u,82u})for(uint32_t bits:{0u,1u,2u,5u,0x9e3779b9u,0xffffffffu}) {
     std::snprintf(b,sizeof(b),"%s{\"mask\":\"%s\",\"previous\":%u,\"bits\":%lu,\"effect\":%u}",first?"":",",hexMask(mask).c_str(),previous,(unsigned long)bits,
       unsigned(EffectSet::pick(bits,Effect(previous),mask)));o+=b;first=false;
   }

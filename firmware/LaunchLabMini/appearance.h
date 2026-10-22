@@ -13,7 +13,8 @@ enum class Theme:uint8_t {Classic=0,Mint=1,Amber=2,Violet=3,GolemGreen=4,Phoenix
 // Stored values: each effect keeps its number, so older records keep their
 // meaning. Random came after Off, Slash after Random, then the elemental
 // effects (Tidal..Radiance) and the physical ones (Spin..Bloom) in 0.16,
-// then five anime-inspired sets of five in 0.17 (Crimson..Ravage).
+// then five anime-inspired sets of five in 0.17 (Crimson..Ravage) and six
+// more in 0.18 (Haymaker..Blink), the first with a value above 63.
 // Firmware that predates a value rejects a record selecting it and falls
 // back to its other slot or the defaults.
 enum class Effect:uint8_t {Orbit,Flames,Sparkles,Shockwave,Lightning,Off,Random,Slash,
@@ -22,11 +23,19 @@ enum class Effect:uint8_t {Orbit,Flames,Sparkles,Shockwave,Lightning,Off,Random,
   Sunwheel,Torrent,Blitz,Tigerclaw,Butterfly,
   Birdsong,Spiral,Pinwheel,Overdrive,Summon,
   Breach,Bladework,Moonpetal,Barrage,Glitch,
-  Rupture,Boundless,Precision,Umbra,Ravage};
+  Rupture,Boundless,Precision,Umbra,Ravage,
+  Haymaker,Palms,Elastic,Chains,Waterleaf,
+  Transmute,Ignition,Spires,Gate,Fracture,
+  Timestop,Zipper,Rush,Menace,Sequel,
+  Swordland,Treasury,Sunblade,Aegis,Trace,
+  Volley,Starfall,Mimic,Scales,Meadow,
+  Rev,Hammer,Foxbite,Detonate,Sharkfin,
+  Slingshot,Presence,Threefold,Banner,Vapor,
+  Crescent,Release,Petalfall,Mask,Blink};
 // Celebration sound level; Off by default. The speaker is powered only while a sound plays.
 enum class Sound:uint8_t {Off,Low,High};
 // DRAWN effects animate: every effect except Off and Random.
-constexpr unsigned THEMES=10,EFFECTS=43,DRAWN=41,SOUNDS=3;
+constexpr unsigned THEMES=10,EFFECTS=83,DRAWN=81,SOUNDS=3;
 // Theme IDs THEMES.. select the user's custom theme slots (theme_library.h).
 // Firmware without custom themes rejects such a record and falls back to its
 // other slot or the defaults, as it does for any newer record.
@@ -45,7 +54,15 @@ inline const char *label(Effect e) {
     "Sunwheel","Torrent","Blitz","Tigerclaw","Butterfly",
     "Birdsong","Spiral","Pinwheel","Overdrive","Summon",
     "Breach","Bladework","Moonpetal","Barrage","Glitch",
-    "Rupture","Boundless","Precision","Umbra","Ravage"};
+    "Rupture","Boundless","Precision","Umbra","Ravage",
+    "Haymaker","Palms","Elastic","Chains","Waterleaf",
+    "Transmute","Ignition","Spires","Gate","Fracture",
+    "Timestop","Zipper","Rush","Menace","Sequel",
+    "Swordland","Treasury","Sunblade","Aegis","Trace",
+    "Volley","Starfall","Mimic","Scales","Meadow",
+    "Rev","Hammer","Foxbite","Detonate","Sharkfin",
+    "Slingshot","Presence","Threefold","Banner","Vapor",
+    "Crescent","Release","Petalfall","Mask","Blink"};
   static_assert(sizeof(s)/sizeof(s[0])==EFFECTS,"one label per effect");
   return unsigned(e)<EFFECTS?s[unsigned(e)]:s[0];
 }
@@ -70,7 +87,15 @@ inline uint32_t duration(Effect e) {
     5000,5000,4800,5000,5000,  // Sunwheel..Butterfly (Demon Slayer)
     5000,5000,5200,4800,5000,  // Birdsong..Summon (Naruto)
     5000,4800,5200,5000,4800,  // Breach..Glitch (NieR:Automata)
-    4800,5200,4800,4800,5000}; // Rupture..Ravage (Jujutsu Kaisen)
+    4800,5200,4800,4800,5000,  // Rupture..Ravage (Jujutsu Kaisen)
+    5000,5000,5000,5000,5000,  // Haymaker..Waterleaf (aura set)
+    5000,5000,5000,5000,5000,  // Transmute..Fracture (alchemy set)
+    5000,4800,4800,4800,4800,  // Timestop..Sequel (phantom set)
+    5000,5000,5000,5000,5000,  // Swordland..Trace (armory set)
+    5000,5000,5000,5000,5000,  // Volley..Meadow (grimoire set)
+    5000,5000,5000,5000,5000,  // Rev..Sharkfin (ripsaw set)
+    4900,4900,4800,5000,5000,  // Slingshot..Vapor (corsair set)
+    4900,5000,5100,5000,4900}; // Crescent..Blink (reaper set)
   static_assert(sizeof(ms)/sizeof(ms[0])==EFFECTS,"one duration per effect");
   return unsigned(e)<EFFECTS?ms[unsigned(e)]:0;
 }
@@ -84,7 +109,15 @@ inline uint32_t soundDuration(Effect e) {
     2600,2400,1900,2400,2400,  // Sunwheel..Butterfly
     2400,2800,2800,2600,2300,  // Birdsong..Summon
     2600,2400,2800,2400,2000,  // Breach..Glitch
-    1900,2400,2000,2200,2600}; // Rupture..Ravage
+    1900,2800,2000,2200,2600,  // Rupture..Ravage
+    2300,2600,2400,2400,2500,  // Haymaker..Waterleaf
+    2400,2200,2200,2600,2400,  // Transmute..Fracture
+    2600,2200,2400,2600,2700,  // Timestop..Sequel
+    2600,2400,2600,2600,2200,  // Swordland..Trace
+    2300,2400,2400,2300,2400,  // Volley..Meadow
+    2600,2400,2400,2600,2400,  // Rev..Sharkfin
+    2200,2500,2200,2400,2400,  // Slingshot..Vapor
+    2200,2600,2400,2400,2000}; // Crescent..Blink
   static_assert(sizeof(ms)/sizeof(ms[0])==EFFECTS,"one sound length per effect");
   return unsigned(e)<EFFECTS?std::min<uint32_t>(ms[unsigned(e)],duration(e)):0;
 }

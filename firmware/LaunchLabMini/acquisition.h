@@ -21,6 +21,14 @@ class StickS3Acquisition {
 public:
   static constexpr uint32_t SAMPLE_HZ=AnalogTachometer::SAMPLE_HZ;
   static constexpr uint32_t RING_SAMPLES=SAMPLE_HZ*60;
+  // DMA frames of 1023 samples: the driver's five-frame ring holds about
+  // 100 ms, so a flash erase or program on the UI core (14-30 ms with the
+  // cache off, which holds back the DMA interrupt) loses nothing (83201,
+  // 2026-10-21). With 1 KB frames a 20 ms stall lapped the 25 ms ring and the
+  // DMA stopped without an overflow event.
+  static constexpr uint32_t FRAME_BYTES=4092;
+  // No frame for this long while sampling: the DMA stopped; restart it.
+  static constexpr int64_t SILENCE_US=250000;
   enum class Action:uint8_t { Pin, Suspend, Resume, Reset, CheckpointBegin, CheckpointEnd, ShutdownBegin, IdleCheckpointBegin, Estimator, HistoryIdleCheckpointBegin, SensorProfile, IdlePause, IdleResume };
   struct Snapshot {
     AnalogTachometer::Phase phase=AnalogTachometer::Phase::Settling;
@@ -36,7 +44,7 @@ public:
     uint32_t weak=0,slow=0,shape=0,inconsistent=0,rearmExtensions=0,rearmMs=0;
     uint32_t singlePeakUpdates=0,singlePeakRejected=0;
     uint32_t last=0,minimum=0,maximum=0,overflows=0,readErrors=0,invalidFrames=0;
-    uint32_t lostEvents=0,maxBatchUs=0,maxReadGapUs=0,stackFree=0;
+    uint32_t lostEvents=0,maxBatchUs=0,maxReadGapUs=0,stackFree=0,stalls=0;
     float mean=0,rate=0,processingPercent=0,resultRpm=0,peakRpm=0;
     float sustainedPeakRpm=0,singlePeakRpm=0;
     RpmEstimator::Mode estimator=RpmEstimator::DEFAULT_MODE;
@@ -119,7 +127,11 @@ private:
   portMUX_TYPE overflowMux_=portMUX_INITIALIZER_UNLOCKED;
   portMUX_TYPE marksMux_=portMUX_INITIALIZER_UNLOCKED;
   Snapshot snapshot_;
-  uint32_t requestId_=0,overflows_=0,seenOverflows_=0,readErrors_=0,invalidFrames_=0,lostEvents_=0;
+  uint32_t requestId_=0,overflows_=0,seenOverflows_=0,readErrors_=0,invalidFrames_=0,lostEvents_=0,stalls_=0;
+  alignas(4) uint8_t frame_[FRAME_BYTES]={};
+#if LAUNCHLAB_HIL
+  uint16_t hilValues_[FRAME_BYTES/SOC_ADC_DIGI_RESULT_BYTES]={};
+#endif
   uint16_t pendingMarks_=0;
   uint8_t pin_=1,channel_=0;
   bool ready_=false,suspended_=false,idlePaused_=false;
@@ -202,7 +214,7 @@ private:
     gpio_set_direction(static_cast<gpio_num_t>(pin_),GPIO_MODE_INPUT);
     gpio_set_pull_mode(static_cast<gpio_num_t>(pin_),GPIO_FLOATING);
     adc_continuous_handle_cfg_t handle={};
-    handle.max_store_buf_size=32768;handle.conv_frame_size=1024;
+    handle.max_store_buf_size=32768;handle.conv_frame_size=FRAME_BYTES;
     error_=adc_continuous_new_handle(&handle,&adc_);
     adc_digi_pattern_config_t pattern={};
     pattern.atten=ADC_ATTEN_DB_12;pattern.channel=channel_;
@@ -237,7 +249,7 @@ private:
     uint16_t marks=takeMarks();
 #if LAUNCHLAB_HIL
     // Test builds may replace the values of this real DMA frame (cadence kept).
-    uint16_t hilValues[1024/SOC_ADC_DIGI_RESULT_BYTES];
+    auto &hilValues=hilValues_;
     const bool hil=bytes<=sizeof(hilValues)/sizeof(hilValues[0])*SOC_ADC_DIGI_RESULT_BYTES &&
       Hil::optical().fill(hilValues,bytes/SOC_ADC_DIGI_RESULT_BYTES,lastRead_);
 #endif
@@ -362,7 +374,7 @@ private:
     s.shape=detector_.rejectedShape;s.inconsistent=detector_.inconsistentWindows;
     s.rearmExtensions=detector_.rearmExtensions;s.rearmMs=detector_.rearmMs();
     s.last=last_;s.mean=mean_;s.rate=idlePaused_?0:rate_;s.minimum=displayMin_;s.maximum=displayMax_;
-    s.processingPercent=idlePaused_?0:processingPercent_;s.overflows=overflowCount();s.readErrors=readErrors_;
+    s.processingPercent=idlePaused_?0:processingPercent_;s.overflows=overflowCount();s.readErrors=readErrors_;s.stalls=stalls_;
     s.invalidFrames=invalidFrames_;s.lostEvents=lostEvents_;s.maxBatchUs=maxBatchUs_;
     s.maxReadGapUs=maxReadGapUs_;s.stackFree=uxTaskGetStackHighWaterMark(nullptr);
     s.estimator=estimator_;s.sensorProfile=sensorProfile_;
@@ -381,18 +393,29 @@ private:
   }
   void run() {
     StickS3SensorProfile::configure(detector_,sensorProfile_);initAdc();publish(true);
-    alignas(4) uint8_t buffer[1024];
+    auto &buffer=frame_;int64_t lastFrame=esp_timer_get_time();
     for(;;) {
       Command c;
-      while(xQueueReceive(commands_,&c,0)==pdTRUE)command(c);
+      bool commanded=false;
+      while(xQueueReceive(commands_,&c,0)==pdTRUE){command(c);commanded=true;}
+      // Silence counts from the latest start or command, not from before a stop.
+      if(commanded)lastFrame=esp_timer_get_time();
       if(!ready_) {
         if(!suspended_ && esp_timer_get_time()>=retryAt_)recover();
-        publish();vTaskDelay(pdMS_TO_TICKS(10));continue;
+        publish();vTaskDelay(pdMS_TO_TICKS(10));lastFrame=esp_timer_get_time();continue;
       }
       if(overflowCount()!=seenOverflows_){recover();publish(true);continue;}
       uint32_t bytes=0;
       error_=adc_continuous_read(adc_,buffer,sizeof(buffer),&bytes,10);
-      if(error_==ESP_ERR_TIMEOUT){error_=ESP_OK;publish();continue;}
+#if LAUNCHLAB_HIL
+      if(error_==ESP_OK && esp_timer_get_time()<Hil::adcSilentUntil.load())error_=ESP_ERR_TIMEOUT;
+#endif
+      if(error_==ESP_ERR_TIMEOUT) {
+        error_=ESP_OK;
+        if(esp_timer_get_time()-lastFrame>SILENCE_US){++stalls_;recover();lastFrame=esp_timer_get_time();publish(true);continue;}
+        publish();continue;
+      }
+      lastFrame=esp_timer_get_time();
       if(error_!=ESP_OK){++readErrors_;recover();publish(true);continue;}
       if(overflowCount()!=seenOverflows_){recover();publish(true);continue;}
       const int64_t now=esp_timer_get_time();

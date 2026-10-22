@@ -26,22 +26,22 @@ int main() {
                 Request::BODY_BYTES==Milestones::V1_BODY_BYTES);
   // Masks: every drawn effect, and the default of the 16 effects of 0.16.
   {
-    static_assert(ALL==Mask(0x7ffffffff9fULL) && DEFAULT_MASK==Mask(0x3ff9fULL) && Mask::BITS==128);
+    static_assert(DEFAULT_MASK==Mask(0x3ff9fULL) && Mask::BITS==128 && Appearance::EFFECTS<=Mask::BITS);
     assert(count(ALL)==Appearance::DRAWN && count(DEFAULT_MASK)==16);
     for(unsigned e=0;e<Mask::BITS+2;++e) {
       assert(bool(ALL&flag(e))==Appearance::drawn(e));
       assert(bool(DEFAULT_MASK&flag(e))==(Appearance::drawn(e) && e<18));
       assert(offers(DEFAULT_MASK,Effect(e))==(Appearance::drawn(e) && e<18));
     }
-    assert(!offers(ALL,Effect::Off) && !offers(ALL,Effect::Random) && !offers(~Mask(),Effect::Off) && !offers(~Mask(),Effect(64)) && !offers(~Mask(),Effect(127)));
+    assert(!offers(ALL,Effect::Off) && !offers(ALL,Effect::Random) && !offers(~Mask(),Effect::Off) && !offers(~Mask(),Effect(Appearance::EFFECTS)) && !offers(~Mask(),Effect(127)));
     unsigned at=99;
     assert(check(DEFAULT_MASK,&at)==Problem::None && at==0 && check(ALL)==Problem::None && check(flag(Effect::Slash))==Problem::None);
     assert(check(Mask(),&at)==Problem::Empty && at==0);
     assert(check(DEFAULT_MASK|flag(5),&at)==Problem::Effect && at==5);
     assert(check(flag(6),&at)==Problem::Effect && at==6);
-    assert(check(flag(0)|flag(43),&at)==Problem::Effect && at==43);
-    assert(check(flag(63),&at)==Problem::Effect && at==63);
-    assert(check(flag(64),&at)==Problem::Effect && at==64 && check(flag(1)|flag(127),&at)==Problem::Effect && at==127);
+    assert(check(flag(0)|flag(Appearance::EFFECTS),&at)==Problem::Effect && at==Appearance::EFFECTS);
+    assert(check(flag(Effect::Volley)|flag(Effect::Starfall)|flag(Effect::Sharkfin))==Problem::None); // both words
+    assert(check(flag(1)|flag(127),&at)==Problem::Effect && at==127);
     // The upper word: bits 64-127, low word first in the hex form.
     {char hex[33];(flag(0)|flag(64)|flag(127)).hex(hex);assert(!std::strcmp(hex,"80000000000000010000000000000001"));}
     assert(!std::strcmp(problemName(Problem::Empty),"empty") && !std::strcmp(problemName(Problem::Effect),"effect"));
@@ -100,7 +100,7 @@ int main() {
   {
     Config c;assert(c.isDefault() && c.mask()==DEFAULT_MASK && c.revision==0 && c.count()==16 && c.offers(Effect::Bloom) && !c.offers(Effect::Crimson));
     unsigned at=0;
-    for(Mask bad:{Mask(),flag(5),flag(43),flag(100),DEFAULT_MASK|flag(6)})assert(c.set(bad,&at)!=Problem::None && c.isDefault() && c.revision==0);
+    for(Mask bad:{Mask(),flag(5),flag(Appearance::EFFECTS),flag(100),DEFAULT_MASK|flag(6)})assert(c.set(bad,&at)!=Problem::None && c.isDefault() && c.revision==0);
     const Mask mine=flag(Effect::Slash)|flag(Effect::Crimson)|flag(Effect::Ravage);
     assert(c.set(mine)==Problem::None && c.revision==1 && c.mask()==mine && !c.isDefault() && c.count()==3);
     assert(c.set(mine)==Problem::None && c.revision==1);
@@ -110,7 +110,7 @@ int main() {
     Config back;assert(back.decode(image.data(),image.size()) && back.mask()==mine && back.revision==c.revision);
     for(size_t i=0;i<image.size();++i)for(uint8_t flip:{1,0x80}){auto bad=image;bad[i]^=flip;Config x;assert(!x.decode(bad.data(),bad.size()) && x.isDefault());}
     auto reseal=[](Config::Image &b){Appearance::put32(b.data()+24,Appearance::hash(b.data(),24));};
-    for(Mask mask:{Mask(),flag(5),flag(6),flag(43),flag(63)|flag(0),flag(64),flag(127)|flag(0)}){auto bad=image;putMask(bad.data()+8,mask);reseal(bad);Config x;assert(!x.decode(bad.data(),bad.size()));}
+    for(Mask mask:{Mask(),flag(5),flag(6),flag(Appearance::EFFECTS),flag(Appearance::EFFECTS)|flag(0),flag(100),flag(127)|flag(0)}){auto bad=image;putMask(bad.data()+8,mask);reseal(bad);Config x;assert(!x.decode(bad.data(),bad.size()));}
     Config x;assert(!x.decode(image.data(),image.size()-1));
     c.reset();assert(c.isDefault() && c.revision==0x01020305);
   }
@@ -166,9 +166,9 @@ int main() {
     auto reseal=[](uint8_t *x){Appearance::put32(x+Request::BYTES-4,Appearance::hash(x,Request::BYTES-4));};
     for(unsigned offset:{5u,6u,7u,24u,30u,35u}){uint8_t bad[Request::BYTES];std::memcpy(bad,b,sizeof(b));bad[offset]=1;reseal(bad);assert(!Request::decode(bad,sizeof(bad),mask,p,at));}
     // A checksummed invalid mask is a well-formed request with a problem.
-    for(Mask m:{Mask(),flag(5),flag(43),flag(64),flag(127)}){uint8_t bad[Request::BYTES];Request::encode(m,bad);
+    for(Mask m:{Mask(),flag(5),flag(Appearance::EFFECTS),flag(100),flag(127)}){uint8_t bad[Request::BYTES];Request::encode(m,bad);
       assert(Request::decode(bad,sizeof(bad),mask,p,at) && p!=Problem::None && mask==m);}
-    {uint8_t bad[Request::BYTES];Request::encode(flag(43)|1,bad);assert(Request::decode(bad,sizeof(bad),mask,p,at) && p==Problem::Effect && at==43);}
+    {uint8_t bad[Request::BYTES];Request::encode(flag(Appearance::EFFECTS)|1,bad);assert(Request::decode(bad,sizeof(bad),mask,p,at) && p==Problem::Effect && at==Appearance::EFFECTS);}
     assert(!Request::claims(b,sizeof(b)-1) && !Request::decode(b,sizeof(b)-1,mask,p,at));
     // Milestone requests are not claimed: they stay with the milestone code.
     Milestones::Config table;uint8_t set[Milestones::Request::BYTES],reset[Milestones::Request::BYTES];

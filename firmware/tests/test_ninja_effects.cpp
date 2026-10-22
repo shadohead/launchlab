@@ -43,7 +43,7 @@ int main(){
   const uint16_t cyan=accent(Theme::Classic);
   // The device cost model, fitted to every frame of every effect on the M5
   // (HIL !effectframes): the effect pass at 80 MHz in microseconds.
-  auto modelUs=[&]{return 1100+1.8*renderer.plots()+1.0*renderer.probes()+13.0*renderer.scans();};
+  auto modelUs=[&]{return renderer.modelledUs();};
 
   for(unsigned e=0;e<5;++e){
     const Effect effect=effects[e];

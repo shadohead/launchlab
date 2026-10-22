@@ -36,7 +36,7 @@ int main(){
     Canvas out=base;renderer.draw({out.data(),135,240},e,ms,accentColor);return out;
   };
   // The device cost model (HIL !effectframes fit, 2026-10-20), in us.
-  auto model=[&]{return 1100+1.8*renderer.plots()+1.0*renderer.probes()+13.0*renderer.scans();};
+  auto model=[&]{return renderer.modelledUs();};
 
   for(unsigned e=0;e<5;++e){
     const Effect effect=effects[e];

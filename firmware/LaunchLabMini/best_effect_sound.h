@@ -204,6 +204,14 @@ struct Slash {
 #include "best_effect_sound_ninja.h"
 #include "best_effect_sound_nier.h"
 #include "best_effect_sound_sorcery.h"
+#include "best_effect_sound_aura.h"
+#include "best_effect_sound_alchemy.h"
+#include "best_effect_sound_phantom.h"
+#include "best_effect_sound_armory.h"
+#include "best_effect_sound_grimoire.h"
+#include "best_effect_sound_ripsaw.h"
+#include "best_effect_sound_corsair.h"
+#include "best_effect_sound_reaper.h"
 namespace BestEffectSound {
 
 // One effect's generators at a time, in Settings order (Appearance::drawnIndex
@@ -217,7 +225,15 @@ using Generator=std::variant<std::monostate,
   detail::Sunwheel,detail::Torrent,detail::Blitz,detail::Tigerclaw,detail::Butterfly,
   detail::Birdsong,detail::Spiral,detail::Pinwheel,detail::Overdrive,detail::Summon,
   detail::Breach,detail::Bladework,detail::Moonpetal,detail::Barrage,detail::Glitch,
-  detail::Rupture,detail::Boundless,detail::Precision,detail::Umbra,detail::Ravage>;
+  detail::Rupture,detail::Boundless,detail::Precision,detail::Umbra,detail::Ravage,
+  detail::Haymaker,detail::Palms,detail::Elastic,detail::Chains,detail::Waterleaf,
+  detail::Transmute,detail::Ignition,detail::Spires,detail::Gate,detail::Fracture,
+  detail::Timestop,detail::Zipper,detail::Rush,detail::Menace,detail::Sequel,
+  detail::Swordland,detail::Treasury,detail::Sunblade,detail::Aegis,detail::Trace,
+  detail::Volley,detail::Starfall,detail::Mimic,detail::Scales,detail::Meadow,
+  detail::Rev,detail::Hammer,detail::Foxbite,detail::Detonate,detail::Sharkfin,
+  detail::Slingshot,detail::Presence,detail::Threefold,detail::Banner,detail::Vapor,
+  detail::Crescent,detail::Release,detail::Petalfall,detail::Mask,detail::Blink>;
 static_assert(std::variant_size_v<Generator> == Appearance::DRAWN+1,"one generator per drawn effect");
 
 // Synthesizes one effect's sound, resumable: run() continues where the last

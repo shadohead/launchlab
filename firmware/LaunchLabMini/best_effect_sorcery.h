@@ -11,9 +11,11 @@
 // settle. Touching the readout: Rupture ripples its rows sideways, flashes
 // it deep crimson then white and glints it, and gives it back by 1.75 s;
 // Umbra darkens its lower rows below a rising shadow line (a lit waterline
-// on the glyphs) and gives it back by 2.1 s; Boundless, Precision and
-// Ravage only brighten glyph pixels (every channel up) and stop by 2.05,
-// 1.7 and 1.85 s. Nothing takes a glyph pixel below 3:1 on the background:
+// on the glyphs) and gives it back by 2.1 s; Precision and Ravage only
+// brighten glyph pixels (every channel up) and stop by 1.7 and 1.85 s;
+// Boundless only glints them, while it covers everything below them and
+// around their halo from the start and gives it back by 3.85 s. Nothing takes
+// a glyph pixel below 3:1 on the background:
 // the dims stop at that floor (shadeAnchor, sorcShade) and the brightening
 // turns toward black on a light custom background, as the glint does.
 // Cost: strokes are fixed-point and clipped to the screen before the light
@@ -171,7 +173,7 @@ inline void Renderer::sorcery(unsigned which,float t) {
   }
 }
 
-// ---- Rupture, after Black Flash): cursed energy (the accent)
+// ---- Rupture, after Black Flash: cursed energy (the accent)
 // crackles round the readout as space ripples through its rows, a ring
 // snaps onto it, and the hit lands as an inverted frame (near-black digits
 // with a red cast in a red blaze), then a white flash; black lightning with
@@ -313,105 +315,501 @@ inline void Renderer::sorcRing(float s,const Ink &c,int kq,bool split) {
   }
 }
 
-// ---- Boundless, after Unlimited Void): a crossed-finger sign
-// snaps shut under the readout, and the boundary bursts out from it: a
-// bright rim sweeps down past the screen's edge and opens an endless void
-// behind it, a funnel of depth whose vanishing point is the readout. Rings
-// of light rise from beyond the screen's foot and recede into the readout,
-// slowing and brightening as they go, starlight streams in along the
-// funnel, stars glitter round the header and bands of overload race through
-// the digits. Sustain: the void keeps receding, slower and calmer, a ring
-// now and then. Then the rim sweeps back up into the readout and the last
-// stars twinkle out.
-inline void Renderer::sorcBoundless(float t) {
-  constexpr float OPEN=.5f,SPREAD=.45f,CALM=2.2f,CLOSE=4.2f,SHUT=.5f,S0=150,RIM=178;
-  const Box &b=number_;const float cx=b.cx(),cy=b.cy(),hw=(b.x1-b.x0)*.5f,hh=(b.y1-b.y0)*.5f;
-  const float sx=cx,sy=b.y1+12.0f;
-  const Rgb ice=rgb8(205,235,255),blue=rgb8(80,165,255),violet=rgb8(180,125,255),pink=rgb8(255,140,220);
-  const Rgb tints[]={ice,blue,violet,pink};
-  // The sign: two strokes cross and close to a narrow X, then flash.
-  if(t<OPEN+.12f) {
-    const float th=.95f-.75f*easeOut(t/OPEN),k=smooth(t/.1f)*(t<OPEN?1:1-(t-OPEN)/.12f);
-    for(int s=-1;s<=1;s+=2) {
-      const float ux=sine(th)*s,uy=-cosine(th);
-      segment(sx-ux*7,sy-uy*7,sx+ux*14,sy+uy*14,mixed(blue,accent_,.3f),k*1.2f);
+namespace sorcery {
+// Whether a theme background is light (Paper and the like), as the glint judges it.
+BEST_EFFECT_INLINE bool lightBackground(unsigned bv){return 2*(bv>>11)+((bv>>5)&63)+2*(bv&31)>=94;}
+}
+// Pixels x0..x1 of a row set to the stored value sv outright, two per
+// 32-bit store and no per-pixel test: on the device a per-pixel loop over
+// the covered rows alone costs 7-12 ms (HIL effect_times, 2026-10-21).
+inline void Renderer::sorcSpan(uint16_t *row,int x0,int x1,uint16_t sv) {
+  x0=std::max(0,x0);x1=std::min(w_-1,x1);if(x0>x1)return;
+  fills_+=uint32_t(x1-x0+1);++spans_;
+  uint16_t *p=row+x0,*const end=row+x1+1;
+  if(reinterpret_cast<uintptr_t>(p)&2)*p++=sv;
+  typedef uint32_t __attribute__((may_alias)) Pair;
+  const uint32_t two=uint32_t(sv)*0x10001u;
+  // Eight pixels per pass: on the device the loop's own steps cost more
+  // than the stores.
+  Pair *q=reinterpret_cast<Pair *>(p);const int pairs=int(end-p)>>1;
+  for(int i=pairs>>2;i>0;--i,q+=4){q[0]=two;q[1]=two;q[2]=two;q[3]=two;}
+  for(int i=pairs&3;i>0;--i)*q++=two;
+  if((end-p)&1)end[-1]=sv;
+}
+// A solid splotch: every pixel of rows y0..y1 inside an ink disc and outside
+// every hole disc is set to v, stored outright (fills_), not blended. Rows
+// from `raw` on are covered rows (covers()): every pixel there is set, the
+// uncovered ones to `under` (a stored value) unless it is negative. Rows
+// above keep the UI and its halo: only background pixels clear of the mask
+// change, and only words within HALO of a row's ink pay for a mask. Each
+// row's covered pixels are a bit set of disc spans (one table root
+// per disc and row, stepped from the row before, only for the discs a row
+// crosses: they are sorted by top row and kept in an active list); covered
+// rows are then filled run by run (sorcSpan). At most 64
+// discs, radii clamped to 400 px. Every mask word is built before the
+// first pixel is set, so it never masks itself; draw it before other light
+// in those rows.
+inline __attribute__((noinline)) void Renderer::sorcSplotch(const SorcDisc *ink,int inks,const SorcDisc *holes,int nholes,int y0,int y1,uint16_t v,int raw,int under) {
+  y0=std::max(0,y0);y1=std::min(h_-1,y1);
+  const int words=(w_+31)/32;
+  uint32_t bits[WORDS];
+  // Each disc on whole pixels (inks first, then holes), crossing rows
+  // top..bottom; sorted by top row and walked with an active list. Its
+  // half-width h on a row is the largest with (2h)^2 < 4r^2-(2dy)^2, found
+  // by stepping it from the row before (no root: on the device a float root
+  // costs 2.3 us and a flash table look-up more); each step is a touch.
+  struct Span{float r4,h2;int16_t x,y,top,bottom;};
+  constexpr int MAX=64;
+  const int n=std::min(MAX,inks+nholes);
+  Span d[MAX];uint8_t order[MAX],active[MAX];int live=0,next=0;
+  for(int k=0;k<n;++k) {
+    const SorcDisc &s=k<inks?ink[k]:holes[k-inks];
+    const float r=std::min(std::max(s.r,0.0f),400.0f);const int ry=int(r);
+    Span &e=d[k];e.r4=4*r*r;e.x=int16_t(std::max(-512,std::min(512,roundi(s.x))));
+    e.y=int16_t(std::max(-512,std::min(512,roundi(s.y))));e.top=int16_t(e.y-ry);e.bottom=int16_t(r>0?e.y+ry:e.y-1);
+    int j=k;while(j>0 && d[order[j-1]].top>e.top){order[j]=order[j-1];--j;}
+    order[j]=uint8_t(k);
+  }
+  // Rows are covered in increasing order within a pass; restart() begins one.
+  auto restart=[&]{live=next=0;for(int k=0;k<n;++k)d[k].h2=-2;};
+  // One disc past every corner (the negative) covers every row whole: no
+  // per-row edges (1.7 ms a frame on the device).
+  bool whole=inks==1 && nholes==0;
+  if(whole)for(int corner=0;corner<4;++corner) {
+    const float dx=(corner&1?w_-1:0)-ink[0].x,dy=(corner&2?h_-1:0)-ink[0].y;
+    whole&=dx*dx+dy*dy<ink[0].r*ink[0].r;
+  }
+  auto cover=[&](int y) {
+    if(whole){for(int i=0;i<words;++i)bits[i]=i<words-1 || w_%32==0?~0u:(1u<<(w_%32))-1;return;}
+    for(int i=0;i<words;++i)bits[i]=0;
+    while(next<n && d[order[next]].top<=y)active[live++]=order[next++];
+    for(int a=0;a<live;)if(d[active[a]].bottom<y)active[a]=active[--live];else ++a;
+    auto span=[&](Span &e,bool set) {
+      // h2 is twice the half-width: grow it while the next fits, shrink it while it does not.
+      const float dy=float(2*(y-e.y)),t=e.r4-dy*dy;
+      ++touches_;while((e.h2+2)*(e.h2+2)<t){e.h2+=2;++touches_;}
+      while(e.h2>=0 && e.h2*e.h2>=t){e.h2-=2;++touches_;}
+      if(e.h2<0)return;
+      const int h=int(e.h2)>>1,first=std::max(0,e.x-h),last=std::min(w_-1,e.x+h);
+      for(int x=first;x<=last;) {
+        const int i=x>>5,lo=x&31,hi=std::min(31,lo+(last-x));
+        const uint32_t m=(hi==31?~0u:(2u<<hi)-1)&~((1u<<lo)-1);
+        if(set)bits[i]|=m;else bits[i]&=~m;
+        x+=hi-lo+1;
+      }
+    };
+    for(int a=0;a<live;++a)if(active[a]<inks)span(d[active[a]],true);
+    for(int a=0;a<live;++a)if(active[a]>=inks)span(d[active[a]],false);
+  };
+  // The UI rows: the words each row's ink (widened by HALO) reaches.
+  const int masked=std::min(y1,raw-1);uint8_t reach[MAX_H];
+  if(y0<=masked)for(int r=std::max(0,y0-HALO);r<=std::min(h_-1,masked+HALO);++r) {
+    const uint16_t *p=px_+r*w_;int left=0,right=w_-1;
+    while(left<=right && p[left]==bg_)++left;
+    touches_+=uint32_t(left+1);
+    if(left>right){reach[r]=0;continue;}
+    while(p[right]==bg_)--right;
+    touches_+=uint32_t(w_-right);
+    const int a=std::max(0,left-HALO)>>5,b=std::min(w_-1,right+HALO)>>5;
+    reach[r]=uint8_t(((2u<<b)-1)&~((1u<<a)-1));
+  }
+  auto near=[&](int y){unsigned m=0;for(int r=std::max(0,y-HALO);r<=std::min(h_-1,y+HALO);++r)m|=reach[r];return m;};
+  restart();
+  for(int y=y0;y<=masked;++y) {
+    const unsigned m=near(y);if(!m)continue;
+    cover(y);
+    for(int i=0;i<words;++i)if(bits[i] && (m>>i&1) && blockedStamp_[y][i]!=stamp_)buildBlocked(y,i);
+  }
+  sorcMark(4);
+  const uint16_t sv=store(v);
+  // Fills a row's runs of set bits with sv, and of clear bits with `fill`
+  // unless it is negative, a word at a time.
+  auto runs=[&](uint16_t *row,int fill) {
+    for(int x=0;x<w_;) {
+      const bool on=(bits[x>>5]>>(x&31))&1u;
+      int i=x>>5;uint32_t m=(on?~bits[i]:bits[i])&(~0u<<(x&31));
+      while(!m && ++i<words)m=on?~bits[i]:bits[i];
+      const int end=i<words?std::min(w_,i*32+__builtin_ctz(m)):w_;
+      if(on)sorcSpan(row,x,end-1,sv);else if(fill>=0)sorcSpan(row,x,end-1,uint16_t(fill));
+      x=end;
     }
-    if(t>OPEN-.06f)spark(sx,sy-3,ice,1.4f*(1-std::fabs(t-OPEN)/.12f),2.6f);
-  }
-  if(t<OPEN)return;
-  glint(t,OPEN+.02f,.45f);
-  // The boundary: how far out the void reaches (tunnel units, see sorcRing).
-  // It closes from the screen's foot (152), swallowing the void as it rises.
-  const float rim=t<CLOSE?RIM*easeOut((t-OPEN)/SPREAD):152*(1-smooth((t-CLOSE)/SHUT));
-  // The rim itself while it moves: a white front with blue and violet
-  // afterglow trailing toward the readout.
-  const bool opening=t<OPEN+SPREAD,closing=t>=CLOSE && t<CLOSE+SHUT;
-  if(opening || closing) {
-    const float k=opening?1-.35f*(t-OPEN)/SPREAD:.85f,trail=opening?1:-1;
-    sorcRing(rim,WHITE_INK,q8(k),false);
-    sorcRing(rim-5*trail,inkOf(mixed(blue,violet,.4f)),q8(k*.5f),false);
-  }
-  // Rings recede into the readout: one every 0.4 s, crossing in 1.2 s; in
-  // the calm one every 0.8 s, crossing in 2 s and fainter. Each ring's
-  // distance falls as about (1-u)^2.2: fast at the screen's foot, slowing as it
-  // nears the vanishing point, as depth does.
-  const float span=(CALM-OPEN)/.4f,ph=(std::min(t,CALM)-OPEN)*(1/.4f)+std::max(0.0f,t-CALM)*(1/.8f);
-  for(int n=floori(ph);n>=0 && n>floori(ph)-4;--n) {
-    const bool calm=n>=span;const float born=calm?CALM+(n-span)*.8f:OPEN+n*.4f,life=calm?2.0f:1.2f;
-    const float u=(t-born)/life;if(u<0 || u>=1)continue;
-    const float q=1-u,s=S0*q*q*(.8f+.2f*q);if(s>rim-2)continue;
-    const float k=smooth(u/.12f)*(1-smooth((u-.8f)/.2f))*(.45f+.75f*u)*(calm?.6f:1);
-    const Rgb c=mixed(tints[n&3],WHITE,.25f+.3f*u);
-    sorcRing(s,inkOf(c),q8(k),calm);
-  }
-  // Starlight streams in along the funnel: each star rides one ray from
-  // beyond the screen's foot into the readout, with a streak behind it as
-  // long as it is fast, then a new ray. Slower in the calm.
-  const float travel=(std::min(t,CALM)-OPEN)+std::max(0.0f,t-CALM)*.4f;
-  for(unsigned i=0;i<16;++i) {
-    const float life=.9f+.6f*rnd(i,341),phase=rnd(i,342)+travel/life;
-    const int cycle=floori(phase);const float u=phase-cycle;const uint32_t seed=i*67+uint32_t(cycle);
-    const float q=1-u,s=S0*q*q*(.8f+.2f*q);if(s>rim-3)continue;
-    const float a=HALF_TURN*(.1f+.8f*rnd(seed,343)),ca=cosine(a),sa=sine(a);
-    const float k=smooth(u/.15f)*(1-smooth((u-.82f)/.18f))*(.6f+.6f*u);if(k<.03f)continue;
-    const float x=cx+(hw+5+.7f*s)*ca,y=cy+(hh+5+1.4f*s)*sa;
-    const Rgb c=mixed(tints[(i+cycle)&3],WHITE,.3f);
-    // The streak: back along the ray to where the star was 40 ms before
-    // (scaled by its pace), at most 7 px.
-    const float ds=S0*(1.6f+.6f*q)*q*(.04f/life)*(t<CALM?1:.4f),ex=.7f*ca*ds,ey=1.4f*sa*ds,len=std::sqrt(ex*ex+ey*ey);
-    if(len>1.2f){const float f=std::min(1.0f,7/len);sorcLine(x+ex*f,y+ey*f,x,y,inkOf(c),0,q8(k*.8f));}
-    dot(x,y,mixed(c,WHITE,.4f),k*1.2f);
-  }
-  // Stars glitter round the header and the readout's flanks, each on its
-  // own slow beat, as long as the void is open.
-  static constexpr float STARS[][2]={{8,5},{27,3},{110,4},{126,8},{3,49},{131,51}};
-  for(unsigned i=0;i<sizeof(STARS)/sizeof(STARS[0]);++i) {
-    const float x=STARS[i][0]*w_/135.0f,y=STARS[i][1]<12?STARS[i][1]:b.y1+STARS[i][1]-43;
-    const float k=smooth((rim-14)/10)*smooth((t-OPEN-.05f-.04f*i)/.15f)*(.45f+.55f*sine(t*(2.2f+1.7f*rnd(i,344))+i*2.3f));
-    if(k>.05f)twinkle(x,y,mixed(tints[i&3],WHITE,.4f),k,1);
-  }
-  // Overload: two bands of light race down through the digits once the
-  // rim is out, gone by 2.05 s.
-  const float over=smooth((t-OPEN-.2f)/.15f)*(1-smooth((t-1.75f)/.3f));
-  if(over>0)for(int band=0;band<2;++band) {
-    const float p=t*(1/.3f)+band*.5f;const int yc=b.y0-2+int((b.y1-b.y0+5)*(p-floori(p)));
-    const Ink c=band?inkOf(rgb8(255,200,245)):WHITE_INK;
-    for(int y=std::max(b.y0,yc-1);y<=std::min(b.y1,yc+1);++y){const int k=q8(over*(y==yc?1:.6f));for(int x=b.x0;x<=b.x1;++x)sorcHeat(x,y,c,k);}
-  }
-  // Closed: a last glimmer at the sign, and a few stars twinkle out.
-  const float z=t-CLOSE-SHUT;
-  if(z>-.05f) {
-    const float k=z<0?(z+.05f)/.05f:1-smooth(z/.3f);
-    if(k>0)twinkle(sx,sy,ice,k,3);
-    for(unsigned i=0;i<8;++i) {
-      const float age=z-.03f*i,life=.32f;if(age<0 || age>=life)continue;
-      const float x=6+(w_-12)*rnd(i,361),y=b.y1+8+90*rnd(i,362);
-      twinkle(x,y,i%2?ice:violet,sine(HALF_TURN*age/life)*.8f,1);
+  };
+  restart();
+  for(int y=y0;y<=y1;++y) {
+    cover(y);uint16_t *row=px_+y*w_;
+    sorcMark(5);
+    if(y>=raw) {
+      runs(row,under);
+      sorcMark(7);
+      continue;
     }
+    // UI rows: only pixels clear of the mask, still filled run by run.
+    const unsigned reached=near(y);
+    for(int i=0;i<words;++i)if(reached>>i&1)bits[i]&=~blocked_[y][i];
+    runs(row,-1);
+    sorcMark(6);
   }
 }
+// The black-and-white negative of a colour (value, not stored): the inverse
+// of its own grey.
+inline uint16_t Renderer::sorcNegate(uint16_t stored)const {
+  const unsigned v=load(stored);const int n=255-int(((v>>11)*630+((v>>5)&63)*608+(v&31)*240)>>8);
+  return uint16_t((n>>3)<<11|(n>>2)<<5|(n>>3));
+}
+// Light on a dark background, exactly as addw; on a light one the same
+// weight darkens instead (by the ink's brightest channel), so the void
+// reads on any theme.
+inline void Renderer::sorcLight(int x,int y,const Ink &c,int w) {
+  if(!sorcery::lightBackground(load(bg_))){addw(x,y,c,w);return;}
+  if(w<5)return;
+  ++probes_;if(blocked(x,y))return;
+  const int edge=x&31;
+  if(edge<HALO){if(x>=32)ink(y,(x>>5)-1);}
+  else if(edge>=32-HALO && (x|31)+1<w_)ink(y,(x>>5)+1);
+  uint16_t &p=px_[y*w_+x];const unsigned v=load(p);
+  const int d=(std::max(c.r,std::max(c.g>>1,c.b))*w+32768)>>16;
+  p=store(uint16_t(std::max(0,int(v>>11)-d)<<11|std::max(0,int((v>>5)&63)-2*d)<<5|std::max(0,int(v&31)-d)));++plots_;
+}
+// The void's colours: light added to the background, or on a light theme
+// taken away from it as a dark blue-black (the negative of the light).
+inline uint16_t Renderer::sorcVoidColor(const Rgb &l,float f)const {
+  const unsigned v=load(bg_);const int r=v>>11,g=(v>>5)&63,b=v&31;
+  if(!sorcery::lightBackground(v))
+    return store(uint16_t(std::min(31,r+int(l.r*f+.5f))<<11|std::min(63,g+int(l.g*f+.5f))<<5|std::min(31,b+int(l.b*f+.5f))));
+  const float d=std::max(l.r,std::max(l.g*.5f,l.b))*f;
+  return store(uint16_t(std::max(0,r-int(d+.5f))<<11|std::max(0,g-int(2*d+.5f))<<5|std::max(0,b-int(.55f*d+.5f))));
+}
+// Light on the void: in a covered row (from `raw`) it lands outright, with
+// no mask, as the void owns those rows; above them it is sorcLight, or
+// nothing unless `above`.
+inline void Renderer::sorcVoidLight(int x,int y,const Ink &c,int w,int raw,bool above) {
+  if(y<raw){if(above && unsigned(x)<unsigned(w_) && y>=0)sorcLight(x,y,c,w);return;}
+  if(w<5 || unsigned(x)>=unsigned(w_) || y>=h_)return;
+  uint16_t &p=px_[y*w_+x];const unsigned v=load(p);int r=v>>11,g=(v>>5)&63,b=v&31;
+  if(sorcery::lightBackground(load(bg_))) {
+    const int d=(std::max(c.r,std::max(c.g>>1,c.b))*w+32768)>>16;
+    r=std::max(0,r-d);g=std::max(0,g-2*d);b=std::max(0,b-((d*9)>>4));
+  } else {
+    r=std::min(31,r+((c.r*w+32768)>>16));g=std::min(63,g+((c.g*w+32768)>>16));b=std::min(31,b+((c.b*w+32768)>>16));
+  }
+  p=store(uint16_t(r<<11|g<<5|b));++plots_;
+}
+inline void Renderer::sorcVoidLine(float x0,float y0,float x1,float y1,const Ink &c,int k0,int k1,int raw,bool above) {
+  const float dx=x1-x0,dy=y1-y0;const int n=std::max(1,int(std::max(std::fabs(dx),std::fabs(dy))));
+  int x8=q8(x0)+128,y8=q8(y0)+128,wq=k0<<8;const int sx=q8(dx/n),sy=q8(dy/n),dw=(k1-k0)*256/n;
+  for(int i=0;i<=n;++i,x8+=sx,y8+=sy,wq+=dw) {
+    const int x=x8>>8,y=y8>>8;
+    if(unsigned(x)<unsigned(w_) && unsigned(y)<unsigned(h_))sorcVoidLight(x,y,c,wq>>8,raw,above);
+  }
+}
+// The void's field over the covered rows: nested ellipses round (cx, cy),
+// band k covering normalized radius rho[k] down to rho[k+1] in colour
+// col[k] (stored). Every row is filled as spans, a root per band, and the
+// first rows fade from the background so the header has no edge. At most
+// 32 bands.
+inline void Renderer::sorcVoidField(int raw,float cx,float cy,float rx,float ry,const float *rho,const Rgb *light,int n,float lum) {
+  constexpr int FADE=10;
+  // In doubled coordinates (X=2(x-cx), Y=2(y-cy), whole numbers since the
+  // centre may fall between pixels), band k holds X^2 < A[k]-Y^2*q[k], with
+  // A=4a^2 and q=a^2/b^2 for its radii a, b (at most 400 px). Its edge X[k]
+  // steps from the row before (each step a touch): no root.
+  uint16_t col[32];float A[32],q[32],X[32];
+  const int twiceX=roundi(2*cx),twice=roundi(2*cy),top=std::max(0,raw),parity=twiceX&1;
+  for(int k=0;k<n;++k) {
+    col[k]=sorcVoidColor(light[k],lum);
+    const float a=std::min(400.0f,rx*rho[k]),b=std::max(.5f,std::min(400.0f,ry*rho[k]));
+    A[k]=4*a*a;q[k]=a*a/(b*b);X[k]=float(parity-2);
+  }
+  const unsigned bv=load(bg_);
+  int left[32],bands=0;
+  // Left edges, outermost first, of the row Y (doubled offset from the
+  // centre): band k spans columns left[k]..mirror(left[k]).
+  auto edges=[&](int Y) {
+    const float y2=float(Y)*float(Y);
+    for(bands=0;bands<n;++bands) {
+      const float t=A[bands]-y2*q[bands];float &e=X[bands];
+      ++touches_;while((e+2)*(e+2)<t){e+=2;++touches_;}
+      while(e>=parity && e*e>=t){e-=2;++touches_;}
+      if(e<parity)break;
+      left[bands]=std::max(0,(twiceX-int(e))>>1);
+    }
+  };
+  auto fill=[&](int y) {
+    uint16_t faded[32];const uint16_t *c=col;
+    if(y<raw+FADE) {
+      // The first rows blend from the background toward the bands.
+      const int f8=(y-raw+1)*256/(FADE+1);
+      for(int k=0;k<n;++k) {
+        const unsigned v=load(col[k]);
+        const int r=int(bv>>11)+(((int(v>>11)-int(bv>>11))*f8)>>8),g=int((bv>>5)&63)+(((int((v>>5)&63)-int((bv>>5)&63))*f8)>>8),b=int(bv&31)+(((int(v&31)-int(bv&31))*f8)>>8);
+        faded[k]=store(uint16_t(r<<11|g<<5|b));
+      }
+      c=faded;
+    }
+    uint16_t *row=px_+y*w_;
+    for(int k=0;k<bands;++k) {
+      const int a=left[k],mirror=w_-1-a;if(a>mirror)break;
+      if(k+1<bands && left[k+1]<=w_-1-left[k+1]){sorcSpan(row,a,left[k+1]-1,c[k]);sorcSpan(row,w_-left[k+1],mirror,c[k]);}
+      else sorcSpan(row,a,mirror,c[k]);
+    }
+  };
+  // Rows y and twice-y mirror each other about the centre and share their
+  // edges: each pair is computed once.
+  for(int y=top;y<h_;++y) {
+    const int mirror=twice-y;
+    if(mirror<y && mirror>=top)continue;  // done with its pair
+    edges(2*y-twice);
+    sorcMark(8);
+    fill(y);
+    if(mirror>y && mirror<h_)fill(mirror);
+    sorcMark(9);
+  }
+}
+// Two stylised blue eyes either side of (cx, ey), in covered rows, drawn
+// outright: an almond opening (`open` parts the lids), a faint sclera, an
+// iris from a dark pupil through white-ice to deep blue at the limbus, a
+// highlight, and glowing lid lines. `glow` turns the iris toward white;
+// `negative` draws each colour as its black-and-white inverse.
+inline void Renderer::sorcEyes(int raw,float cx,float ey,float open,float glow,bool negative) {
+  constexpr int W=17,H=8;
+  const Rgb sclera=rgb8(26,44,80),limbus=rgb8(30,90,255),mid=rgb8(80,190,255),inner=rgb8(200,240,255),pupil=rgb8(6,14,50),white=rgb8(255,255,255);
+  const Rgb lid=rgb8(190,230,255);const float k=.5f+.5f*glow;
+  uint16_t c[8]={sorcVoidColor(pupil,1),sorcVoidColor(mixed(inner,white,glow),1),sorcVoidColor(mixed(mid,white,.55f*glow),1),
+    sorcVoidColor(mixed(limbus,mid,.5f*glow),1),sorcVoidColor(sclera,.5f+.5f*glow),sorcVoidColor(lid,k),sorcVoidColor(lid,.75f*k),
+    sorcVoidColor(white,open)};
+  if(negative)for(auto &v:c)v=store(sorcNegate(v));
+  auto put=[&](int x,int y,uint16_t v){if(y<raw || y>=h_ || unsigned(x)>=unsigned(w_))return;px_[y*w_+x]=v;++touches_;};
+  const int iy=roundi(ey);
+  for(int e=-1;e<=1;e+=2) {
+    const int ex=roundi(cx+e*24.0f);
+    for(int dx=-W;dx<=W;++dx) {
+      const float half=open*H*(1-float(dx*dx)/(W*W));
+      const int top=-roundi(half*1.1f),bottom=roundi(half*.9f);
+      for(int dy=top;dy<=bottom;++dy) {
+        // Bands by squared distance from the pupil's centre.
+        const int d2=dx*dx+dy*dy;
+        put(ex+dx,iy+dy,c[d2<=2?0:d2<=12?1:d2<=30?2:d2<=52?3:4]);
+      }
+      // The lid lines, the upper one heavier.
+      put(ex+dx,iy+top-1,c[5]);put(ex+dx,iy+bottom+1,c[6]);
+      if(open>.4f && dx>-W+3 && dx<W-3)put(ex+dx,iy+top-2,c[6]);
+    }
+    // The highlight, up and to one side of the pupil.
+    if(open>.5f)for(int j=0;j<4;++j)put(ex-3+(j&1),iy-3+(j>>1),c[7]);
+  }
+}
+// ---- Boundless, after the first Unlimited Void, over the whole screen:
+// the screen below the readout goes dark and a pair of blue eyes opens in
+// it, glowing brighter with rays and a long flare; then everything flips to
+// a black-and-white negative (the eyes dark in it); a white splotch bursts
+// out from between the eyes and floods the screen, black ink blots bloom
+// through it and swallow it, and the void opens: a bright point at the
+// centre of a dark field, ringed by a blinding white-blue rim, light
+// streaming out of it toward the viewer, ripples running out to the rim and
+// streams of information falling in. Sustain: the rim breathes, knots of
+// light run round it, the ripples and the streams keep coming. Then the void
+// draws back into its centre, the recap reappearing from the edges in, and
+// the last stars fade.
+// From the start to the close the effect covers every row below the
+// readout's halo (covers()), writing those rows outright; the readout keeps
+// its own pixels and outline. On a light theme every tone is reversed: the
+// eyes and the void are dark on the background, the splotch ink-black and
+// the ink white.
+inline void Renderer::sorcBoundless(float t) {
+  constexpr float BURST=.45f,SPLAT=.55f,FLOOD=.17f,HOLES=.74f,GONE=1.08f,VOID=1.08f,SHUT=.5f,END=BOUNDLESS_COVER*.001f,CLOSE=END-SHUT,TAIL=.85f;
+  const Box &b=number_;
+  const int raw=std::min(h_,b.y1+HALO+1);
+  const float cx=(w_-1)*.5f,cy=(raw+h_-1)*.5f;
+  const bool light=sorcery::lightBackground(load(bg_));
+  const Rgb ice=rgb8(190,230,255),blue=rgb8(70,140,255),white=rgb8(245,250,255);
+  // The eyes: the screen below the readout goes dark (every other row for
+  // the first two frames, like a shutter), and a pair of blue eyes opens in
+  // the middle of it, the irises glowing brighter, rays and a long flare
+  // growing out of them until the flash.
+  const float ey=cy-8;
+  if(t<BURST) {
+    for(int y=raw;y<h_;++y)if((y&1) || t>=.1f)sorcSpan(px_+y*w_,0,w_-1,bg_);
+    sorcMark(2);
+    const float open=easeOut((t-.08f)/.22f),glow=smooth((t-.15f)/.3f);
+    if(open>0)sorcEyes(raw,cx,ey,open,glow,false);
+    const float k=smooth((t-.22f)/.2f);
+    if(k>0) {
+      // The flare: a level line of light through both eyes toward the edges.
+      const Ink flare=inkOf(mixed(ice,white,.5f));
+      for(int side=-1;side<=1;side+=2) {
+        const float ex=cx+side*24.0f;
+        sorcVoidLine(ex+side*18,ey,ex+side*(18+40*k),ey,flare,q8(.9f*k),0,raw);
+        // Rays round each eye, longest up and down.
+        for(int r=0;r<6;++r) {
+          const float ang=r*(HALF_TURN/3)+HALF_TURN/6,ca=cosine(ang),sa=sine(ang),len=(10+8*std::fabs(sa))*k;
+          sorcVoidLine(ex+12*ca,ey+9*sa,ex+(12+len)*ca,ey+(9+len)*sa,inkOf(ice),q8(.7f*k),0,raw);
+        }
+      }
+      sorcVoidLight(roundi(cx),roundi(ey),inkOf(white),q8(.6f*k),raw);
+      sorcVoidLine(cx-6,ey,cx+6,ey,flare,q8(.6f*k),q8(.6f*k),raw);
+    }
+    sorcMark(3);
+    return;
+  }
+  // The negative: the whole screen inverted to black and white for a beat,
+  // the eyes dark in it (around the readout only the background flips, so
+  // it keeps its outline).
+  if(t<SPLAT) {
+    const SorcDisc all{cx,cy,1000};
+    sorcSplotch(&all,1,nullptr,0,0,h_-1,sorcNegate(bg_),raw,-1);
+    sorcEyes(raw,cx,ey,1,1,true);
+    sorcMark(3);
+    return;
+  }
+  glint(t,VOID,.45f);
+  sorcMark(1);
+  // The splotch floods out from the sign over the dark, then holes of ink
+  // bloom through it until nothing is left.
+  if(t<GONE) {
+    const float g=.3f+.7f*easeOut((t-SPLAT)/FLOOD);
+    SorcDisc inks[30],holes[34];int ni=0,nh=0;
+    inks[ni++]={cx,cy,40*g};inks[ni++]={cx-22*g,cy-36*g,26*g};inks[ni++]={cx+20*g,cy+38*g,28*g};
+    // A ragged edge: arms of lobes thrown out from the middle, each
+    // thinning to a drop, and spatter flung past them.
+    for(int k=0;k<9;++k) {
+      const float ang=k*(2*HALF_TURN/9)+.5f*rnd(k,381),ca=cosine(ang),sa=sine(ang),len=1+.5f*rnd(k,382);
+      for(int j=0;j<2;++j) {
+        const float d=(38+24*j)*len*g;
+        inks[ni++]={cx+d*ca,cy+1.45f*d*sa,(14-5.5f*j)*(.7f+.6f*rnd(k*3+j,384))*g};
+      }
+    }
+    const float thrown=smooth((t-SPLAT)/.05f);
+    for(int k=0;k<7;++k) {
+      const float ang=2*HALF_TURN*rnd(k,385),dist=(80+40*rnd(k,386))*g;
+      inks[ni++]={cx+dist*cosine(ang),cy+dist*1.5f*sine(ang),(1.5f+3*rnd(k,387))*thrown};
+    }
+    // The white takes the rest of the screen (kept last).
+    inks[ni++]={cx,cy,300*smooth((t-SPLAT-.09f)/.1f)};
+    // Ink blooms through it, blot by blot across the screen, each with drops.
+    for(int k=0;k<12;++k) {
+      const float a=(t-HOLES-.015f*k)/.28f;if(a<=0)continue;
+      const float r=(18+18*rnd(k,391))*easeOut(a),x=(k%4+rnd(k,392))*(w_/4.0f),y=(k/4+rnd(k,393))*(h_/3.0f);
+      holes[nh++]={x,y,r};
+      const float ang=2*HALF_TURN*rnd(k*3,394),out=1.15f+.5f*rnd(k*3,395);
+      holes[nh++]={x+out*r*cosine(ang),y+out*r*sine(ang),(.2f+.22f*rnd(k*3,396))*r};
+    }
+    // The last of the white goes as the void opens.
+    const float last=smooth((t-HOLES-.18f)/(GONE-HOLES-.18f));
+    if(last>0)holes[nh++]={cx,cy,300*last};
+    // Discs past the screen's reach (170 px from the centre covers it all)
+    // hide every other: the flood leaves only itself, the last hole nothing.
+    if(inks[ni-1].r>=170){inks[0]=inks[ni-1];ni=1;}
+    if(300*last>=170)ni=nh=0;
+    const uint16_t splotch=light?uint16_t(0x10a2):uint16_t(0xf7bf);
+    sorcMark(5);
+    // Once the ink starts, the header is the readout on its own background
+    // again (the first blots land there), so only covered rows are drawn:
+    // the header's mask costs about 2 ms a frame on the device.
+    sorcSplotch(inks,ni,holes,nh,t<HOLES?0:raw,h_-1,splotch,raw,bg_);
+    return;
+  }
+  // The void, from when the ink has eaten the white: the field opens out of
+  // the centre, breathes through the sustain, then draws back into it.
+  const float a=t-VOID,open=easeOut(a/.35f),closing=smooth((t-CLOSE)/SHUT);
+  const float travel=std::min(t,END)-VOID+std::max(0.0f,t-END)*.4f,fade=1-smooth((t-END)/TAIL);
+  const float grow=open*(1+.025f*sine(t*1.7f))*(1-.96f*closing),rx=52*grow,ry=std::min(80.0f,(h_-raw)*.42f)*grow;
+  if(t<END) {
+    const float lum=(1+.45f*(1-smooth(a/.3f)))*(1.05f+.1f*sine(t*2.4f));
+    // Bands outermost first: the dark that covers the recap (it shrinks to
+    // the centre as the void closes), the outer glow, the rim's white core,
+    // the inner glow, the dark heart, and the bright point at its centre.
+    // Few, broad bands: on the device every band edge costs two span fills a
+    // row (1.2 us each).
+    static constexpr int BANDS=9;
+    static constexpr float RHO[BANDS]={1,1.15f,1.035f,1,.955f,.88f,.75f,.13f,.045f};
+    static constexpr Rgb LIGHT[BANDS]={{0,0,0},rgb8(6,16,50),rgb8(110,180,255),rgb8(245,250,255),rgb8(45,95,215),
+      rgb8(14,32,105),rgb8(3,8,34),rgb8(30,70,175),rgb8(240,248,255)};
+    float rho[BANDS+1];Rgb shade[BANDS+1];int n=0;
+    // The cover reaches past every corner, and shrinks ahead of the rim as
+    // the void closes, giving the recap back from the edges in.
+    float cover=(1.5f*rx+110*(1-closing))/std::max(rx,.5f);
+    // As it closes, the cover's edge is a ring of ice light: an iris.
+    if(closing>0){const float s=sine(HALF_TURN*closing);rho[n]=cover;shade[n]={ice.r*s,ice.g*s,ice.b*s};++n;cover-=3/std::max(rx,.5f);}
+    for(int k=0;k<BANDS;++k){rho[n]=k?RHO[k]:cover;shade[n]=LIGHT[k];++n;}
+    sorcMark(10);
+    sorcVoidField(raw,cx,cy,std::max(rx,.5f),std::max(ry,.5f),rho,shade,n,lum*(1-.6f*closing));
+    // Ripples run out of the centre to the rim, brightening as they near:
+    // rings of points, since a band would cost two span fills on every row
+    // it crosses.
+    for(int i=0;i<2;++i) {
+      const float u=t*.5f+i*.5f,phase=u-floori(u),r=.12f+.7f*phase,k=sine(HALF_TURN*phase)*(.35f+.65f*phase)*(1-closing);
+      if(k<.05f)continue;
+      const int points=int(20+44*r);const Ink c=inkOf(rgb8(60,120,255));
+      for(int j=0;j<points;++j) {
+        const float ang=j*(2*HALF_TURN)/points+i;
+        sorcVoidLight(roundi(cx+rx*r*cosine(ang)),roundi(cy+ry*r*sine(ang)),c,q8(k),raw,false);
+      }
+    }
+    // Knots of light run round the rim.
+    for(int k=0;k<5;++k) {
+      const float base=k*(2*HALF_TURN/5)+t*(k&1?1.3f:-1.1f);
+      for(int j=-4;j<=4;++j) {
+        const float ang=base+j*.045f,w=(1-std::fabs(float(j))/5)*(1-closing);
+        sorcVoidLight(roundi(cx+rx*cosine(ang)),roundi(cy+ry*sine(ang)),WHITE_INK,q8(.9f*w),raw);
+      }
+    }
+    // The centre flares, a small cross of light that pulses.
+    const float flare=(.6f+.4f*sine(t*5.1f))*open;const int ix=roundi(cx),iy=roundi(cy);
+    for(int d=2;d<=6;++d){const int k=q8(flare*(1-d/7.0f));
+      sorcVoidLight(ix-d,iy,WHITE_INK,k,raw);sorcVoidLight(ix+d,iy,WHITE_INK,k,raw);sorcVoidLight(ix,iy-d,WHITE_INK,k,raw);sorcVoidLight(ix,iy+d,WHITE_INK,k,raw);}
+    // Streams of information fall in from beyond the rim, a row of bits
+    // each, shrinking into the distance as they near the centre.
+    for(unsigned j=0;j<6;++j) {
+      const float life=.85f+.3f*rnd(j,401),phase=rnd(j,402)+travel/life;
+      const int cycle=floori(phase);const float u=phase-cycle;const uint32_t seed=j*31+uint32_t(cycle);
+      if(cycle<0 || (a<.3f && u>a/.3f))continue;
+      const float ang=2*HALF_TURN*rnd(seed,403),ca=cosine(ang),sa=sine(ang);
+      const float head=.1f+1.5f*(1-u)*(1-u),tail=head*1.3f+.06f;
+      const float k=smooth(u/.12f)*(1-smooth((u-.8f)/.2f))*(1-closing);if(k<.05f)continue;
+      const float hx=cx+rx*ca*head,hy=cy+ry*sa*head,tx=cx+rx*ca*tail,ty=cy+ry*sa*tail;
+      const int steps=std::max(1,int(std::max(std::fabs(tx-hx),std::fabs(ty-hy))));
+      const Ink c=inkOf(mixed(ice,accent_,.35f));
+      for(int s=0;s<=steps;++s) {
+        if(lattice(s/2,int(seed),404)<100)continue;
+        const float f=float(s)/steps;
+        sorcVoidLight(roundi(hx+(tx-hx)*f),roundi(hy+(ty-hy)*f),c,q8(k*(1-.6f*f)),raw,false);
+      }
+    }
+  }
+  sorcMark(10);
+  // Light streams out of the bright centre toward the viewer: each star
+  // leaves at its own angle and speeds up as it comes, a streak behind it;
+  // past the close the last of them drift out over the recap and fade.
+  // While the void is open they stop at its top, where it fades into the
+  // header (the header's mask would cost more than they show).
+  const int cut=t<END?raw:h_;const bool above=t>=END;
+  const float sr=std::max(rx,8.0f),sry=std::max(ry,12.0f);
+  // Far stars twinkle in the dark, deep in the void.
+  if(t<END)for(unsigned i=0;i<16;++i) {
+    const float ang=2*HALF_TURN*rnd(i,405),d=.25f+.6f*rnd(i,406);
+    const float k=open*(1-closing)*(.25f+.3f*sine(t*(2+2.5f*rnd(i,407))+7*rnd(i,408)));
+    sorcVoidLight(roundi(cx+rx*d*cosine(ang)),roundi(cy+ry*d*sine(ang)),inkOf(i%3?ice:white),q8(k),raw);
+  }
+  for(unsigned i=0;i<22;++i) {
+    const float life=.7f+.5f*rnd(i,371),phase=rnd(i,372)+travel/life;
+    const int cycle=floori(phase);const float u=phase-cycle;const uint32_t seed=i*53+uint32_t(cycle);
+    if(cycle<0 || (a<.3f && u>a/.3f))continue;
+    const float ang=2*HALF_TURN*rnd(seed,373),ca=cosine(ang),sa=sine(ang);
+    const float d0=.06f+1.9f*u*u*u,du=std::max(0.0f,u-.11f),d1=.06f+1.9f*du*du*du;
+    const float k=smooth(u/.2f)*(.35f+.65f*u)*fade;if(k<.04f)continue;
+    const float x=cx+sr*ca*d0,y=cy+sry*sa*d0,px=cx+sr*ca*d1,py=cy+sry*sa*d1;
+    const Rgb c=(seed%3)?mixed(ice,white,.4f):blue;
+    sorcVoidLine(px,py,x,y,inkOf(c),q8(.25f*k),q8(k),cut,above);
+    sorcVoidLight(roundi(x),roundi(y),WHITE_INK,q8(k),cut,above);
+    // Near ones come close enough to show a body.
+    if(u>.55f){sorcVoidLight(roundi(x)+1,roundi(y),inkOf(c),q8(k*.8f),cut,above);sorcVoidLight(roundi(x),roundi(y)+1,inkOf(c),q8(k*.8f),cut,above);}
+  }
+  // The void shuts on a last point of light where its centre was.
+  if(t>=END-.05f && t<END+.2f)spark(cx,cy,white,1.3f*(1-std::fabs(t-END-.03f)/.2f),2.5f);
+  sorcMark(11);
+}
 
-// ---- Precision, after the 7:3 ratio cut): rulers draw out above
+// ---- Precision, after the 7:3 ratio cut: rulers draw out above
 // and below the readout and tick off its tenths, the seventh tick locks a
 // guide on the 7:3 point (seven parts gold, three the accent), and the
 // strike falls exactly there: a vertical cut that flashes the cut-off three
@@ -535,7 +933,7 @@ inline void Renderer::sorcPrecision(float t) {
   }
 }
 
-// ---- Umbra, after Chimera Shadow Garden): liquid shadow pools
+// ---- Umbra, after Chimera Shadow Garden: liquid shadow pools
 // out round the readout's foot across the floor, its rim catching a cold
 // sheen; the digits sink into it below a lit waterline; shadow creatures
 // rise out of the pool and open their eyes. Sustain: the readout surfaces
@@ -680,7 +1078,7 @@ inline void Renderer::sorcUmbra(float t) {
   }
 }
 
-// ---- Ravage, after Malevolent Shrine): a shrine's roof looms in
+// ---- Ravage, after Malevolent Shrine: a shrine's roof looms in
 // dim red under the readout, pulsing like a heartbeat; then a storm of
 // unseen blades: cuts flash everywhere for a single frame, each leaving a
 // red scar and flinging debris, some slicing through the digits; it ends on

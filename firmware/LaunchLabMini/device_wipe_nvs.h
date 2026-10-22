@@ -44,6 +44,7 @@ public:
     Api::close(h);
     return error==Api::Ok && empty(space);
   }
+  bool clearFlash(){return Api::eraseFlash()==Api::Ok;}
   bool clearIntent() {
     typename Api::Handle h{};
     if(Api::open(INTENT_SPACE,true,&h)!=Api::Ok)return false;
@@ -69,6 +70,7 @@ private:
 
 #if defined(ARDUINO_ARCH_ESP32) || defined(ESP_PLATFORM)
 #include <nvs.h>
+#include "esp_partition.h"
 namespace DeviceWipe {
 struct EspNvsApi {
   using Handle=nvs_handle_t;using Iterator=nvs_iterator_t;
@@ -82,6 +84,11 @@ struct EspNvsApi {
   static void close(Handle h){nvs_close(h);}
   static esp_err_t find(Handle h,Iterator *i){return nvs_entry_find_in_handle(h,NVS_TYPE_ANY,i);}
   static void release(Iterator i){nvs_release_iterator(i);}
+  // The whole spiffs partition (1.5 MB, a few seconds of block erases).
+  static esp_err_t eraseFlash() {
+    const esp_partition_t *p=esp_partition_find_first(ESP_PARTITION_TYPE_DATA,ESP_PARTITION_SUBTYPE_DATA_SPIFFS,nullptr);
+    return p?esp_partition_erase_range(p,0,p->size):ESP_OK;
+  }
 };
 using NvsStore=BasicNvsStore<EspNvsApi>;
 }

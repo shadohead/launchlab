@@ -11,20 +11,31 @@
 // UI and before it is pushed. Decoration lands only on background pixels (the
 // theme's background color; black for the built-ins) at
 // least HALO px from every UI pixel, so it reads as a layer behind the UI and
-// each label, digit and replay line keeps its pixels and a dark outline. Two
+// each label, digit and replay line keeps its pixels and a dark outline. Three
 // exceptions: the glint brightens existing header glyph pixels toward white
-// without changing their shape, and Slash cuts the anchor's ink in two,
+// without changing their shape; Slash cuts the anchor's ink in two,
 // slides the halves apart along the cut and puts them back, so its last
-// frames show the readout exactly as drawn.
+// frames show the readout exactly as drawn; and Boundless covers the rows
+// below the anchor's halo for a while (covers()), the anchor keeping its
+// pixels and outline, and gives them back exactly.
 // Each frame is a pure function of elapsed time with fixed seeds: no heap,
 // delay, random input or second framebuffer. The ink mask is the only state.
 // Budget: at most about 10 ms per frame at 80 MHz (measured on the device
 // with the USB E<id> preview), keeping a celebrating frame near 40 ms of the
-// 50 ms cadence. Cost model, fitted to every frame of every effect on the
-// device (HIL !effectframes, 2026-10-20): about 1.1 ms, plus 1.8 us per pixel
-// written, 1 us per light probe (an addw past its weight test) and 13 us per
-// mask word scanned; per-pixel float math and table trigonometry cost several
-// times a fixed-point step. So the mask is built per 32-pixel word on first
+// 50 ms cadence. Cost model (modelledUs()), fitted to every frame of every
+// effect on the device (HIL !effectframes, 2026-10-20): about 1.1 ms, plus
+// 1.8 us per pixel written, 1 us per light probe (an addw past its weight
+// test) and 13 us per mask word scanned; per-pixel float math and table
+// trigonometry cost several times a fixed-point step. Full-screen work,
+// fitted to Boundless's first full-screen cut on the device (2026-10-21,
+// 40 ms where the three terms said 7.6): 0.36 us per step of a loop outside
+// addw, a pixel visited one at a time or an edge stepped (touches(): 0.29 to
+// visit, 0.07 to write), 2.3 us per float square root (roots(), counted by
+// root()), and per span fill 1.21 us plus 0.082 us a pixel stored, two per
+// 32-bit store (spans(), fills(); fitted to its later cuts, where a 4 KB
+// look-up table in flash also cost 5.6 us a read). Every pixel loop, edge
+// step, span and root an effect runs must be counted in one of them; check_ui_render holds the model to the recorded
+// device frames. So the mask is built per 32-pixel word on first
 // use, effects that reach across the screen pay for every word they touch,
 // pixel loops are fixed point, trigonometry comes from a table, time-only
 // terms are computed once per frame and geometry stays in float, once per
@@ -48,6 +59,15 @@ constexpr std::array<uint8_t,256> smoothTable() {
 constexpr std::array<uint8_t,256> SMOOTH=smoothTable();
 }
 #define BEST_EFFECT_INLINE inline __attribute__((always_inline))
+// BEST_EFFECT_PROFILE (a device debug build only): the CPU cycles of each
+// stage of a draw, read with the cycle counter at marks (sorcMark()), for
+// HIL `!effectstages`. Compiled out otherwise.
+#if defined(BEST_EFFECT_PROFILE) && defined(ESP_PLATFORM)
+#include <esp_cpu.h>
+#define BEST_EFFECT_CYCLES() uint32_t(esp_cpu_get_cycle_count())
+#elif defined(BEST_EFFECT_PROFILE)
+#define BEST_EFFECT_CYCLES() uint32_t(0)
+#endif
 // Row-major with stride == width, RGB565 big-endian as LGFX sprites store it.
 struct Surface {uint16_t *pixels=nullptr;int width=0,height=0;};
 
@@ -64,7 +84,11 @@ public:
   // pixel not of the theme's `background` color is UI ink.
   void draw(const Surface &s,Appearance::Effect effect,uint32_t elapsed,uint16_t accent){draw(s,effect,elapsed,accent,Anchor());}
   void draw(const Surface &s,Appearance::Effect effect,uint32_t elapsed,uint16_t accent,const Anchor &anchor,uint16_t background=0) {
-    plots_=probes_=scans_=0;bg_=store(background);
+    plots_=probes_=scans_=fills_=spans_=touches_=roots_=0;bg_=store(background);
+#ifdef BEST_EFFECT_PROFILE
+    for(auto &s:stage)s=0;
+    markAt_=BEST_EFFECT_CYCLES();
+#endif
     if(!s.pixels || s.width<64 || s.width>MAX_W || s.height<NUMBER_BOTTOM+HALO+1 || s.height>MAX_H ||
        elapsed>=Appearance::duration(effect))return;
     px_=s.pixels;w_=s.width;h_=s.height;
@@ -73,6 +97,7 @@ public:
     findNumber(anchor);
     accent_=rgb(accent);
     const float t=elapsed*.001f;
+    sorcMark(0);
     using Appearance::Effect;
     // Orbit and Flames stay near the anchor; the rest may use the whole screen.
     switch(effect) {
@@ -100,6 +125,15 @@ public:
         if(e>=unsigned(Effect::Birdsong) && e<=unsigned(Effect::Summon))ninja(e-unsigned(Effect::Birdsong),t);
         if(e>=unsigned(Effect::Breach) && e<=unsigned(Effect::Glitch))nier(e-unsigned(Effect::Breach),t);
         if(e>=unsigned(Effect::Rupture) && e<=unsigned(Effect::Ravage))sorcery(e-unsigned(Effect::Rupture),t);
+        // 0.18's six sets, the same way.
+        if(e>=unsigned(Effect::Haymaker) && e<=unsigned(Effect::Waterleaf))aura(e-unsigned(Effect::Haymaker),t);
+        if(e>=unsigned(Effect::Transmute) && e<=unsigned(Effect::Fracture))alchemy(e-unsigned(Effect::Transmute),t);
+        if(e>=unsigned(Effect::Timestop) && e<=unsigned(Effect::Sequel))phantom(e-unsigned(Effect::Timestop),t);
+        if(e>=unsigned(Effect::Swordland) && e<=unsigned(Effect::Trace))armory(e-unsigned(Effect::Swordland),t);
+        if(e>=unsigned(Effect::Volley) && e<=unsigned(Effect::Meadow))grimoire(e-unsigned(Effect::Volley),t);
+        if(e>=unsigned(Effect::Rev) && e<=unsigned(Effect::Sharkfin))ripsaw(e-unsigned(Effect::Rev),t);
+        if(e>=unsigned(Effect::Slingshot) && e<=unsigned(Effect::Vapor))corsair(e-unsigned(Effect::Slingshot),t);
+        if(e>=unsigned(Effect::Crescent) && e<=unsigned(Effect::Blink))reaper(e-unsigned(Effect::Crescent),t);
         break;
       }
     }
@@ -110,6 +144,32 @@ public:
   // (addw calls past the weight test) and ink mask words scanned.
   uint32_t probes()const{return probes_;}
   uint32_t scans()const{return scans_;}
+  // Background pixels set outright by span fills (two per 32-bit store, no
+  // per-pixel test): far cheaper per pixel than a plot, so counted apart.
+  uint32_t fills()const{return fills_;}
+  // Span fills (sorcSpan calls): each has a fixed cost as well as its pixels.
+  uint32_t spans()const{return spans_;}
+  // Steps of a loop outside addw, one per pixel visited one at a time or per
+  // edge step (each about as costly on the device), and float square roots.
+  uint32_t touches()const{return touches_;}
+  uint32_t roots()const{return roots_;}
+  // The last draw's modelled device time in us (see the cost model above).
+  double modelledUs()const{
+    return 1100+1.8*plots_+probes_+13.0*scans_+.082*fills_+1.21*spans_+.36*touches_+2.3*roots_;
+  }
+  // Until when (ms) an effect may hide the UI below its anchor's halo: it
+  // then owns those rows outright and gives them back exactly at that time,
+  // well before 3/4 of its duration; 0 for every effect that never does.
+  // Only Boundless covers (its negative, ink and void).
+#ifdef BEST_EFFECT_PROFILE
+  // Cycles per stage of the last draw: setup, glint, Boundless's dark, eyes,
+  // header mask, disc edges, header fill, covered-row fill, band edges, band
+  // fill, detail light (ripples, knots, flare, streams, far stars), stars.
+  static constexpr int STAGES=12;
+  uint32_t stage[STAGES]={};
+#endif
+  static constexpr uint32_t BOUNDLESS_COVER=3850;
+  static constexpr uint32_t covers(Appearance::Effect e){return e==Appearance::Effect::Boundless?BOUNDLESS_COVER:0;}
 
 private:
   static constexpr unsigned WORDS=(MAX_W+31)/32;
@@ -126,7 +186,14 @@ private:
   std::array<Row,MAX_H> ink_{},blocked_{};
   std::array<std::array<uint8_t,WORDS>,MAX_H> inkStamp_{},blockedStamp_{};
   uint16_t *px_=nullptr,bg_=0;int w_=0,h_=0,bottom_=-1;uint8_t stamp_=0;
-  Box number_{};Rgb accent_{};uint32_t plots_=0,probes_=0,scans_=0;
+  // Charges the cycles since the last mark to stage s (BEST_EFFECT_PROFILE).
+#ifdef BEST_EFFECT_PROFILE
+  uint32_t markAt_=0;
+  void sorcMark(int s){const uint32_t c=BEST_EFFECT_CYCLES();stage[s]+=c-markAt_;markAt_=c;}
+#else
+  void sorcMark(int){}
+#endif
+  Box number_{};Rgb accent_{};uint32_t plots_=0,probes_=0,scans_=0,fills_=0,spans_=0,touches_=0,roots_=0;
 
   // ---- colour and pixels ----------------------------------------------------
   static Rgb rgb(uint16_t c){return {float(c>>11),float((c>>5)&63),float(c&31)};}
@@ -139,6 +206,16 @@ private:
   static uint16_t load(uint16_t stored){return uint16_t(stored<<8|stored>>8);}
   static uint16_t store(uint16_t value){return uint16_t(value<<8|value>>8);}
   static float clamp01(float v){return v<0?0:v>1?1:v;}
+  // sqrt(v), 0 for v <= 0, by multiplies only (sqrtf is a library call on
+  // the device): the bit-level inverse-root estimate and two Newton steps.
+  // Still about 2.3 us on the device, so it is counted (roots()).
+  float root(float v) {
+    if(v<=0)return 0;
+    ++roots_;
+    uint32_t i;__builtin_memcpy(&i,&v,4);i=0x5f375a86u-(i>>1);float r;__builtin_memcpy(&r,&i,4);
+    const float h=.5f*v;r*=1.5f-h*r*r;r*=1.5f-h*r*r;
+    return v*r;
+  }
   static float easeOut(float v){v=1-clamp01(v);return 1-v*v*v;}
   static float smooth(float v){v=clamp01(v);return v*v*(3-2*v);}
   static int floori(float v){const int i=int(v);return i-(v<i);}
@@ -892,6 +969,170 @@ private:
   void sorcHeat(int x,int y,const Ink &target,int k8);
   uint16_t sorcShade(unsigned v,const Ink &target,int k8)const;
   void sorcRing(float s,const Ink &c,int kq,bool split);
+  struct SorcDisc {float x,y,r;};
+  void sorcSplotch(const SorcDisc *ink,int inks,const SorcDisc *holes,int nholes,int y0,int y1,uint16_t v,int raw,int under);
+  void sorcSpan(uint16_t *row,int x0,int x1,uint16_t sv);
+  void sorcEyes(int raw,float cx,float ey,float open,float glow,bool negative);
+  uint16_t sorcNegate(uint16_t stored)const;
+  void sorcLight(int x,int y,const Ink &c,int w);
+  uint16_t sorcVoidColor(const Rgb &l,float f)const;
+  void sorcVoidLight(int x,int y,const Ink &c,int w,int raw,bool above=true);
+  void sorcVoidLine(float x0,float y0,float x1,float y1,const Ink &c,int k0,int k1,int raw,bool above=true);
+  void sorcVoidField(int raw,float cx,float cy,float rx,float ry,const float *rho,const Rgb *light,int n,float lum);
+
+  // ---- 0.18's sets, one header each (the inspiration of each effect is in
+  // docs/FIRMWARE_CELEBRATION_EFFECTS.md). Each set's helpers are declared
+  // in its own block, prefixed with the set's name.
+  // best_effect_aura.h: Haymaker..Waterleaf
+  void aura(unsigned which,float t);
+  void auraHaymaker(float t);
+  void auraPalms(float t);
+  void auraElastic(float t);
+  void auraChains(float t);
+  void auraWaterleaf(float t);
+  // best_effect_alchemy.h: Transmute..Fracture
+  void alchemy(unsigned which,float t);
+  void alchemyTransmute(float t);
+  void alchemyIgnition(float t);
+  void alchemySpires(float t);
+  void alchemyGate(float t);
+  void alchemyFracture(float t);
+  // best_effect_phantom.h: Timestop..Sequel
+  void phantom(unsigned which,float t);
+  void phantomTimestop(float t);
+  void phantomZipper(float t);
+  void phantomRush(float t);
+  void phantomMenace(float t);
+  void phantomSequel(float t);
+  // best_effect_armory.h: Swordland..Trace
+  void armory(unsigned which,float t);
+  void armorySwordland(float t);
+  void armoryTreasury(float t);
+  void armorySunblade(float t);
+  void armoryAegis(float t);
+  void armoryTrace(float t);
+  // best_effect_grimoire.h: Volley..Meadow
+  void grimoire(unsigned which,float t);
+  void grimoireVolley(float t);
+  void grimoireStarfall(float t);
+  void grimoireMimic(float t);
+  void grimoireScales(float t);
+  void grimoireMeadow(float t);
+  // best_effect_ripsaw.h: Rev..Sharkfin
+  void ripsaw(unsigned which,float t);
+  void ripsawRev(float t);
+  void ripsawHammer(float t);
+  void ripsawFoxbite(float t);
+  void ripsawDetonate(float t);
+  void ripsawSharkfin(float t);
+  // best_effect_corsair.h: Slingshot..Vapor
+  void corsair(unsigned which,float t);
+  void corsairSlingshot(float t);
+  void corsairPresence(float t);
+  void corsairThreefold(float t);
+  void corsairBanner(float t);
+  void corsairVapor(float t);
+  // best_effect_reaper.h: Crescent..Blink
+  void reaper(unsigned which,float t);
+  void reaperCrescent(float t);
+  void reaperRelease(float t);
+  void reaperPetalfall(float t);
+  void reaperMask(float t);
+  void reaperBlink(float t);
+  // ---- set helpers: aura
+  void auraPath(const float *xy,int n,float ox,float oy,float sx,float sy,const Ink &c,int kq);
+  void auraFlame(float cx,float cy,float rx,float ry,float rise,int scroll,uint32_t salt,const Ink &c,int kq);
+  void auraHeatSpot(float cx,float cy,float rx,float ry,const Ink &target,int k8);
+  void auraSprite(const struct AuraMask &m,int w,int h,float cx,float cy,int scale,bool mirror,const Ink &rim,const Ink &body,int kRim,int kBody);
+  void auraStretchReadout(float d);
+  void auraLink(float x,float y,bool vertical,bool open,const Ink &c,const Ink &hi,int kq);
+  void auraGum(float ax,float ay,float ex,float ey,float bow,float hum,float w0,float wMid,float w1,int kq);
+  void auraBlob(float cx,float cy,float rx,float ry,int kq);
+  // ---- set helpers: alchemy
+  void alchemyLine(float x0,float y0,float x1,float y1,const Ink &c,int k0,int k1);
+  void alchemyArc(float cx,float cy,float r,float a0,float sweep,const Ink &c,int kq);
+  float alchemyPath(const float *xs,const float *ys,int n,float p,const Ink &c,int kq,float &hx,float &hy);
+  void alchemyFireball(float fx,float fy,float r,int cool,int boost,int scroll);
+  void alchemyHand(float sx,float sy,float tx,float ty,float bend,float reach,float wave,float grip,const Ink &rim,int kq);
+  void alchemyZap(float x0,float y0,float x1,float y1,uint32_t seed,const Ink &c,int kq);
+  void alchemyCrackle(float cx,float cy,float r,float a0,float span,float out,uint32_t seed,const Ink &core,const Ink &glow,int kq);
+  // ---- set helpers: phantom
+  // Whether this frame paints strokes as ink (a light background), set
+  // once per frame by phantom() so the pixel path does not recompute it.
+  bool phantomInk_=false;
+  bool phantomPaper()const;
+  void phantomAdd(int x,int y,const Ink &c,int w);
+  void phantomDot(float x,float y,const Ink &c,int kq);
+  void phantomLine(float x0,float y0,float x1,float y1,const Ink &c,int k0,int k1);
+  void phantomTwinkle(float x,float y,const Ink &c,int kq,int arm);
+  void phantomEllipse(float cx,float cy,float rx,float ry,const Ink &c,int kq,float from=0,float sweep=2*HALF_TURN);
+  void phantomKnife(float gx,float gy,float dx,float dy,const Ink &blade,const Ink &hilt,int kq,float shine);
+  void phantomPut(int x,int y,uint16_t value);
+  void phantomTeeth(int x0,int x1,int upper,int lower,int k8,bool overlay);
+  void phantomPull(float x,float y,float swing,int k8,bool overlay);
+  void phantomFist(float x,float y,int dx,int dy,int scale,const Ink &edge,const Ink &fill,int k8,bool arm);
+  void phantomPunch(float x,float y,bool mirror,int scale,bool ghost,const Ink &tint,int k8);
+  void phantomGlyph(int x,int y,int shape,int scale,const Ink &edge,const Ink &fill,const Ink &shade,int k8);
+  void phantomArrow(float x,float y,int length,const Ink &edge,const Ink &top,const Ink &bottom,int k8,float shine);
+  void phantomTint(const Ink &target,int k8,int parity);
+  void phantomBurst(float cx,float cy,float r0,float r1,int spikes,float turn,const Ink &c,int k8,float fromA,float toA);
+  // ---- set helpers: armory
+  void armoryPlot(int x,int y,const Ink &c,int kq);
+  void armoryTo(int &lx,int &ly,int x,int y,const Ink &c,int kq);
+  void armoryGear(float cx,float cy,float r,int teeth,float phase,const Ink &rim,const Ink &hub,int kq,bool spokes);
+  void armorySword(float x,float y,float angle,float height,float depth,float hide,const Ink &steel,const Ink &edge,const Ink &back,const Ink &hilt,int kq);
+  void armoryRing(float cx,float cy,float rx,float ry,const Ink &c,int kq);
+  void armoryWeapon(float px,float py,float dx,float dy,float out,float from,float len,int kind,const Ink &steel,const Ink &gold,int kq);
+  void armoryStroke(float x0,float y0,float x1,float y1,const Ink &c,int kq);
+  void armoryArc(float cx,float cy,float r,float from,float to,const Ink &c,int kq);
+  void armoryPetal(float cx,float cy,float angle,float len,float width,float squash,const Ink &edge,const Ink &vein,int kq,bool veined=true);
+  // ---- set helpers: grimoire
+  static float grimoireRsqrt(float v);
+  static float grimoireRecip(int n);
+  void grimoireAdd(int x,int y,const Ink &c,int w);
+  void grimoireTwinkle(float x,float y,const Rgb &c,float k,int arm);
+  void grimoireLine(float x0,float y0,float x1,float y1,const Ink &c,int k0,int k1,bool last=true);
+  void grimoireArc(float cx,float cy,float rx,float ry,float from,float sweep,const Ink &c,int kq);
+  void grimoireSigil(float cx,float cy,float r,float spin,float open,const Ink &rim,const Ink &rune,int kq);
+  void grimoireBeam(float x0,float y0,float x1,float y1,float head,float tail,const Ink &core,const Ink &side,int kq,int rows);
+  // ---- set helpers: ripsaw
+  void ripsawBar(float rx,float ry,int side,float len,float phase,float k,const Ink &steel,const Ink &chain);
+  float ripsawChain(float t,float &speed)const;
+  void ripsawPuff(float x,float y,float dx,float dy,float age,float life,float size,const Ink &c,float k);
+  void ripsawFill(const float *xs,const float *ys,int n,const Ink &c,int kq);
+  void ripsawHammerAt(float px,float py,float theta,float k,float fill,float sheen);
+  void ripsawOval(float cx,float cy,float rx,float ry,const Ink &c,int kq,float wobble,float spin,float density);
+  void ripsawPath(const float *pts,int n,float ox,float oy,float sx,float sy,const Ink &c,int kq,float drawn=1);
+  void ripsawFoxHead(float hx,float hy,float sx,float sy,float open,float k,float dissolve);
+  void ripsawWisp(float x,float y,float size,float t,uint32_t seed,const Ink &core,const Ink &flame,float k);
+  void ripsawBlast(float cx,float cy,float size,float age,uint32_t seed,float smokeLife);
+  void ripsawFin(float x,float y,float dir,float scale,float rise,float k);
+  void ripsawShark(float x,float y,float ux,float uy,float k,int floorY);
+  void ripsawSplash(float x,float y,float age,float size,uint32_t seed);
+  static void ripsawNoiseRow(int xq,int stepq,int n,int yq,uint32_t salt,uint8_t *out);
+  static int ripsawSpan(int limit,int ey2,int &mx);
+  // ---- set helpers: corsair
+  bool corsairInBox(int x,int y)const{const Box &b=number_;return x>=b.x0-2 && x<=b.x1+2 && y>=b.y0-2 && y<=b.y1+2;}
+  void corsairLine(float x0,float y0,float x1,float y1,const Ink &c,int k0,int k1);
+  static float corsairInvLen(float dx,float dy);
+  void corsairArm(float sx,float sy,float fx,float fy,float hw,float wobble,float spin,const Ink &edge,const Ink &fill,const Ink &core,int kq);
+  void corsairFist(float x,float y,float dx,float dy,float r,const Ink &edge,const Ink &fill,int kq);
+  void corsairStar(float x,float y,float r,float inner,int points,uint32_t seed,const Ink &c,const Ink &glow,int kq);
+  void corsairFlash(float x,float y,float r,float squash,const Ink &c,int kq);
+  void corsairRing(float cx,float cy,float rx,float ry,const Ink &c,int kq);
+  void corsairFocus(float cx,float cy,int lines,uint32_t seed,float reach,const Ink &c,int kq);
+  void corsairWave(float cx,float cy,float rx,float ry,const Ink &front,const Ink &back,int kq,uint32_t seed);
+  void corsairBlackBolt(float x0,float y0,float x1,float y1,uint32_t seed,const Ink &rim,const Ink &glow,int kq,float rough);
+  void corsairCut(float cx,float cy,float angle,float half,float width,const Ink &core,const Ink &glow,int kq,float gleam);
+  void corsairBlade(float cx,float cy,float angle,float half,const Ink &edge,const Ink &steel,int kq,float gleam);
+  void corsairFlush(const Ink &target,int k8,int y0,int y1);
+  void corsairWisp(float x0,float y0,float height,float w0,float w1,float sway,float phase,const Ink &c,int kq);
+  // ---- set helpers: reaper
+  void reaperAdd(int x,int y,const Ink &c,int w);
+  void reaperVdot(int x,float y,const Ink &c,int kq);
+  void reaperHdot(float x,int y,const Ink &c,int kq);
+  void reaperTongue(float bx,float by,float tx,float ty,float half,const Ink &c,int kq);
+  static float reaperRsqrt(float v);
 
   // White core with a glow on the two sides across the stroke.
   void segment(float x0,float y0,float x1,float y1,const Rgb &glowColor,float k) {
@@ -914,3 +1155,11 @@ private:
 #include "best_effect_ninja.h"
 #include "best_effect_nier.h"
 #include "best_effect_sorcery.h"
+#include "best_effect_aura.h"
+#include "best_effect_alchemy.h"
+#include "best_effect_phantom.h"
+#include "best_effect_armory.h"
+#include "best_effect_grimoire.h"
+#include "best_effect_ripsaw.h"
+#include "best_effect_corsair.h"
+#include "best_effect_reaper.h"

@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import argparse
 import re
+from history_log_glue import HELPERS, glue
 
 parser = argparse.ArgumentParser()
 parser.add_argument("sketch", nargs="?", type=pathlib.Path,
@@ -234,7 +235,7 @@ int main(){
   reset();personalBests={};bestStore={};assert(bestStore.begin(personalBests,"sleep-best","best0","best1"));pull();
   inactivity.touch(millis()-inactivity.timeout());autoPowerOff(millis(),acquisition.snapshot());
   assert(reachedSleep && !bestStore.pending(personalBests));
-  Appearance::Bests durable;AppearanceStore<Appearance::Bests> bestReader;assert(bestReader.begin(durable,"sleep-best","best0","best1") && durable.rpm[0]>0);
+  Appearance::Bests durable;AppearanceStore<Appearance::Bests> bestReader;assert(bestReader.begin(durable,"sleep-best","best0","best1") && durable.rpm[unsigned(StickS3SensorProfile::DEFAULT_MODE)*2+unsigned(RpmEstimator::DEFAULT_MODE)]>0);
   reset();personalBests={};bestStore={};assert(bestStore.begin(personalBests,"sleep-best-fail","best0","best1"));pull();
   assert(acquisition.request(Action::ShutdownBegin,acquisition.detector.launches));assert(practiceStore.save(practice));assert(acquisition.request(Action::CheckpointEnd));
   Preferences::failWrite=true;inactivity.touch(millis()-inactivity.timeout());autoPowerOff(millis(),acquisition.snapshot());
@@ -249,7 +250,7 @@ constants='\n'.join(re.search(r'static constexpr uint32_t '+name+r'=\d+;',source
 prefix=prefix.replace('static constexpr uint32_t HISTORY_COALESCE_MS=10000,HISTORY_SAVE_RETRY_MS=5000;',constants)
 with tempfile.TemporaryDirectory() as tmp:
     cpp=pathlib.Path(tmp)/"test.cpp"
-    cpp.write_text(prefix+'\n'.join(function(name) for name in ['prepareMotion','finishMotion','saveHistory'])+'\n'+shutdown_flush()+'\n'+function('autoPowerOff')+tests)
+    cpp.write_text(prefix+glue(source)+'\n'.join(function(name) for name in ['prepareMotion','finishMotion','saveHistory'])+'\n'+shutdown_flush()+'\n'+function('autoPowerOff')+tests)
     exe=pathlib.Path(tmp)/"test"
     subprocess.run(['c++','-std=c++17','-O1','-g','-DVQF_SINGLE_PRECISION','-fsanitize=address,undefined','-fno-omit-frame-pointer',
       '-I'+str(pathlib.Path(__file__).resolve().parent/'fakes'),'-I'+str(args.sketch.parent),'-I'+str(args.sketch.parent.parent/'LaunchLabRpm'),str(cpp),

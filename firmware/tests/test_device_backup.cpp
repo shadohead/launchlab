@@ -95,7 +95,7 @@ int main() {
   // The default milestones add nothing: format 1 stays byte for byte (above).
   // A changed mode or table 0.15 can hold makes format 3 (0.15's record), with
   // or without custom themes; a table it cannot hold makes format 4.
-  static_assert(FORMAT==5 && POOLS_FORMAT==4 && MILESTONES_FORMAT==3,"0.15 reads formats 1-3, 0.16 formats 1-4");
+  static_assert(FORMAT==6 && EFFECT_SET_FORMAT==5 && POOLS_FORMAT==4 && MILESTONES_FORMAT==3,"0.15 reads formats 1-3, 0.16 formats 1-4, 0.17 formats 1-5");
   {
     using Milestones::Row;using Appearance::Effect;
     assert(original.milestones.isDefault() && !original.hasMilestones);
@@ -111,9 +111,9 @@ int main() {
       assert(restored.hasMilestones && restored.milestones.same(c->milestones) && restored.milestones.revision==c->milestones.revision);
       assert(restored.hasThemes==c->hasThemes && (!c->hasThemes || restored.themes==c->themes));
       for(size_t i=0;i<length;i+=5){auto bad=encoded;bad[i]^=0x20;Contents ignored;assert(!decode(bad.data(),length,ignored));}
-      // Older formats cannot carry the milestones section, format 4 needs the
-      // pooled section and format 5 the effect set.
-      for(uint32_t format:{LEGACY_FORMAT,THEMES_FORMAT,POOLS_FORMAT,FORMAT,FORMAT+1}) {
+      // Older formats cannot carry the milestones section, formats 4 and 6
+      // need the pooled section and format 5 the effect set.
+      for(uint32_t format:{LEGACY_FORMAT,THEMES_FORMAT,POOLS_FORMAT,EFFECT_SET_FORMAT,FORMAT,FORMAT+1}) {
         auto bad=encoded;put32(bad.data()+4,format);put32(bad.data()+length-4,checksum(bad.data(),length-4));
         Contents ignored;assert(!decode(bad.data(),length,ignored));
       }
@@ -140,16 +140,18 @@ int main() {
       for(const auto *c:{&pooled,&tidal,&ladder}) {
         assert(c->format()==POOLS_FORMAT);
         Buffer encoded;const size_t length=encode(*c,"0.16.0-sticks3-test",encoded);
-        assert(get32(encoded.data()+4)==POOLS_FORMAT && length==n+8+Milestones::Config::IMAGE_BYTES);
-        assert(encoded[length-4-Milestones::Config::IMAGE_BYTES-8]==MilestonePools);
+        // 0.16's pooled record, byte for byte.
+        assert(get32(encoded.data()+4)==POOLS_FORMAT && length==n+8+Milestones::Config::V2_IMAGE_BYTES);
+        assert(encoded[length-4-Milestones::Config::V2_IMAGE_BYTES-8]==MilestonePools);
+        {Milestones::Config::V2Image v2;c->milestones.encodeV2(v2);assert(std::equal(v2.begin(),v2.end(),encoded.begin()+length-4-v2.size()));}
         Contents restored;assert(decode(encoded.data(),length,restored) && restored.hasMilestones && restored.milestones.same(c->milestones));
         for(size_t i=0;i<length;i+=7){auto bad=encoded;bad[i]^=0x10;Contents ignored;assert(!decode(bad.data(),length,ignored));}
-        for(uint32_t format:{LEGACY_FORMAT,THEMES_FORMAT,MILESTONES_FORMAT,FORMAT,FORMAT+1}) {
+        for(uint32_t format:{LEGACY_FORMAT,THEMES_FORMAT,MILESTONES_FORMAT,EFFECT_SET_FORMAT,FORMAT,FORMAT+1}) {
           auto bad=encoded;put32(bad.data()+4,format);put32(bad.data()+length-4,checksum(bad.data(),length-4));
           Contents ignored;assert(!decode(bad.data(),length,ignored));
         }
         // The pooled record under the 0.15 section id is refused.
-        auto bad=encoded;bad[length-4-Milestones::Config::IMAGE_BYTES-8]=MilestoneTable;put32(bad.data()+length-4,checksum(bad.data(),length-4));
+        auto bad=encoded;bad[length-4-Milestones::Config::V2_IMAGE_BYTES-8]=MilestoneTable;put32(bad.data()+length-4,checksum(bad.data(),length-4));
         Contents ignored;assert(!decode(bad.data(),length,ignored));
       }
     }
@@ -178,19 +180,20 @@ int main() {
     assert(all.milestones.set(Milestones::Mode::Both,rows,2)==Milestones::Problem::None);all.hasMilestones=true;
     auto tabled=only;tabled.milestones=all.milestones;tabled.hasMilestones=true;
     for(const auto *c:{&only,&tabled,&all}) {
-      assert(c->format()==FORMAT);
+      assert(c->format()==EFFECT_SET_FORMAT);
       Buffer encoded;const size_t length=encode(*c,"0.17.0-sticks3-test",encoded);
-      assert(get32(encoded.data()+4)==FORMAT && length==n+8+EffectSet::Config::IMAGE_BYTES+(c->hasThemes?8+Themes::Library::IMAGE_BYTES:0)+
-             (c->hasMilestones?8+Milestones::Config::IMAGE_BYTES:0));
+      assert(get32(encoded.data()+4)==EFFECT_SET_FORMAT && length==n+8+EffectSet::Config::IMAGE_BYTES+(c->hasThemes?8+Themes::Library::IMAGE_BYTES:0)+
+             (c->hasMilestones?8+Milestones::Config::V2_IMAGE_BYTES:0));
       // The effect set is the last section.
       assert(encoded[length-4-EffectSet::Config::IMAGE_BYTES-8]==OfferedEffects);
       Contents restored;assert(decode(encoded.data(),length,restored) && same(*c,restored));
       assert(restored.hasEffectSet && restored.effectSet.mask()==c->effectSet.mask() && restored.effectSet.revision==c->effectSet.revision);
       assert(restored.hasThemes==c->hasThemes && restored.hasMilestones==c->hasMilestones && (!c->hasMilestones || restored.milestones.same(c->milestones)));
       for(size_t i=0;i<length;i+=5){auto bad=encoded;bad[i]^=0x20;Contents ignored;assert(!decode(bad.data(),length,ignored));}
-      if(c->hasMilestones)assert(encoded[length-4-EffectSet::Config::IMAGE_BYTES-8-Milestones::Config::IMAGE_BYTES-8]==MilestonePools);
-      // No other format carries the effect set section.
-      for(uint32_t format:{LEGACY_FORMAT,THEMES_FORMAT,MILESTONES_FORMAT,POOLS_FORMAT,FORMAT+1}) {
+      if(c->hasMilestones)assert(encoded[length-4-EffectSet::Config::IMAGE_BYTES-8-Milestones::Config::V2_IMAGE_BYTES-8]==MilestonePools);
+      // No other format carries the effect set section with 0.16's pooled
+      // record (format 6 carries the 128-bit one).
+      for(uint32_t format:{LEGACY_FORMAT,THEMES_FORMAT,MILESTONES_FORMAT,POOLS_FORMAT,FORMAT,FORMAT+1}) {
         auto bad=encoded;put32(bad.data()+4,format);put32(bad.data()+length-4,checksum(bad.data(),length-4));
         Contents ignored;assert(!decode(bad.data(),length,ignored));
       }
@@ -201,13 +204,13 @@ int main() {
         Contents ignored;assert(!decode(bad.data(),length,ignored));
       }
       if(c->hasMilestones) {
-        auto bad=encoded;bad[length-4-EffectSet::Config::IMAGE_BYTES-8-Milestones::Config::IMAGE_BYTES-8]=MilestoneTable;
+        auto bad=encoded;bad[length-4-EffectSet::Config::IMAGE_BYTES-8-Milestones::Config::V2_IMAGE_BYTES-8]=MilestoneTable;
         put32(bad.data()+length-4,checksum(bad.data(),length-4));
         Contents ignored;assert(!decode(bad.data(),length,ignored));
       }
     }
     // A checksummed record with an invalid set is rejected whole.
-    for(EffectSet::Mask mask:{EffectSet::Mask(),flag(5),flag(43),flag(64)}) {
+    for(EffectSet::Mask mask:{EffectSet::Mask(),flag(5),flag(Appearance::EFFECTS),flag(127)}) {
       Buffer encoded;const size_t length=encode(only,"x",encoded);const size_t body=length-4-EffectSet::Config::IMAGE_BYTES;
       auto bad=encoded;EffectSet::putMask(bad.data()+body+8,mask);
       put32(bad.data()+body+24,Appearance::hash(bad.data()+body,24));put32(bad.data()+length-4,checksum(bad.data(),length-4));
@@ -222,6 +225,51 @@ int main() {
     EffectSet::Config reloaded;AppearanceStore<EffectSet::Config> reader;
     assert(reader.begin(reloaded,"ll-appearance","eset0","eset1",true) && !reader.damaged() && reloaded.mask()==only.effectSet.mask());
     Contents plain;assert(decode(buffer.data(),n,plain) && !plain.hasEffectSet);
+  }
+
+  // A table whose pools hold an effect past value 63 (0.18) makes format 6:
+  // the 128-bit pooled record, with or without custom themes and an effect
+  // set (optional there). A table within effects 0-63 stays format 3-5.
+  {
+    using EffectSet::flag;using Appearance::Effect;using Milestones::Row;
+    const Row wide[]={{9000,Effect::Sparkles},{12000,flag(Effect::Tidal)|flag(Effect::Rev)|flag(Effect::Sharkfin)},{15000,Effect::Volley}};
+    auto pools=original;pools.hasMilestones=true;assert(pools.milestones.set(Milestones::Mode::Both,wide,3)==Milestones::Problem::None && !pools.milestones.fitsV2());
+    pools.milestones.revision=0x11223344;
+    auto withSet=pools;withSet.hasEffectSet=withSet.effectSet.set(flag(Effect::Slash)|flag(Effect::Meadow))==EffectSet::Problem::None;
+    auto withAll=withSet;withAll.hasThemes=true;assert(withAll.themes.put(1,custom("Dragoon Storm",0x5c7f)));
+    for(const auto *c:{&pools,&withSet,&withAll}) {
+      assert(c->format()==FORMAT);
+      Buffer encoded;const size_t length=encode(*c,"0.18.0-sticks3-test",encoded);
+      const size_t setBytes=c->hasEffectSet?8+EffectSet::Config::IMAGE_BYTES:0;
+      assert(get32(encoded.data()+4)==FORMAT && length==n+8+Milestones::Config::IMAGE_BYTES+setBytes+(c->hasThemes?8+Themes::Library::IMAGE_BYTES:0));
+      const size_t pooled=length-4-setBytes-Milestones::Config::IMAGE_BYTES;
+      assert(encoded[pooled-8]==MilestonePools && get32(encoded.data()+pooled)==Milestones::Config::MAGIC);
+      Contents restored;assert(decode(encoded.data(),length,restored) && same(*c,restored));
+      assert(restored.hasMilestones && restored.milestones.same(c->milestones) && restored.milestones.revision==c->milestones.revision);
+      assert(restored.hasEffectSet==c->hasEffectSet && (!c->hasEffectSet || restored.effectSet.mask()==c->effectSet.mask()));
+      for(size_t i=0;i<length;i+=5){auto bad=encoded;bad[i]^=0x20;Contents ignored;assert(!decode(bad.data(),length,ignored));}
+      // No other format carries the 128-bit record.
+      for(uint32_t format:{LEGACY_FORMAT,THEMES_FORMAT,MILESTONES_FORMAT,POOLS_FORMAT,EFFECT_SET_FORMAT,FORMAT+1}) {
+        auto bad=encoded;put32(bad.data()+4,format);put32(bad.data()+length-4,checksum(bad.data(),length-4));
+        Contents ignored;assert(!decode(bad.data(),length,ignored));
+      }
+      // The 128-bit record under the 0.15 section id is refused.
+      {auto bad=encoded;bad[pooled-8]=MilestoneTable;put32(bad.data()+length-4,checksum(bad.data(),length-4));Contents ignored;assert(!decode(bad.data(),length,ignored));}
+    }
+    // Format 6 without its pooled section is not a backup.
+    {Buffer encoded;const size_t length=encode(withSet,"x",encoded);(void)length;
+     Contents setOnly=original;setOnly.hasEffectSet=true;setOnly.effectSet=withSet.effectSet;Buffer five;const size_t k=encode(setOnly,"x",five);
+     assert(get32(five.data()+4)==EFFECT_SET_FORMAT);put32(five.data()+4,FORMAT);put32(five.data()+k-4,checksum(five.data(),k-4));
+     Contents ignored;assert(!decode(five.data(),k,ignored));}
+    // A checksummed v3 record with an invalid pool (an effect past the last) is rejected whole.
+    {Buffer encoded;const size_t length=encode(pools,"x",encoded);const size_t body=length-4-Milestones::Config::IMAGE_BYTES;
+     auto bad=encoded;bad[body+8+4+2+15]|=0x40; // row 0's pool, bit 126
+     put32(bad.data()+body+Milestones::Config::IMAGE_BYTES-4,Appearance::hash(bad.data()+body,Milestones::Config::IMAGE_BYTES-4));
+     put32(bad.data()+length-4,checksum(bad.data(),length-4));Contents ignored;assert(!decode(bad.data(),length,ignored));}
+    // The edge: Volley (63) alone still fits 0.16's record, Starfall (64) does not.
+    {auto edge=original;edge.hasMilestones=true;const Row v[]={{9000,flag(Effect::Volley)|flag(Effect::Orbit)}},w[]={{9000,flag(Effect::Starfall)|flag(Effect::Orbit)}};
+     assert(edge.milestones.set(Milestones::Mode::Both,v,1)==Milestones::Problem::None && edge.format()==POOLS_FORMAT);
+     assert(edge.milestones.set(Milestones::Mode::Both,w,1)==Milestones::Problem::None && edge.format()==FORMAT);}
   }
 
   // Expanded accents travel through the complete USB backup, including the
@@ -269,7 +317,7 @@ int main() {
   assert(!decode(buffer.data(),n-1,rejected) && !decode(buffer.data(),HEADER_BYTES,rejected));
   {
     // Format 2 without its themes section is not a backup either, nor format 3 without milestones.
-    for(uint32_t format:{THEMES_FORMAT,MILESTONES_FORMAT,FORMAT}) {
+    for(uint32_t format:{THEMES_FORMAT,MILESTONES_FORMAT,POOLS_FORMAT,EFFECT_SET_FORMAT,FORMAT}) {
       auto bad=buffer;put32(bad.data()+4,format);put32(bad.data()+n-4,checksum(bad.data(),n-4));assert(!decode(bad.data(),n,rejected));
     }
   }

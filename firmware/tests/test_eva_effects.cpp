@@ -55,7 +55,7 @@ int main(){
       for(unsigned ms=0;ms<=5500;ms+=10){
         auto out=frame(effect,ms,color);
         // The device cost model, fitted to every frame of every effect.
-        const double cost=1100+1.8*renderer.plots()+1.0*renderer.probes()+13.0*renderer.scans();
+        const double cost=renderer.modelledUs();
         auto again=frame(effect,ms,color);
         assert(out==again); // deterministic: a pure function of elapsed time
         maxPlots=std::max(maxPlots,renderer.plots());maxCost=std::max(maxCost,cost);

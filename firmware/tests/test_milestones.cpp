@@ -3,6 +3,7 @@
 // editor's shared vectors.
 #include "../LaunchLabMini/appearance_store.h"
 #include "../LaunchLabMini/milestones.h"
+#include "../LaunchLabMini/milestone_store.h"
 #include "../LaunchLabMini/nvs_budget.h"
 #include "../LaunchLabMini/practice_history.h"
 #include "milestone_vectors.h"
@@ -14,12 +15,14 @@
 
 int main() {
   using namespace Milestones;using Appearance::Effect;
-  // v2 (0.16): twelve rows of RPM and a 64-bit pool; v1 (0.15): eight rows of RPM and one effect.
-  static_assert(Config::IMAGE_BYTES==136 && Request::BYTES==136 && Config::V1_IMAGE_BYTES==40 && Request::V1_BYTES==40 && MAX_ROWS==12 && V1_ROWS==8);
-  // Defaults: today's behaviour (New best), 9K..15K escalating to Slash.
+  // v3 (0.18): twelve rows of RPM and a 128-bit pool; v2 (0.16, 0.17): a
+  // 64-bit pool; v1 (0.15): eight rows of RPM and one effect.
+  static_assert(Config::IMAGE_BYTES==232 && Request::BYTES==232 && Config::V2_IMAGE_BYTES==136 && Request::V2_BYTES==136 &&
+                Config::V1_IMAGE_BYTES==40 && Request::V1_BYTES==40 && MAX_ROWS==12 && V1_ROWS==8);
+  // Defaults: DEFAULT_MODE, 9K..15K escalating to Slash.
   {
     Config d;
-    assert(d.mode()==Mode::Best && d.count()==7 && d.isDefault() && d.revision==0);
+    assert(d.mode()==DEFAULT_MODE && d.count()==7 && d.isDefault() && d.revision==0);
     const Effect expected[]={Effect::Sparkles,Effect::Sparkles,Effect::Orbit,Effect::Flames,Effect::Shockwave,Effect::Lightning,Effect::Slash};
     for(unsigned i=0;i<7;++i)assert(d.row(i).rpm==9000+1000*i && d.row(i).first()==expected[i] && d.row(i).size()==1);
     assert(d.fitsV1());
@@ -43,17 +46,23 @@ int main() {
     Row many[13];for(unsigned i=0;i<13;++i)many[i]={uint16_t(9000+i*100),Effect::Orbit};
     assert(Config::check(Mode::Both,many,13)==Problem::Count && Config::check(Mode::Both,many,12)==Problem::None);
     // Pools: any non-empty set of drawn effects; Off, Random or an effect past the last fails.
-    const auto bit=[](Effect e){return uint64_t(1)<<unsigned(e);};
+    const auto bit=[](Effect e){return EffectSet::flag(e);};
     const Row pooled[]={{9000,bit(Effect::Tidal)|bit(Effect::Frost)|bit(Effect::Bloom)}};
     assert(Config::check(Mode::Both,pooled,1)==Problem::None && pooled[0].size()==3 && pooled[0].first()==Effect::Tidal && pooled[0].has(Effect::Bloom));
-    for(uint64_t bad:{uint64_t(0),bit(Effect::Orbit)|bit(Effect::Off),bit(Effect::Random),uint64_t(1)<<Appearance::EFFECTS,uint64_t(1)<<63}) {
+    for(Pool bad:{Pool(),bit(Effect::Orbit)|bit(Effect::Off),bit(Effect::Random),EffectSet::flag(Appearance::EFFECTS),EffectSet::flag(127)}) {
       const Row r[]={{9000,bad}};assert(Config::check(Mode::Both,r,1,&at)==Problem::Effect && at==0);
     }
+    // Effects past value 63 (0.18) are pool members like any other.
+    {const Row wide[]={{9000,bit(Effect::Volley)|bit(Effect::Starfall)|bit(Effect::Sharkfin)}};
+     assert(Config::check(Mode::Both,wide,1)==Problem::None && wide[0].size()==3 && wide[0].first()==Effect::Volley && wide[0].has(Effect::Sharkfin) && !wide[0].fits64());}
     // A table 0.15's record holds: at most eight single-effect rows of effects 0-7.
     {Config v;assert(v.set(Mode::Both,many,8)==Problem::None && v.fitsV1());
      assert(v.set(Mode::Both,many,9)==Problem::None && !v.fitsV1());
      assert(v.set(Mode::Both,pooled,1)==Problem::None && !v.fitsV1());
-     const Row tidal[]={{9000,Effect::Tidal}};assert(v.set(Mode::Both,tidal,1)==Problem::None && !v.fitsV1());}
+     const Row tidal[]={{9000,Effect::Tidal}};assert(v.set(Mode::Both,tidal,1)==Problem::None && !v.fitsV1() && v.fitsV2());
+     // 0.16's and 0.17's record holds pools within effects 0-63 only.
+     const Row edge[]={{9000,Effect::Volley}},past[]={{9000,Effect::Orbit},{9500,bit(Effect::Starfall)|bit(Effect::Orbit)}};
+     assert(v.set(Mode::Both,edge,1)==Problem::None && v.fitsV2() && v.set(Mode::Both,past,2)==Problem::None && !v.fitsV2() && !v.fitsV1());}
     for(const auto *rows:{low,high,same,fall,off})assert(c.set(Mode::Both,rows,rows==low?1:2)!=Problem::None);
     assert(c.same(before) && c.revision==0);
     // A change bumps the revision once; the same table again does not.
@@ -89,7 +98,7 @@ int main() {
     }
     // A pool plays the row's next pick; without one (or one not in the pool), its first effect.
     {
-      const Row rows[]={{9000,Effect::Sparkles},{12000,uint64_t(1)<<unsigned(Effect::Tidal)|uint64_t(1)<<unsigned(Effect::Eclipse)}};
+      const Row rows[]={{9000,Effect::Sparkles},{12000,EffectSet::flag(Effect::Tidal)|EffectSet::flag(Effect::Eclipse)}};
       Config c;assert(c.set(Mode::Milestones,rows,2)==Problem::None);
       Effect next[MAX_ROWS]={Effect::Sparkles,Effect::Eclipse};
       auto d=decide(c,true,12500,false,Effect::Orbit,next);assert(d.show && d.row==1 && d.milestone==12000 && d.effect==Effect::Eclipse);
@@ -99,14 +108,18 @@ int main() {
     }
     // pick(): uniform over the pool, never the previous pick while the pool has another.
     {
-      const uint64_t three=uint64_t(1)<<unsigned(Effect::Tidal)|uint64_t(1)<<unsigned(Effect::Frost)|uint64_t(1)<<unsigned(Effect::Bloom);
+      const Pool three=EffectSet::flag(Effect::Tidal)|EffectSet::flag(Effect::Frost)|EffectSet::flag(Effect::Bloom);
       unsigned seen[Appearance::EFFECTS]={};
       for(uint32_t bits=0;bits<3000;++bits){const Effect e=pick(three,bits*2654435761u,Effect::Frost);assert(e==Effect::Tidal || e==Effect::Bloom);++seen[unsigned(e)];}
       assert(seen[unsigned(Effect::Tidal)]>1300 && seen[unsigned(Effect::Bloom)]>1300);
       Effect previous=Effect::Off;
-      for(uint32_t bits=0;bits<500;++bits){const Effect e=pick(three,bits*40503u,previous);assert(e!=previous && (three>>unsigned(e)&1u));previous=e;}
-      assert(pick(uint64_t(1)<<unsigned(Effect::Slash),7,Effect::Slash)==Effect::Slash && pick(0,7,Effect::Off)==Effect::Off);
-      for(uint32_t bits=0;bits<50;++bits)assert(three>>unsigned(pick(three,bits,Effect::Orbit))&1u);
+      for(uint32_t bits=0;bits<500;++bits){const Effect e=pick(three,bits*40503u,previous);assert(e!=previous && three.has(e));previous=e;}
+      assert(pick(EffectSet::flag(Effect::Slash),7,Effect::Slash)==Effect::Slash && pick(Pool(),7,Effect::Off)==Effect::Off);
+      for(uint32_t bits=0;bits<50;++bits)assert(three.has(pick(three,bits,Effect::Orbit)));
+      // Across the old 64-bit limit: uniform over both words.
+      const Pool wide=EffectSet::flag(Effect::Orbit)|EffectSet::flag(Effect::Volley)|EffectSet::flag(Effect::Starfall)|EffectSet::flag(Effect::Sharkfin);
+      unsigned hits[Pool::BITS]={};for(uint32_t bits=0;bits<4000;++bits)++hits[unsigned(pick(wide,bits*2654435761u,Effect::Off))];
+      for(Effect e:{Effect::Orbit,Effect::Volley,Effect::Starfall,Effect::Sharkfin})assert(hits[unsigned(e)]>850);
     }
     char text[24];milestoneText(text,sizeof(text),12000);assert(!std::strcmp(text,"MILESTONE 12K"));
     milestoneText(text,sizeof(text),12500);assert(!std::strcmp(text,"MILESTONE 12.5K"));
@@ -114,23 +127,35 @@ int main() {
     milestoneText(text,sizeof(text),30000);assert(!std::strcmp(text,"MILESTONE 30K"));
   }
   // Record: exact round trip; any damage, a checksummed invalid table or
-  // nonzero unused bytes is rejected. v2 rows are RPM and an 8-byte pool.
+  // nonzero unused bytes is rejected. v3 rows are RPM and a 16-byte pool.
   {
-    Config c;const Row rows[]={{8000,Effect::Orbit},{10500,Effect::Lightning},{13000,uint64_t(1)<<unsigned(Effect::Slash)|uint64_t(1)<<unsigned(Effect::Storm)}};
+    Config c;const Row rows[]={{8000,Effect::Orbit},{10500,Effect::Lightning},{13000,EffectSet::flag(Effect::Slash)|EffectSet::flag(Effect::Storm)|EffectSet::flag(Effect::Sharkfin)}};
     assert(c.set(Mode::Milestones,rows,3)==Problem::None);c.revision=0x01020304;
     Config::Image image;c.encode(image);
     assert(Appearance::get32(image.data())==Config::MAGIC && image[8]==1 && image[9]==3 && image[12]==0x40 && image[13]==0x1f && image[14]==1 && image[15]==0);
-    assert(image[32+2]==0x80 && image[32+3]==0x40); // Slash bit 7, Storm bit 14
+    // Row 2 at 12+36: Slash bit 7, Storm bit 14 in the low word, Sharkfin (72) bit 8 of the high word.
+    assert(image[48+2]==0x80 && image[48+3]==0x40 && image[48+2+9]==0x01 && image[48+2+8]==0);
     Config back;assert(back.decode(image.data(),image.size()) && back.same(c) && back.revision==c.revision);
     for(size_t i=0;i<image.size();++i)for(uint8_t bit:{1,0x80}){auto bad=image;bad[i]^=bit;Config x;assert(!x.decode(bad.data(),bad.size()));}
     auto reseal=[](Config::Image &b){Appearance::put32(b.data()+Config::IMAGE_BYTES-4,Appearance::hash(b.data(),Config::IMAGE_BYTES-4));};
-    for(unsigned offset:{10u,11u,8u+4+10*3,8u+4+10*11+9}){auto bad=image;bad[offset]=1;reseal(bad);Config x;assert(!x.decode(bad.data(),bad.size()));}
-    {auto bad=image;bad[22]=bad[12];bad[23]=bad[13];reseal(bad);Config x;assert(!x.decode(bad.data(),bad.size()));}
-    {auto bad=image;bad[9]=0;std::memset(bad.data()+12,0,30);reseal(bad);Config x;assert(!x.decode(bad.data(),bad.size()));}
+    for(unsigned offset:{10u,11u,8u+4+18*3,8u+4+18*11+17}){auto bad=image;bad[offset]=1;reseal(bad);Config x;assert(!x.decode(bad.data(),bad.size()));}
+    {auto bad=image;bad[30]=bad[12];bad[31]=bad[13];reseal(bad);Config x;assert(!x.decode(bad.data(),bad.size()));}
+    {auto bad=image;bad[9]=0;std::memset(bad.data()+12,0,54);reseal(bad);Config x;assert(!x.decode(bad.data(),bad.size()));}
     {auto bad=image;bad[14]=0;reseal(bad);Config x;assert(!x.decode(bad.data(),bad.size()));} // an empty pool
+    {auto bad=image;bad[48+2+15]=0x80;reseal(bad);Config x;assert(!x.decode(bad.data(),bad.size()));} // bit 127: no such effect
     Config x;assert(!x.decode(image.data(),image.size()-1));
-    // 0.15's v1 record still decodes, as single-effect rows; a v2 image under
-    // the v1 magic (or the reverse) does not.
+    // 0.16's and 0.17's v2 record still decodes; a table within effects 0-63
+    // writes it byte for byte as they did.
+    Config narrow;const Row v2rows[]={{8000,Effect::Orbit},{13000,EffectSet::flag(Effect::Slash)|EffectSet::flag(Effect::Storm)|EffectSet::flag(Effect::Ravage)}};
+    assert(narrow.set(Mode::Milestones,v2rows,2)==Problem::None && narrow.fitsV2());narrow.revision=5;
+    Config::V2Image v2;narrow.encodeV2(v2);
+    assert(Appearance::get32(v2.data())==Config::V2_MAGIC && v2[22]==0xc8 && v2[23]==0x32 && v2[24]==0x80 && v2[25]==0x40 && v2[29]==0x04);
+    Config fromV2;assert(fromV2.decode(v2.data(),v2.size()) && fromV2.same(narrow) && fromV2.revision==5);
+    for(size_t i=0;i<v2.size();++i){auto bad=v2;bad[i]^=2;Config y;assert(!y.decode(bad.data(),bad.size()));}
+    {auto bad=v2;Appearance::put32(bad.data(),Config::MAGIC);Appearance::put32(bad.data()+132,Appearance::hash(bad.data(),132));assert(!x.decode(bad.data(),bad.size()));}
+    {auto bad=image;Appearance::put32(bad.data(),Config::V2_MAGIC);reseal(bad);assert(!x.decode(bad.data(),bad.size()));}
+    // 0.15's v1 record still decodes, as single-effect rows; a newer image
+    // under the v1 magic (or the reverse) does not.
     Config single;const Row v1rows[]={{8000,Effect::Orbit},{10500,Effect::Lightning},{13000,Effect::Slash}};
     assert(single.set(Mode::Milestones,v1rows,3)==Problem::None && single.fitsV1());single.revision=9;
     Config::V1Image v1;single.encodeV1(v1);
@@ -138,8 +163,8 @@ int main() {
     Config fromV1;assert(fromV1.decode(v1.data(),v1.size()) && fromV1.same(single) && fromV1.revision==9);
     {auto bad=v1;Appearance::put32(bad.data(),Config::MAGIC);Appearance::put32(bad.data()+36,Appearance::hash(bad.data(),36));assert(!x.decode(bad.data(),bad.size()));}
     {auto bad=image;Appearance::put32(bad.data(),Config::V1_MAGIC);reseal(bad);assert(!x.decode(bad.data(),bad.size()));}
-    // 0.15 itself rejects the v2 image: wrong length for its 40-byte record, and it never reads the v2 keys.
-    static_assert(Config::IMAGE_BYTES!=Config::V1_IMAGE_BYTES);
+    // Older firmware rejects the v3 image: wrong length for its records, and it never reads the v3 keys.
+    static_assert(Config::IMAGE_BYTES!=Config::V1_IMAGE_BYTES && Config::IMAGE_BYTES!=Config::V2_IMAGE_BYTES);
   }
   // Store: alternating verified slots; a damaged record (both slots bad)
   // shows the defaults, stays until a change, and the next save replaces it.
@@ -159,61 +184,96 @@ int main() {
     assert(!damaged.pending(fallback) && Preferences::data==kept);
     // The appearance and bests stores keep refusing an unreadable record.
     Config refuse;AppearanceStore<Config> strict;assert(!strict.begin(refuse,"ll-appearance","mile0","mile1") && !strict.ready() && !strict.save(refuse));
-    assert(fallback.select(Mode::Both) && damaged.save(fallback) && !damaged.damaged());
-    Config fixed;AppearanceStore<Config> again;assert(again.begin(fixed,"ll-appearance","mile0","mile1",true) && !again.damaged() && fixed.mode()==Mode::Both);
+    assert(fallback.select(Mode::Milestones) && damaged.save(fallback) && !damaged.damaged());
+    Config fixed;AppearanceStore<Config> again;assert(again.begin(fixed,"ll-appearance","mile0","mile1",true) && !again.damaged() && fixed.mode()==Mode::Milestones);
     // A failed write leaves the change pending.
     Preferences::failWrite=true;assert(fixed.select(Mode::Best) && !again.save(fixed) && again.pending(fixed));Preferences::failWrite=false;
     assert(again.save(fixed));
   }
-  // 0.15's record carries over once: read from its keys while the v2 keys
-  // are absent, never written; a damaged one gives the defaults.
+  // The packed record, a v3 table in NVS: every table of this firmware fits,
+  // a round trip is exact, and any damage refuses it.
   {
-    Preferences::data.clear();Preferences::zeroLengthKeys.clear();
-    V1Record old;const Row rows[]={{9500,Effect::Shockwave},{14500,Effect::Slash}};assert(old.table.set(Mode::Both,rows,2)==Problem::None);
-    {AppearanceStore<V1Record> writer;V1Record blank;assert(writer.begin(blank,"ll-appearance","mile0","mile1",true) && !writer.present() && writer.save(old));}
-    const auto legacyBytes=Preferences::data;
-    Config c;AppearanceStore<Config> v2;assert(v2.begin(c,"ll-appearance","mpool0","mpool1",true) && !v2.present() && c.isDefault());
-    V1Record legacy;AppearanceStore<V1Record> reader;assert(reader.begin(legacy,"ll-appearance","mile0","mile1",true) && reader.present());
-    assert(legacy.table.same(old.table) && legacy.table.revision==old.table.revision);
-    c=legacy.table;assert(c.select(Mode::Milestones) && v2.save(c));
-    for(const auto &[key,value]:legacyBytes)assert(Preferences::data.at(key)==value); // 0.15's keys untouched
-    Config again;AppearanceStore<Config> v2again;assert(v2again.begin(again,"ll-appearance","mpool0","mpool1",true) && v2again.present() && again.same(c));
-    for(auto &[key,value]:Preferences::data)if(key.find("mile")!=std::string::npos)value[20]^=1;
-    V1Record broken;AppearanceStore<V1Record> damaged;assert(!damaged.begin(broken,"ll-appearance","mile0","mile1",true) && damaged.damaged() && broken.table.isDefault());
+    auto reseal=[](Config::PackedImage &x){Appearance::put32(x.data()+x.size()-4,Appearance::hash(x.data(),x.size()-4));};
+    Config worst;Row rows[MAX_ROWS];
+    for(unsigned i=0;i<MAX_ROWS;++i)rows[i]=Row(uint16_t(MAX_RPM-(MAX_ROWS-1-i)*997),EffectSet::ALL);
+    assert(worst.set(Mode::Both,rows,MAX_ROWS)==Problem::None);worst.revision=0xfedcba98;
+    Config::PackedImage b;assert(worst.encodePacked(b) && worst.packedWidth()==Appearance::EFFECTS);
+    assert(unsigned(b[0]|b[1]<<8)==Config::PACKED_MAGIC && b[6]==(2|MAX_ROWS<<2) && b[7]==Appearance::EFFECTS);
+    Config back;assert(back.decodePacked(b.data(),b.size()) && back.same(worst) && back.revision==worst.revision);
+    for(size_t i=0;i<b.size();++i)for(unsigned bit=0;bit<8;++bit){auto bad=b;bad[i]^=uint8_t(1u<<bit);Config x;assert(!x.decodePacked(bad.data(),bad.size()));}
+    {Config x;assert(!x.decodePacked(b.data(),b.size()-1));}
+    // Resealed: a bit past the rows, a width past 128 bits, thirteen rows, no such mode, rows out of order.
+    static_assert(MAX_ROWS*(Config::RPM_BITS+Appearance::EFFECTS)<Config::PACKED_ROW_BITS,"the last bit is unused");
+    {auto bad=b;bad[Config::PACKED_IMAGE_BYTES-5]|=0x80;reseal(bad);Config x;assert(!x.decodePacked(bad.data(),bad.size()));}
+    {auto bad=b;bad[7]=129;reseal(bad);Config x;assert(!x.decodePacked(bad.data(),bad.size()));}
+    {auto bad=b;bad[6]=uint8_t(2|13<<2);reseal(bad);Config x;assert(!x.decodePacked(bad.data(),bad.size()));}
+    {auto bad=b;bad[6]=uint8_t(3|12<<2);reseal(bad);Config x;assert(!x.decodePacked(bad.data(),bad.size()));}
+    {Config ordered;const Row up[]={{9000,Effect::Slash},{9001,Effect::Orbit}};assert(ordered.set(Mode::Both,up,2)==Problem::None);
+     Config::PackedImage two;assert(ordered.encodePacked(two));
+     const unsigned at=Config::RPM_BITS+ordered.packedWidth();  // row 1's RPM, bit 0: 9001 becomes 9000
+     two[8+at/8]&=uint8_t(~(1u<<(at%8)));reseal(two);Config z;assert(!z.decodePacked(two.data(),two.size()));}
+    // A table of low effects packs narrower.
+    {Config small;const Row few[]={{9000,EffectSet::flag(Effect::Blink)},{12000,Effect::Slash}};assert(small.set(Mode::Milestones,few,2)==Problem::None);
+     Config::PackedImage x;assert(small.encodePacked(x) && small.packedWidth()==unsigned(Effect::Blink)+1);
+     Config y;assert(y.decodePacked(x.data(),x.size()) && y.same(small));}
+    // It takes the NVS entries of 0.16's and 0.17's slot.
+    static_assert(NvsBudget::blobEntries(Config::PACKED_IMAGE_BYTES)==NvsBudget::blobEntries(Config::V2_IMAGE_BYTES) &&
+                  NvsBudget::blobEntries(Config::V2_IMAGE_BYTES)==8);
   }
-  // NVS: a rewrite of the record costs a few entries, beside a history rewrite.
-  static_assert(NvsBudget::blobEntries(Config::IMAGE_BYTES)==8 && NvsBudget::alternatingStoreEntries(Config::IMAGE_BYTES)==24);
-  static_assert(NvsBudget::blobEntries(Config::IMAGE_BYTES)+NvsBudget::blobEntries(PracticeHistory::IMAGE_BYTES)<126,"fits in the free page");
-  // Requests: Set carries a checked body, Reset none; shape and checksum.
-  // v2 ("LLU\2") carries pools; 0.15's v1 ("LLU\1") still works.
+  // What 0.16 reads, and what a rolled-back unit shows for a table it cannot.
   {
-    Config t;const Row rows[]={{9500,Effect::Shockwave},{14500,uint64_t(1)<<unsigned(Effect::Slash)|uint64_t(1)<<unsigned(Effect::Bloom)}};
+    Config t;const Row r[]={{9000,EffectSet::flag(Effect::Sparkles)|EffectSet::flag(Effect::Blink)},{11500,Effect::Crimson},{15500,Effect::Petalfall}};
+    assert(t.set(Mode::Both,r,3)==Problem::None && !t.fitsV016());t.revision=7;
+    const Config o=t.forV016();
+    assert(o.fitsV016() && o.fitsV2() && o.revision==6 && o.mode()==Mode::Both && o.count()==3 && Config::check(o.mode(),&o.row(0),o.count())==Problem::None);
+    assert(o.row(0).rpm==9000 && o.row(0).pool==EffectSet::flag(Effect::Sparkles));
+    assert(o.row(1).rpm==11500 && o.row(1).pool==EffectSet::flag(Effect::Orbit));   // the defaults at 11K
+    assert(o.row(2).rpm==15500 && o.row(2).pool==EffectSet::flag(Effect::Slash));   // and from 15K
+    Config low;const Row l[]={{1500,Effect::Crimson}};assert(low.set(Mode::Milestones,l,1)==Problem::None);
+    assert(low.forV016().row(0).pool==EffectSet::flag(Effect::Sparkles));            // below the defaults: their first
+    Config old;const Row k[]={{9000,EffectSet::flag(Effect::Orbit)|EffectSet::flag(Effect::Slash)}};assert(old.set(Mode::Both,k,1)==Problem::None && old.fitsV016());
+    assert(Config().fitsV016());
+  }
+  // Requests: Set carries a checked body, Reset none; shape and checksum.
+  // v3 ("LLU\3") carries 128-bit pools; 0.16's v2 ("LLU\2") and 0.15's v1
+  // ("LLU\1") still work.
+  {
+    Config t;const Row rows[]={{9500,Effect::Shockwave},{14500,EffectSet::flag(Effect::Slash)|EffectSet::flag(Effect::Bloom)|EffectSet::flag(Effect::Meadow)}};
     assert(t.set(Mode::Both,rows,2)==Problem::None);
     uint8_t b[Request::BYTES];Request::encode(Request::Op::Set,&t,b);
     Request q;Problem p;unsigned row=9;
-    assert(q.decode(b,sizeof(b),p,row) && p==Problem::None && q.op==Request::Op::Set && q.mode==Mode::Both && q.count==2 && q.version==2);
+    assert(Appearance::get32(b)==Request::MAGIC && q.decode(b,sizeof(b),p,row) && p==Problem::None && q.op==Request::Op::Set && q.mode==Mode::Both && q.count==2 && q.version==3);
     assert(q.rows[0].rpm==9500 && q.rows[1]==rows[1]);
     for(size_t i=0;i<sizeof(b);++i){uint8_t bad[Request::BYTES];std::memcpy(bad,b,sizeof(b));bad[i]^=4;Request x;assert(!x.decode(bad,sizeof(bad),p,row) || p!=Problem::None);}
     auto reseal=[](uint8_t *x,size_t n){Appearance::put32(x+n-4,Appearance::hash(x,n-4));};
-    {uint8_t bad[Request::BYTES];std::memcpy(bad,b,sizeof(b));bad[22]=0x10;bad[23]=0x27;reseal(bad,sizeof(bad)); // row 1 at 10000: fine
+    {uint8_t bad[Request::BYTES];std::memcpy(bad,b,sizeof(b));bad[30]=0x10;bad[31]=0x27;reseal(bad,sizeof(bad)); // row 1 at 10000: fine
      Request x;assert(x.decode(bad,sizeof(bad),p,row) && p==Problem::None);
-     bad[22]=0x0c;bad[23]=0x25;reseal(bad,sizeof(bad));assert(x.decode(bad,sizeof(bad),p,row) && p==Problem::Order && row==1);}
+     bad[30]=0x0c;bad[31]=0x25;reseal(bad,sizeof(bad));assert(x.decode(bad,sizeof(bad),p,row) && p==Problem::Order && row==1);}
     {uint8_t bad[Request::BYTES];std::memcpy(bad,b,sizeof(b));bad[5]=1;reseal(bad,sizeof(bad));Request x;assert(!x.decode(bad,sizeof(bad),p,row));}
     {uint8_t bad[Request::BYTES];std::memcpy(bad,b,sizeof(b));bad[4]=3;reseal(bad,sizeof(bad));Request x;assert(!x.decode(bad,sizeof(bad),p,row));}
     uint8_t r[Request::BYTES];Request::encode(Request::Op::Reset,nullptr,r);
     assert(q.decode(r,sizeof(r),p,row) && q.op==Request::Op::Reset && p==Problem::None);
     r[20]=1;reseal(r,sizeof(r));assert(!q.decode(r,sizeof(r),p,row));
     assert(!q.decode(b,sizeof(b)-1,p,row));
+    // v2: 0.16's and 0.17's web editor's request decodes, 64-bit pools.
+    Config narrow;const Row v2rows[]={{9500,Effect::Shockwave},{14500,EffectSet::flag(Effect::Slash)|EffectSet::flag(Effect::Bloom)}};
+    assert(narrow.set(Mode::Both,v2rows,2)==Problem::None && narrow.fitsV2());
+    uint8_t v2[Request::V2_BYTES];Request::encode(Request::Op::Set,&narrow,v2,2);
+    assert(Appearance::get32(v2)==Request::V2_MAGIC && q.decode(v2,sizeof(v2),p,row) && p==Problem::None && q.version==2 && q.count==2 && q.rows[1]==v2rows[1]);
+    uint8_t v2reset[Request::V2_BYTES];Request::encode(Request::Op::Reset,nullptr,v2reset,2);assert(q.decode(v2reset,sizeof(v2reset),p,row) && q.op==Request::Op::Reset && q.version==2);
     // v1: 0.15's web editor's request decodes as single-effect rows.
     Config single;const Row v1rows[]={{9500,Effect::Shockwave},{14500,Effect::Slash}};assert(single.set(Mode::Both,v1rows,2)==Problem::None);
-    uint8_t v1[Request::V1_BYTES];Request::encode(Request::Op::Set,&single,v1,true);
+    uint8_t v1[Request::V1_BYTES];Request::encode(Request::Op::Set,&single,v1,1);
     assert(Appearance::get32(v1)==Request::V1_MAGIC && q.decode(v1,sizeof(v1),p,row) && p==Problem::None && q.version==1 && q.count==2 && q.rows[1]==v1rows[1]);
-    uint8_t v1reset[Request::V1_BYTES];Request::encode(Request::Op::Reset,nullptr,v1reset,true);assert(q.decode(v1reset,sizeof(v1reset),p,row) && q.op==Request::Op::Reset);
-    // A v2 body under the v1 magic, or a v1 request one byte long, is refused.
-    {uint8_t bad[Request::BYTES];std::memcpy(bad,b,sizeof(b));Appearance::put32(bad,Request::V1_MAGIC);reseal(bad,sizeof(bad));assert(!q.decode(bad,sizeof(bad),p,row));}
-    // 0.15 decodes only 40-byte requests with its v1 magic, so a v2 request is
-    // refused there as invalid_request before anything is written.
-    static_assert(Request::BYTES!=Request::V1_BYTES && Request::MAGIC!=Request::V1_MAGIC);
+    uint8_t v1reset[Request::V1_BYTES];Request::encode(Request::Op::Reset,nullptr,v1reset,1);assert(q.decode(v1reset,sizeof(v1reset),p,row) && q.op==Request::Op::Reset);
+    // A body under another version's magic is refused.
+    {uint8_t bad[Request::BYTES];std::memcpy(bad,b,sizeof(b));Appearance::put32(bad,Request::V2_MAGIC);reseal(bad,sizeof(bad));assert(!q.decode(bad,sizeof(bad),p,row));}
+    {uint8_t bad[Request::V2_BYTES];std::memcpy(bad,v2,sizeof(v2));Appearance::put32(bad,Request::MAGIC);reseal(bad,sizeof(bad));assert(!q.decode(bad,sizeof(bad),p,row));}
+    {uint8_t bad[Request::V2_BYTES];std::memcpy(bad,v2,sizeof(v2));Appearance::put32(bad,Request::V1_MAGIC);reseal(bad,sizeof(bad));assert(!q.decode(bad,sizeof(bad),p,row));}
+    // Older firmware decodes only its own lengths, so a v3 request is refused
+    // there as invalid_request before anything is written (test_milestone_compat
+    // checks the frozen sources themselves).
+    static_assert(Request::BYTES!=Request::V1_BYTES && Request::BYTES!=Request::V2_BYTES && Request::MAGIC!=Request::V2_MAGIC);
   }
   // The shared vectors the web editor tests against are current.
   {
@@ -222,5 +282,5 @@ int main() {
       std::cerr<<"firmware/tests/fixtures/milestone_vectors.json is stale: regenerate it with milestone_fixture.cpp\n";return 1;
     }
   }
-  std::cout<<"PASS: milestone defaults, table rules with failing rows, effect pools and picks, v1 import and compatibility, shown-RPM thresholds, one-animation rule, record round trip and damage, damaged-record fallback, NVS budget, USB requests, shared web vectors\n";
+  std::cout<<"PASS: milestone defaults, table rules with failing rows, effect pools and picks across 128 bits, v2 and v1 import and compatibility, shown-RPM thresholds, one-animation rule, record round trip and damage, damaged-record fallback, NVS budget, USB requests, shared web vectors\n";
 }
