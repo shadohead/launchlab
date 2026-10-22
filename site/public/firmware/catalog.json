@@ -1,38 +1,38 @@
 {
-  "version": "0.15.0",
-  "runtime": "0.15.0-sticks3-milestone-pm",
+  "version": "0.18.0",
+  "runtime": "0.18.0-sticks3-anime-pm",
   "board": "M5StickS3 K150",
   "chip": "ESP32-S3",
   "flashBytes": 8388608,
   "applicationOffset": 65536,
   "files": [
     {
-      "path": "firmware/0.15.0/bootloader.bin",
+      "path": "firmware/0.18.0/bootloader.bin",
       "offset": 0,
       "size": 20256,
       "sha256": "8581a3fb98309f261482327b5ff51a2fabca0ec513f9ba38595ed04479794e58"
     },
     {
-      "path": "firmware/0.15.0/partitions.bin",
+      "path": "firmware/0.18.0/partitions.bin",
       "offset": 32768,
       "size": 3072,
       "sha256": "1d9cca96de0fe07ad7fc0648b9878ddecd9ce565e38b589ad20fea698ed4c80c"
     },
     {
-      "path": "firmware/0.15.0/boot_app0.bin",
+      "path": "firmware/0.18.0/boot_app0.bin",
       "offset": 57344,
       "size": 8192,
       "sha256": "f94c5d786a7a8fab06ac5d10e33bf37711a6697636dc037559ea19cc410a17f0"
     },
     {
-      "path": "firmware/0.15.0/application.bin",
+      "path": "firmware/0.18.0/application.bin",
       "offset": 65536,
-      "size": 863408,
-      "sha256": "48b827825ee721ac42a4c1ebdcc4abdddd6d690b8cd5c090b791aa378726a99e"
+      "size": 1509408,
+      "sha256": "ec998fc91247f9a2f1a9780a5c493c043f18c7716cf42e32c43396c970ba78b8"
     }
   ],
   "validation": "Beta: exact shipping application installed and read back; software checks, pinned target compilation and the hardware-in-the-loop release gate on the exact source passed. Not yet hand-tested for stable.",
-  "release": "0.15.0-sticks3-milestone-pm",
+  "release": "0.18.0-sticks3-anime-pm",
   "profiles": [
     "qre1113",
     "tcrt5000"

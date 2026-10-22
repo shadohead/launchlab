@@ -1,5 +1,7 @@
 # Firmware 0.15.0 build context
 
+Superseded by [0.18.0](FIRMWARE_0.18.0.md); this document describes the preserved 0.15.0 release.
+
 Published as a beta on 2026-10-20 and promoted to stable the same day after the owner's hand test.
 
 The shipping runtime is `0.15.0-sticks3-milestone-pm`, application SHA-256 `48b827825ee721ac42a4c1ebdcc4abdddd6d690b8cd5c090b791aa378726a99e`. The compiled source snapshot is frozen in the [release directory](../firmware/releases/0.15.0-sticks3-milestone-pm/). It uses the same PM SDK, toolchain, bootloader and partition table as [0.13.5](FIRMWARE_0.13.5.md). Use the [USB updater](https://launchlab.beywatch.gg/update) for the shipping image.

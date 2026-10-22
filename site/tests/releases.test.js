@@ -6,9 +6,9 @@ import {catalog,oldCatalog,base} from './helpers.js';
 const index=JSON.parse(await readFile(new URL('../public/firmware/versions.json',import.meta.url)));
 const reply=data=>({ok:true,json:async()=>data});
 
-test('release list recommends 0.15.0 and excludes withdrawn 0.12.1',()=>{
-  validateReleaseIndex(index);assert.equal(index.latest,'0.15.0');
-  assert.deepEqual(index.releases.map(r=>r.version),['0.15.0','0.13.9','0.13.8','0.13.7','0.13.5','0.12.2','0.11.2','0.11.1','0.10.22','0.10.21','0.10.14','0.10.11','0.10.7','0.10.1']);
+test('release list recommends 0.18.0 and excludes withdrawn 0.12.1',()=>{
+  validateReleaseIndex(index);assert.equal(index.latest,'0.18.0');
+  assert.deepEqual(index.releases.map(r=>r.version),['0.18.0','0.15.0','0.13.9','0.13.8','0.13.7','0.13.5','0.12.2','0.11.2','0.11.1','0.10.22','0.10.21','0.10.14','0.10.11','0.10.7','0.10.1']);
 });
 test('release list rejects duplicate, external, missing or older recommended targets',()=>{
   for(const mutate of [i=>i.releases.push(i.releases[0]),i=>i.releases[0].catalog='https://bad.example/catalog.json',i=>i.latest='0.10.1',i=>i.latest='0.11.0',i=>i.releases=[]]){
@@ -17,32 +17,32 @@ test('release list rejects duplicate, external, missing or older recommended tar
 });
 test('release list fetch uses no-store and validates before selection',async()=>{
   const result=await loadReleaseIndex(base,async(url,opts)=>{assert.equal(opts.cache,'no-store');assert.equal(url.pathname.split('/').slice(-2).join('/'),'firmware/versions.json');return reply(index);});
-  assert.equal(result.latest,'0.15.0');
+  assert.equal(result.latest,'0.18.0');
   await assert.rejects(loadReleaseIndex(base,async()=>({ok:false})),/unavailable/);
 });
 test('selection loads the exact version catalog and invalidates old state while pending',async()=>{
   const seen=[];const selection=createReleaseSelection({index,baseUrl:base,fetchFn:async url=>reply(url.pathname.includes('/0.10.1/')?oldCatalog:catalog),onChange:s=>seen.push(s)});
-  await selection.select(index.latest);assert.equal(selection.state.catalog.version,'0.15.0');
+  await selection.select(index.latest);assert.equal(selection.state.catalog.version,'0.18.0');
   await selection.select('0.10.1');assert.equal(selection.state.catalog.version,'0.10.1');
   assert.ok(seen.filter(s=>s.loading).every(s=>s.catalog===null));
 });
 test('slow earlier request cannot replace a newer selection',async()=>{
   let completeOld,completeNew;
   const selection=createReleaseSelection({index,baseUrl:base,fetchFn:url=>new Promise(resolve=>{if(url.pathname.includes('/0.10.1/'))completeOld=resolve;else completeNew=resolve;})});
-  const old=selection.select('0.10.1'),next=selection.select('0.15.0');
+  const old=selection.select('0.10.1'),next=selection.select('0.18.0');
   completeNew(reply(catalog));await next;completeOld(reply(oldCatalog));await old;
-  assert.equal(selection.state.version,'0.15.0');assert.equal(selection.state.catalog.version,'0.15.0');
+  assert.equal(selection.state.version,'0.18.0');assert.equal(selection.state.catalog.version,'0.18.0');
 });
 test('failed or mismatched catalog clears the usable release; retry reloads cleanly',async()=>{
   let response=reply(oldCatalog);
   const selection=createReleaseSelection({index,baseUrl:base,fetchFn:async()=>response});
-  await selection.select('0.15.0');assert.equal(selection.state.catalog,null);assert.match(selection.state.error.message,/does not match/);
-  response={ok:false};await selection.select('0.15.0');assert.equal(selection.state.catalog,null);
-  response=reply(catalog);await selection.select('0.15.0');assert.equal(selection.state.error,null);assert.equal(selection.state.catalog.version,'0.15.0');
+  await selection.select('0.18.0');assert.equal(selection.state.catalog,null);assert.match(selection.state.error.message,/does not match/);
+  response={ok:false};await selection.select('0.18.0');assert.equal(selection.state.catalog,null);
+  response=reply(catalog);await selection.select('0.18.0');assert.equal(selection.state.error,null);assert.equal(selection.state.catalog.version,'0.18.0');
 });
 test('unknown requested version cannot reuse previously selected catalog',async()=>{
   const selection=createReleaseSelection({index,baseUrl:base,fetchFn:async()=>reply(catalog)});
-  await selection.select('0.15.0');await selection.select('9.9.9');assert.equal(selection.state.catalog,null);assert.match(selection.state.error.message,/Unknown/);
+  await selection.select('0.18.0');await selection.select('9.9.9');assert.equal(selection.state.catalog,null);assert.match(selection.state.error.message,/Unknown/);
 });
 
 test('withdrawn 0.12.1 cannot be selected through the updater index',async()=>{
@@ -56,13 +56,14 @@ test('stable releases stay stable, latest is the newest stable and beta points a
   assert.ok(index.betaReleases.every(r=>r.channel==='beta'));
   const versions=index.betaReleases.map(r=>r.version);assert.deepEqual([...versions].sort((x,y)=>-x.localeCompare(y,undefined,{numeric:true})),versions,'betas are listed newest first');
   const newer=versions.find(v=>v.localeCompare(index.latest,undefined,{numeric:true})>0)??null;
-  assert.equal(index.beta,newer);assert.ok(index.betaReleases.some(r=>r.version==='0.14.0'),'0.14.0 stays listed as a beta');
+  assert.equal(index.beta,newer);for(const v of ['0.17.0','0.16.0','0.14.0'])assert.ok(index.betaReleases.some(r=>r.version===v),v+' stays listed as a beta');
+  assert.ok(!index.betaReleases.some(r=>r.version==='0.18.0'),'promoted 0.18.0 is no longer listed as a beta');
 });
 test('a newer beta sits beside latest, which older readers keep following',()=>{
   const i=validateReleaseIndex(withBeta());
-  assert.equal(i.latest,'0.15.0');
+  assert.equal(i.latest,'0.18.0');
   assert.ok(!i.releases.some(r=>r.version==='0.19.0'),'releases holds stable only');
-  assert.deepEqual(listedReleases(i).slice(0,2).map(r=>[r.version,channelOf(r)]),[['0.19.0','beta'],['0.15.0','stable']]);
+  assert.deepEqual(listedReleases(i).slice(0,2).map(r=>[r.version,channelOf(r)]),[['0.19.0','beta'],['0.18.0','stable']]);
 });
 test('an index from before channels reads as all stable',()=>{
   const i=structuredClone(index);delete i.beta;delete i.betaReleases;i.releases.forEach(r=>delete r.channel);
@@ -73,9 +74,9 @@ test('channel lists and the beta pointer must agree',()=>{
     i=>{i.releases.unshift({...i.betaReleases[0]});i.betaReleases=[];i.beta=null;},
     i=>{i.betaReleases[0].channel='stable';},
     i=>{i.beta=null;},
-    i=>{i.beta='0.15.0';},
+    i=>{i.beta='0.18.0';},
     i=>{delete i.beta;},
-    i=>{i.betaReleases.push({version:'0.15.0',catalog:'firmware/0.15.0/catalog.json',channel:'beta'});},
+    i=>{i.betaReleases.push({version:'0.18.0',catalog:'firmware/0.18.0/catalog.json',channel:'beta'});},
     i=>{i.betaReleases[0]={version:'0.13.1',catalog:'firmware/0.13.1/catalog.json',channel:'beta'};}
   ]){const i=withBeta();mutate(i);assert.throws(()=>validateReleaseIndex(i));}
   const older=withBeta();older.betaReleases[0]={version:'0.13.1',catalog:'firmware/0.13.1/catalog.json',channel:'beta'};older.beta=null;

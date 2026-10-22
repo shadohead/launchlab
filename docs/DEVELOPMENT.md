@@ -18,6 +18,6 @@ npm run build
 
 `python3 scripts/verify-artifacts.py` verifies published checksums, exact firmware source identities and 3MF ZIP integrity. GitHub Actions runs native tests, transfer guard tests, redirect checks and artifact verification before publishing this compatibility output from `main`. There are no npm dependencies to install.
 
-Frozen M5 firmware versions are in [firmware/releases](../firmware/releases/catalog.json), including the working 0.3.0 QRE baseline and the separate 0.2.0 old TCRT5000 variant. The preserved public catalog contains the 0.15.0 shared-profile application; withdrawn 0.12.1 remains archived. Check the canonical updater's offered version and release notes before installing.
+Frozen M5 firmware versions are in [firmware/releases](../firmware/releases/catalog.json), including the working 0.3.0 QRE baseline and the separate 0.2.0 old TCRT5000 variant. The preserved public catalog contains the 0.18.0 shared-profile application; withdrawn 0.12.1 remains archived. Check the canonical updater's offered version and release notes before installing.
 
 Historical source snapshots retain their original layouts and notes; use each release's source rather than mixing headers across versions. Device backups, personal practice exports and factory flash dumps are excluded.

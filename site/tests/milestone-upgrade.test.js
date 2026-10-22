@@ -5,7 +5,7 @@ import {APP_OFFSET,flashVerified,inspectInstalledApplication,verifiedDownload} f
 import {catalog,images,base,localFetch,fake,opts} from './helpers.js';
 const prior=JSON.parse(await readFile(new URL('../public/firmware/0.13.9/catalog.json',import.meta.url)));
 const previous=await Promise.all(prior.files.map(f=>verifiedDownload(f,base,localFetch)));
-test('0.13.9 upgrades to exact 0.15.0 app only and a second attempt is a no-op',async()=>{
+test('0.13.9 upgrades to exact 0.18.0 app only and a second attempt is a no-op',async()=>{
   const loader=fake({app:previous[3].data});
   assert.equal((await inspectInstalledApplication(loader,catalog)).application.version,'0.13.9');
   assert.equal((await flashVerified(opts(loader))).status,'verified');
@@ -15,10 +15,10 @@ test('0.13.9 upgrades to exact 0.15.0 app only and a second attempt is a no-op',
   assert.deepEqual(loader.app,images[3].data);
   assert.equal((await flashVerified(opts(loader))).status,'up-to-date');assert.equal(loader.writes.length,1);
 });
-test('0.15.0 rollback to 0.13.9 requires confirmation and preserves boot infrastructure',async()=>{
+test('0.18.0 rollback to 0.13.9 requires confirmation and preserves boot infrastructure',async()=>{
   const loader=fake({app:images[3].data});
   const target={...opts(loader),catalog:prior,images:previous};
-  await assert.rejects(flashVerified(target),/Downgrade blocked.*0.15.0.*0.13.9/);
+  await assert.rejects(flashVerified(target),/Downgrade blocked.*0.18.0.*0.13.9/);
   await assert.rejects(flashVerified({...target,mode:'recovery'}),/Confirm intentional/);
   assert.equal(loader.writes.length,0);
   assert.equal((await flashVerified({...target,mode:'recovery',recoveryConfirmed:true})).status,'verified');

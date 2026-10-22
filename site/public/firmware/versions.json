@@ -1,7 +1,12 @@
 {
-  "latest": "0.15.0",
-  "beta": "0.18.0",
+  "latest": "0.18.0",
+  "beta": null,
   "releases": [
+    {
+      "version": "0.18.0",
+      "catalog": "firmware/0.18.0/catalog.json",
+      "channel": "stable"
+    },
     {
       "version": "0.15.0",
       "catalog": "firmware/0.15.0/catalog.json",
@@ -74,11 +79,6 @@
     }
   ],
   "betaReleases": [
-    {
-      "version": "0.18.0",
-      "catalog": "firmware/0.18.0/catalog.json",
-      "channel": "beta"
-    },
     {
       "version": "0.17.0",
       "catalog": "firmware/0.17.0/catalog.json",
