@@ -363,10 +363,12 @@ inline void Renderer::eclipse(float t) {
   constexpr float COVER=.75f,DIAMOND=1.6f,WANE=3.7f,END=5.2f;
   const Rgb violet=rgb8(150,70,255),pearl=mixed(rgb8(235,230,255),accent_,.25f);
   const float cx=number_.cx(),cy=number_.cy(),r=std::min(30.0f,(number_.y1-number_.y0)*.5f+13);
+  sorcMark(1);
   // The digits darken toward the background (never below 3:1, see
   // shadeAnchor), then relight at the flash.
   const float dim=t<DIAMOND?.84f*smooth((t-.05f)/(COVER-.05f)):.84f*(1-smooth((t-DIAMOND)/.25f));
   shadeAnchor(inkOf(rgb(load(bg_))),q8(dim),false);
+  sorcMark(2);
   // The crescent: the sun's rim, thinning toward the upper right as the moon covers it.
   constexpr float SUN=-.8f;  // the last light, up and to the right
   if(t<COVER+.06f) {
@@ -379,6 +381,7 @@ inline void Renderer::eclipse(float t) {
       plot(cx+r*ca,cy+r*sa,WHITE,k);plot(cx+(r+1)*ca,cy+(r+1)*sa,pearl,k*.8f);plot(cx+(r+2)*ca,cy+(r+2)*sa,pearl,k*.35f);
     }
   }
+  sorcMark(3);
   // Totality and after: corona streamers and void tendrils. The corona
   // breathes, its streamers each swelling on their own slow beat.
   const float total=smooth((t-COVER+.1f)/.25f)*(1-smooth((t-WANE)/(END-WANE-.45f)));
@@ -407,6 +410,7 @@ inline void Renderer::eclipse(float t) {
       if(len>2)dot(px,py,violet,.8f*total);
     }
   }
+  sorcMark(4);
   // The diamond ring: the first light back, a point flare with rays.
   const float f=t-DIAMOND;
   if(f>=0 && f<.6f) {
@@ -419,6 +423,7 @@ inline void Renderer::eclipse(float t) {
     }
   }
   glint(t,DIAMOND,.45f);
+  sorcMark(5);
   // Wisps of the dark drift away as it lifts, one after another.
   for(unsigned i=0;i<26;++i) {
     const float a=t-(DIAMOND+.1f+(i<12?.45f*rnd(i,145):.45f+2.4f*(i-12)/14+.15f*rnd(i,148))),life=i<12?.6f:.95f;
@@ -427,6 +432,7 @@ inline void Renderer::eclipse(float t) {
     const float k=(1-a/life)*std::min(1.0f,a*8);
     if(i<12)dot(cx+d*cosine(ang),cy+d*sine(ang)*.8f,violet,.8f*k);else twinkle(cx+d*cosine(ang),cy+d*sine(ang)*.8f,violet,k,1);
   }
+  sorcMark(6);
 }
 
 // ---- Radiance: motes of light spiral in and gather, the readout flares

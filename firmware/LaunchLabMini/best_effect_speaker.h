@@ -6,6 +6,8 @@
 #include "motion_acquisition.h"
 #include "pm1_idle.h"
 #include "sound_sync.h"
+#include "music_stream.h"
+#include "freertos/semphr.h"
 
 // Plays personal-best sounds on the StickS3 speaker (ES8311 codec and amp).
 // They are powered only while a sound plays: M5.Speaker.begin() before and
@@ -20,7 +22,25 @@
 // another frees the least recently used one, never the one playing. A
 // loaded effect with a sound of its own (LoadableFx::Sound) has its slot's
 // buffer, kept while its file stays the same; any other plays its stock
-// fallback's.
+// fallback's. A loaded effect whose sound is a song (engine level 2) is
+// streamed instead (music_stream.h): rendered by the music task on core 0
+// as it plays, on its own channel, and it plays on past its effect's
+// frames; a pull's start fades it out within 20 ms.
+
+// The music task's lock (a FreeRTOS mutex) and the speaker's music channel.
+struct RtosLock {
+  SemaphoreHandle_t mutex=xSemaphoreCreateMutex();
+  struct Hold {RtosLock &l;explicit Hold(RtosLock &x):l(x){xSemaphoreTake(l.mutex,portMAX_DELAY);}~Hold(){xSemaphoreGive(l.mutex);}};
+};
+using Music=MusicStream<RtosLock>;
+struct MusicChannel:MusicOutput {
+  static constexpr uint8_t CHANNEL=1;  // effect sounds play on 0
+  unsigned queued() override{return unsigned(M5.Speaker.isPlaying(CHANNEL));}
+  bool queue(const int16_t *p,size_t n) override{return M5.Speaker.playRaw(p,n,LoadableFx::SOUND_RATE,false,1,CHANNEL,false);}
+  void volume(uint8_t v) override{M5.Speaker.setChannelVolume(CHANNEL,v);}
+  void stop() override{M5.Speaker.stop(CHANNEL);}
+};
+
 class BestEffectSpeaker {
 public:
   // A loaded effect's own sound (loaded_effects.h, through the sketch):
@@ -31,6 +51,9 @@ public:
     virtual bool sound(unsigned effect,uint32_t &key,size_t &samples)=0;  // false: it sounds as its stock fallback
     virtual bool begin(unsigned effect)=0;
     virtual size_t run(int16_t *out,size_t count)=0;
+    // A song, streamed: whether the effect's sound is one, and its file.
+    virtual bool song(unsigned effect)=0;
+    virtual bool readSong(unsigned effect,const uint8_t *&file,size_t &bytes)=0;
   };
   explicit BestEffectSpeaker(StickS3MotionAcquisition &imu):imu_(imu){}
   // Call once after M5.begin() with the internal speaker configured.
@@ -47,6 +70,9 @@ public:
   // Loaded effects' own sounds, once the store is open; without it every
   // loaded effect sounds as its stock fallback.
   void attach(LoadedSounds *loaded){loaded_=loaded;}
+  // The music streamer and its task (on core 0), once allocated; without
+  // them a song effect sounds as its stock fallback.
+  void attachMusic(Music *music,TaskHandle_t task){music_=music;musicTask_=task;}
   // Renders up to `slice` more samples of the effect's sound into its own
   // buffer, restarting if another sound was in progress. A whole sound
   // takes far longer than a UI frame at 80 MHz, so the sketch renders a
@@ -55,6 +81,7 @@ public:
   // stock fallback's.
   bool prepare(Appearance::Effect e,size_t slice=SIZE_MAX) {
     const Source s=source(e);
+    if(s.stream)return configured_;  // streamed as it plays: nothing to render ahead
     if(!configured_ || s.index==SOUNDS)return false;
     if(ready(s))return true;
     const unsigned i=s.index;
@@ -99,6 +126,14 @@ public:
   bool play(Appearance::Effect e,Appearance::Sound level,size_t skip=0) {
     const Source s=source(e);
     // Rendering is the sketch's job, a slice per idle pass; play only what is ready.
+    if(s.stream) {
+      const uint8_t *file=nullptr;size_t bytes=0;
+      if(level==Appearance::Sound::Off || !loaded_->readSong(unsigned(e),file,bytes) || !power())return false;
+      M5.Speaker.setVolume(level==Appearance::Sound::High?HIGH_VOLUME:LOW_VOLUME);
+      outputUs_=SoundSync::outputUs(M5.Speaker.isPlaying());
+      if(!music_->start(file,bytes,uint32_t(skip),255,channel_))return false;
+      xTaskNotifyGive(musicTask_);playingIndex_=SOUNDS;++plays_;return true;
+    }
     if(level==Appearance::Sound::Off || !ready(s) || skip>=s.samples || !power())return false;
     M5.Speaker.setVolume(level==Appearance::Sound::High?HIGH_VOLUME:LOW_VOLUME);
     const unsigned i=s.index;
@@ -111,17 +146,27 @@ public:
   uint32_t outputUs()const{return outputUs_;}
   uint32_t nextOutputUs(){return SoundSync::outputUs(begun_ && M5.Speaker.isPlaying());}
   // Silence now: no bus traffic, safe during a measured pull.
-  void stop(){if(begun_ && M5.Speaker.isPlaying()){M5.Speaker.stop();++stops_;}}
-  // Powers the codec down once silent, but never while a pull is measured.
+  void stop(){if(music_)music_->stop(channel_);if(begun_ && M5.Speaker.isPlaying()){M5.Speaker.stop();++stops_;}}
+  // A pull begins: effect sounds stop at once, a song fades out within 20
+  // ms (no bus traffic either way).
+  void fadeOut() {
+    if(music_ && music_->active())music_->fade(uint32_t(esp_timer_get_time()/1000));
+    if(begun_ && M5.Speaker.isPlaying(0)){M5.Speaker.stop(0);++stops_;}
+  }
+  // A song is playing (it outlives its effect's frames).
+  bool streaming()const{return music_ && music_->active();}
+  // Each loop pass: the song's next blocks to the speaker; the codec powers
+  // down once silent, but never while a pull is measured.
   void tick(bool measuring) {
-    if(!begun_ || measuring || M5.Speaker.isPlaying() || !imu_.lock())return;
+    if(music_)music_->feed(uint32_t(esp_timer_get_time()/1000),channel_);
+    if(!begun_ || measuring || M5.Speaker.isPlaying() || streaming() || !imu_.lock())return;
     const int64_t started=esp_timer_get_time();
     if(!pm1Idle().ensureAwake()){imu_.unlock();return;}
     M5.Speaker.end();endUs_=std::max(endUs_,uint32_t(esp_timer_get_time()-started));
     imu_.unlock();begun_=false;
   }
   bool powered()const{return begun_;}
-  bool playing()const{return begun_ && M5.Speaker.isPlaying();}
+  bool playing()const{return begun_ && (M5.Speaker.isPlaying() || streaming());}
   void status(Appearance::Sound level) {
     unsigned buffers=0;for(const auto *b:buffers_)buffers+=b!=nullptr;
     static char rendered[512],loaded[160];std::strcpy(rendered,"none");std::strcpy(loaded,"none");size_t used=0,usedLoaded=0;
@@ -132,6 +177,8 @@ public:
     Serial.printf("SOUND_STATUS level=%s configured=%d buffers=%u evictions=%lu rendered=%s powered=%d playing=%d plays=%lu stops=%lu lock_misses=%lu render_us=%lu max_slice_us=%lu max_begin_us=%lu max_end_us=%lu loaded_rendered=%s\n",
       Appearance::label(level),configured_,buffers,(unsigned long)evictions_,rendered,begun_,playing(),
       (unsigned long)plays_,(unsigned long)stops_,(unsigned long)lockMisses_,(unsigned long)renderUs_,(unsigned long)maxSliceUs_,(unsigned long)beginUs_,(unsigned long)endUs_,loaded);
+    Serial.printf("MUSIC_STATUS ready=%d streaming=%d fading=%d plays=%lu underruns=%lu played_blocks=%lu\n",music_!=nullptr,streaming(),
+      music_ && music_->fading(),(unsigned long)(music_?music_->plays():0),(unsigned long)(music_?music_->underruns():0),(unsigned long)(music_?music_->played():0));
   }
   static constexpr unsigned MAX_BUFFERS=12;
   // A buffer per built-in effect, then one per loaded slot.
@@ -140,9 +187,10 @@ private:
   static constexpr uint8_t LOW_VOLUME=72,HIGH_VOLUME=160;
   // What an effect sounds like: a loaded effect's own sound (its slot's
   // buffer, keyed by its file), else the built-in it stands for.
-  struct Source {unsigned index=SOUNDS;Appearance::Effect effect=Appearance::Effect::Off;bool loaded=false;uint32_t key=0;size_t samples=0;};
+  struct Source {unsigned index=SOUNDS;Appearance::Effect effect=Appearance::Effect::Off;bool loaded=false,stream=false;uint32_t key=0;size_t samples=0;};
   Source source(Appearance::Effect e)const {
     Source s;
+    if(Appearance::loaded(unsigned(e)) && loaded_ && music_ && loaded_->song(unsigned(e))){s.effect=e;s.stream=true;return s;}
     if(Appearance::loaded(unsigned(e)) && loaded_ && loaded_->sound(unsigned(e),s.key,s.samples) && s.samples) {
       s.index=Appearance::DRAWN+(unsigned(e)-Appearance::FIRST_LOADED);s.effect=e;s.loaded=true;return s;
     }
@@ -150,7 +198,7 @@ private:
     if(Appearance::drawn(unsigned(e))){s.index=Appearance::drawnIndex(e);s.effect=e;s.samples=BestEffectSound::samples(e);}
     return s;
   }
-  bool ready(const Source &s)const{return s.index<SOUNDS && rendered_[s.index] && size(s.index)==s.samples && (!s.loaded || loadedKey_[s.index-Appearance::DRAWN]==s.key);}
+  bool ready(const Source &s)const{if(s.stream)return configured_;return s.index<SOUNDS && rendered_[s.index] && size(s.index)==s.samples && (!s.loaded || loadedKey_[s.index-Appearance::DRAWN]==s.key);}
   // A buffer's length: a built-in's is fixed, a loaded slot's is its file's.
   size_t size(unsigned i)const{return i<Appearance::DRAWN?BestEffectSound::samples(Appearance::drawnEffect(i)):loadedSize_[i-Appearance::DRAWN];}
   // Frees least recently used buffers until one more fits, keeping `keep`
@@ -171,6 +219,7 @@ private:
   }
   StickS3MotionAcquisition &imu_;
   LoadedSounds *loaded_=nullptr;
+  Music *music_=nullptr;TaskHandle_t musicTask_=nullptr;MusicChannel channel_;
   // More sounds than a 64-bit mask holds since 0.18: one flag each.
   int16_t *buffers_[SOUNDS]={};bool rendered_[SOUNDS]={};uint32_t used_[SOUNDS]={},clock_=0,evictions_=0;unsigned playingIndex_=SOUNDS;
   // A loaded slot's rendered sound: its file's key and its length.

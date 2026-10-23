@@ -21,6 +21,8 @@ constexpr size_t MAX_PACKED=32768,MAX_SOURCE=65536;
 // Version 1's words, one byte each when packed: 0x80+i for the first 127,
 // 0xFF then 0x80+(i-127) after. Frozen: a later version only appends, so
 // every version-1 code unpacks the same forever (test_fx_share pins them).
+// 0.20 appended music's words after "at"; an older website meeting one says
+// the code is from a newer version, and only codes using them carry them.
 inline const std::vector<std::string> &words() {
   static const std::vector<std::string> list={
     // the language
@@ -42,7 +44,10 @@ inline const std::vector<std::string> &words() {
     "PI","age","side","seed","len","fade","level","angle","span","grow","cycle","END",
     // sound: voices, notes and their parameters (appended before 0.19 shipped)
     "voice","note","notes","tone","filter","wave","sine","square","triangle","saw","none",
-    "gain","hz","bend","octave","cubic","trigger","attack","decay","length","at"};
+    "gain","hz","bend","octave","cubic","trigger","attack","decay","length","at",
+    // music (engine level 2, 0.20): voice kinds, their parameters, songs and the drums
+    "pulse","fm","drum","duty","ratio","index","rate","step","points","song","pattern","order","tempo","rows",
+    "kick","snare","hat","openhat","clap","tomlow","tomhigh"};  // the drum "rim" is version 1's word
   return list;
 }
 

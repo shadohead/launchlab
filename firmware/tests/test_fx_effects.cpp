@@ -77,8 +77,8 @@ int main() {
         assert(got==again);
         if(us>worstUs){worstUs=us;worstMs=ms;}
         // Pixel work: the cost model's pixel, probe and mask-scan terms, without loop steps and roots.
-        worstPixelUs=std::max(worstPixelUs,s.renderUs-.36*s.touches-2.3*s.roots);
-        worstNativeUs=std::max(worstNativeUs,native.modelledUs()-.36*native.touches()-2.3*native.roots());
+        worstPixelUs=std::max(worstPixelUs,FxValidate::pixelUs(s.plots,s.probes,s.scans,s.fills,s.spans));
+        worstNativeUs=std::max(worstNativeUs,FxValidate::pixelUs(native.plots(),native.probes(),native.scans(),native.fills(),native.spans()));
         worstOps=std::max(worstOps,s.ops);
         assert(s.ops<=p.maxOps && s.draws<=p.maxDraws && !s.stopped);
         unsigned d=0,c=0;

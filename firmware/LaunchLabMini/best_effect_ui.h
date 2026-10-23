@@ -7,6 +7,19 @@
 #include "appearance.h"
 #include "palette.h"
 
+// The device compiles the renderer and every effect at -O2 without fused
+// multiply-adds (the rest of the sketch stays -Os). Without contraction the
+// device draws exactly the host's frames, which the tests, the cost model and
+// the web previews use: at -Os with GCC's default contraction 15 of 81
+// effects differed (HIL effect_bench_fixed, 2026-10-23). -O2 inlines the
+// small helpers (round, sine, rnd, colour mixes) that -Os called out of line,
+// a median 16% off each effect's slowest frame for about 238 KB of flash.
+#if defined(ESP_PLATFORM) && defined(__GNUC__) && !defined(__clang__)
+#define BEST_EFFECT_OPTIMIZE 1
+#pragma GCC push_options
+#pragma GCC optimize("O2","fp-contract=off")
+#endif
+
 // Personal-best celebrations, drawn into the recap's 16-bit canvas after the
 // UI and before it is pushed. Decoration lands only on background pixels (the
 // theme's background color; black for the built-ins) at
@@ -22,20 +35,21 @@
 // delay, random input or second framebuffer. The ink mask is the only state.
 // Budget: at most about 10 ms per frame at 80 MHz (measured on the device
 // with the USB E<id> preview), keeping a celebrating frame near 40 ms of the
-// 50 ms cadence. Cost model (modelledUs()), fitted to every frame of every
-// effect on the device (HIL !effectframes, 2026-10-20): about 1.1 ms, plus
-// 1.8 us per pixel written, 1 us per light probe (an addw past its weight
-// test) and 13 us per mask word scanned; per-pixel float math and table
-// trigonometry cost several times a fixed-point step. Full-screen work,
-// fitted to Boundless's first full-screen cut on the device (2026-10-21,
-// 40 ms where the three terms said 7.6): 0.36 us per step of a loop outside
-// addw, a pixel visited one at a time or an edge stepped (touches(): 0.29 to
-// visit, 0.07 to write), 2.3 us per float square root (roots(), counted by
-// root()), and per span fill 1.21 us plus 0.082 us a pixel stored, two per
-// 32-bit store (spans(), fills(); fitted to its later cuts, where a 4 KB
-// look-up table in flash also cost 5.6 us a read). Every pixel loop, edge
-// step, span and root an effect runs must be counted in one of them; check_ui_render holds the model to the recorded
-// device frames. So the mask is built per 32-pixel word on first
+// 50 ms cadence (the 0.19 budget is 9 ms with Sound Low). Cost model
+// (modelledUs()): the 90th percentile of every frame of every effect on the
+// device, the renderer at -O2 (see below), Sound Low, two rounds (HIL
+// effect_times_low, 2026-10-23; a quantile fit, so a counted step's cost
+// may vary from loop to loop and the model still sits above nearly every
+// frame): 1.12 ms, plus 0.63 us per pixel written, 2.0 us per light probe
+// (an addw past its weight test), 10.6 us per mask word scanned, 0.89 us
+// per step of a loop outside addw (a pixel visited one at a time or an edge
+// stepped: touches()), 0.65 us per float square root (roots(), counted by
+// root(); measured by HIL !effectbench), and per span fill 1.09 us plus
+// 0.042 us a pixel stored, two per 32-bit store (spans(), fills()). The
+// speaker's task adds 0.16 ms while a sound plays. A 4 KB look-up table in
+// flash cost 5.6 us a read (2026-10-21). Every pixel loop, edge step, span
+// and root an effect runs must be counted in one of them; check_ui_render
+// holds the model to the recorded device frames. So the mask is built per 32-pixel word on first
 // use, effects that reach across the screen pay for every word they touch,
 // pixel loops are fixed point, trigonometry comes from a table, time-only
 // terms are computed once per frame and geometry stays in float, once per
@@ -172,6 +186,30 @@ public:
     measure(BENCH_TOUCH,[&](uint32_t){++touches_;sinkI=sinkI+(px_[oy*w_+x]!=bg_);if(++x==w_)x=0;});
     return true;
   }
+  // A fixed screen, so two builds' frames can be compared (HIL `!effectbench
+  // fixed`, `ui_render --bench-hashes`): the effect tests' recap-like ink
+  // (label, readout, replay lines, a card, a footer) on black, at 135 x 240.
+  static bool benchCanvas(const Surface &s) {
+    if(s.width!=135 || s.height!=240)return false;
+    std::fill(s.pixels,s.pixels+s.width*s.height,uint16_t(0));
+    auto ui=[&](int x,int y,uint16_t c){s.pixels[y*s.width+x]=store(c);};
+    for(int y=2;y<10;++y)for(int x=44;x<91;++x)if((x+y)%3)ui(x,y,0x07ff);
+    for(int y=17;y<44;++y)for(int x=10;x<125;++x)if((x+y)%5)ui(x,y,0x07ff);
+    for(int i=0;i<90;++i){ui(20+i,60+i/3,0x18c3);ui(110-i,60+i/3,0x18c3);}
+    for(int y=110;y<150;++y)for(int x=50;x<85;++x)ui(x,y,0x1947);
+    for(int y=164;y<172;++y)for(int x=40;x<95;++x)if((x*y)%4)ui(x,y,0x7bef);
+    for(int x=26;x<109;++x)ui(x,178,0x39e7);
+    return true;
+  }
+  // The accent and background benchCanvas() is drawn with.
+  static constexpr uint16_t BENCH_ACCENT=0x07ff,BENCH_BACKGROUND=0;
+  // FNV-1a over the frame a 32-bit word at a time (a byte-wise 64-bit hash
+  // costs about 16 ms a frame on the device), continuing from `hash`.
+  static uint32_t benchHash(const Surface &s,uint32_t hash=2166136261u) {
+    const uint32_t *p=reinterpret_cast<const uint32_t *>(s.pixels);
+    for(size_t i=0,n=size_t(s.width)*s.height/2;i<n;++i)hash=(hash^p[i])*16777619u;
+    return hash;
+  }
   // Pixels written by the last draw; a portable cost measure for previews.
   uint32_t plots()const{return plots_;}
   // The last draw's other work, for the host cost model: light probes
@@ -189,11 +227,11 @@ public:
   uint32_t roots()const{return roots_;}
   // The last draw's modelled device time in us (see the cost model above),
   // plus the speaker's task on the drawing core while a sound plays
-  // (`sounding`: Sound Low against Off, the same frames, 2026-10-22).
+  // (`sounding`; fitted with the rest, Sound Low, 2026-10-23).
   double modelledUs(bool sounding=false)const{
-    return 1100+1.8*plots_+probes_+13.0*scans_+.082*fills_+1.21*spans_+.36*touches_+2.3*roots_+(sounding?SOUND_US:0);
+    return 1120+.63*plots_+2.0*probes_+10.6*scans_+.042*fills_+1.09*spans_+.89*touches_+.65*roots_+(sounding?SOUND_US:0);
   }
-  static constexpr double SOUND_US=400;
+  static constexpr double SOUND_US=160;
   // Until when (ms) an effect may hide the UI below its anchor's halo: it
   // then owns those rows outright and gives them back exactly at that time,
   // well before 3/4 of its duration; 0 for every effect that never does.
@@ -245,7 +283,7 @@ private:
   static float clamp01(float v){return v<0?0:v>1?1:v;}
   // sqrt(v), 0 for v <= 0, by multiplies only (sqrtf is a library call on
   // the device): the bit-level inverse-root estimate and two Newton steps.
-  // Still about 2.3 us on the device, so it is counted (roots()).
+  // About 0.65 us on the device (HIL !effectbench), counted (roots()).
   float root(float v) {
     if(v<=0)return 0;
     ++roots_;
@@ -482,7 +520,7 @@ private:
     const float grow=easeOut(t/.32f);
     const float level=t<1.3f?1.0f:t<3.9f?1-.35f*smooth((t-1.3f)/1.2f):.65f*(1-smooth((t-3.9f)/1.05f));
     const float height=grow*level;
-    glint(t,.3f,.5f);
+    glint(t,.3f,.5f);sorcMark(1);
     const int base=std::min(bottom_-2,number_.y1+16);
     // Two noise octaves scroll upward; time offsets in Q8 noise units. The
     // sustain scrolls a little slower, like a fire burning lower.
@@ -514,6 +552,7 @@ private:
         else{addw(x,y,c,k);addw(x+1,y+1,c,k);}
       }
     }
+    sorcMark(2);
     // Embers rise for as long as the fire lives: each slot recycles with a
     // new column per cycle, thinning as the fire dies in the settle.
     const float emberK=grow*(t<4.35f?1:1-smooth((t-4.35f)/.65f));
@@ -526,6 +565,7 @@ private:
       const Rgb c=mixed(rgb8(255,214,120),rgb8(220,60,0),u);
       plot(x,y,c,(1-u)*emberK);plot(x,y+2,c,(1-u)*emberK*.45f);
     }
+    sorcMark(3);
   }
   // Heat 0..255 to a black-red-orange-yellow-white ramp. constexpr: a
   // function-local static with a runtime initializer takes a mutex per call.
@@ -1264,3 +1304,7 @@ private:
 #include "best_effect_ripsaw.h"
 #include "best_effect_corsair.h"
 #include "best_effect_reaper.h"
+#ifdef BEST_EFFECT_OPTIMIZE
+#pragma GCC pop_options
+#undef BEST_EFFECT_OPTIMIZE
+#endif

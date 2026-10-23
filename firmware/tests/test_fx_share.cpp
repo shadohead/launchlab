@@ -136,7 +136,12 @@ int main() {
   // Version 1's words are frozen: these are the first, the last and the count.
   {
     const auto &w=FxShare::words();
-    assert(w.size()==208 && w.size()<=254 && w.front()=="effect" && w[45]=="clip" && w[186]=="END" && w.back()=="at");
+    assert(w.size()==229 && w.size()<=254 && w.front()=="effect" && w[45]=="clip" && w[186]=="END" && w[207]=="at");
+    // 0.20's music words, appended after "at" in this order.
+    const char *music[]={"pulse","fm","drum","duty","ratio","index","rate","step","points","song","pattern","order","tempo","rows",
+                         "kick","snare","hat","openhat","clap","tomlow","tomhigh"};
+    for(size_t i=0;i<sizeof(music)/sizeof(*music);++i)assert(w[208+i]==music[i]);
+    assert(w.back()=="tomhigh");
     for(size_t i=0;i<w.size();++i)for(size_t j=i+1;j<w.size();++j)assert(w[i]!=w[j]);
     // Every primitive the compiler knows has a word: a new one is appended in a new version.
     for(const char *p:{"clip","plot","emit","stroke","trail","stamp","aura","disc","runes","puff","cloud","arc","heatring","vessel","rays",
@@ -145,6 +150,19 @@ int main() {
     // A word past the 127th is two bytes.
     const auto two=FxShare::pack("effect \"A\"\nduration 2000\nframe {\n  END = 1\n}\n");
     assert(two.ok && two.bytes.find(char(0xFF))!=std::string::npos);
+  }
+
+  // Songs share like any effect: the code unpacks to source that compiles to the identical file.
+  {
+    for(const char *name:{"victory_lap","night_spin","ripcord"}) {
+      std::ifstream in(std::string("firmware/tools/fx/effects/music/")+name+".fx");std::stringstream text;text<<in.rdbuf();
+      const auto compiled=FxCompiler::compile(text.str());assert(compiled.ok);
+      const auto made=FxCodes::make(text.str());assert(made.ok);const std::string &code=made.code;
+      const auto back=FxCodes::open(code);assert(back.ok);
+      const auto again=FxCompiler::compile(back.source);assert(again.ok && again.bytes==compiled.bytes);
+      std::printf("music %s: code %zu characters\n",name,code.size());
+      assert(code.size()<2600);
+    }
   }
 
   // base64url round-trips every length, and refuses what is not base64url.

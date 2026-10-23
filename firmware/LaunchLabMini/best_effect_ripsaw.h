@@ -597,6 +597,7 @@ inline void Renderer::ripsawDetonate(float t) {
   const float cx=b.cx(),ly=b.y1+9.0f;
   const Ink steel=inkOf(rgb8(196,206,222)),warn=inkOf(rgb8(255,48,30));
   glint(t,BIG,.42f);
+  sorcMark(1);
   // The loop the pin sits in, blinking red after the pull, faster and faster.
   const float loopK=smooth(t/.12f)*(1-smooth((t-FIRST)/.08f));
   if(loopK>0) {
@@ -605,6 +606,7 @@ inline void Renderer::ripsawDetonate(float t) {
     ripsawOval(cx,ly,2.5f,2.5f,blink>0?warn:steel,q8(loopK),0,0,3);
     if(blink>0)spark(cx,ly,rgb8(255,90,60),.9f,3);
   }
+  sorcMark(2);
   // The pin and its ring: at rest, tugged, then popped out and flung away spinning.
   if(t<FIRST) {
     float px=cx+3,py=ly,ang=0;
@@ -616,12 +618,15 @@ inline void Renderer::ripsawDetonate(float t) {
     ripsawOval(px+11*ca,py+11*sa,4,4,steel,q8(k),0,0,3);
     if(t>=POP && t<POP+.08f)spark(cx+3,ly,rgb8(255,250,225),1.2f*(1-(t-POP)/.08f),3);
   }
+  sorcMark(3);
   // The chain: blasts round the readout, left and right in turn, then the big one.
   struct Blast{float dx,dy,size,at;};
   static constexpr Blast CHAIN[]={{0,14,12,FIRST},{-40,30,14,.82f},{40,34,14,1.02f},{0,24,16,BIG}};
   for(unsigned i=0;i<4;++i){const Blast &q=CHAIN[i];ripsawBlast(cx+q.dx,b.y1+q.dy,q.size,t-q.at,i+1,i==3?2.4f:1.35f);}
+  sorcMark(4);
   // Late pops flaring inside the smoke.
   static constexpr Blast POPS[]={{-30,26,6,2.2f},{32,38,6,2.8f}};
+  sorcMark(5);
   // Embers drift up out of the smoke through the sustain, flickering as they cool.
   const float emberK=smooth((t-1.5f)/.3f)*(1-smooth((t-3.6f)/.8f));
   if(emberK>0)for(unsigned i=0;i<14;++i) {
@@ -632,6 +637,7 @@ inline void Renderer::ripsawDetonate(float t) {
   }
   for(unsigned i=0;i<2;++i){const Blast &q=POPS[i];const float a=t-q.at;if(a>=0 && a<.6f)ripsawBlast(cx+q.dx,b.y1+q.dy,q.size,a,20+i,0);}
   (void)END;
+  sorcMark(6);
 }
 
 // ---- Sharkfin: a fin breaks the floor under the readout as if it were

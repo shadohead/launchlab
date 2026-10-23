@@ -68,14 +68,32 @@ struct Speaker {
   bool begin(){assert(imu.owned && !asleep && !dead);++begins;return true;}
   void end(){assert(imu.owned && !asleep && !dead);++ends;}
   bool isPlaying(){return active;}
+  bool isPlaying(uint8_t){return active;}
   void setVolume(unsigned){}
+  void setChannelVolume(uint8_t,uint8_t){}
   bool playRaw(const int16_t *,size_t,unsigned,bool,unsigned,unsigned,bool){active=true;return true;}
   void stop(){active=false;}
+  void stop(uint8_t){stop();}
 };
 struct PM1 {unsigned offs=0;bool offOK=true;
   bool powerOff(){assert(!asleep && !dead);++offs;return offOK;}
 };
 static struct {struct Speaker Speaker;struct {PM1 M5pm1;} Power;} M5;
+// The music streamer's stand-ins (best_effect_speaker.h defines them for
+// the device above the class this harness takes): a host lock, no task.
+#include "music_stream.h"
+#include <mutex>
+struct HostLock {std::mutex m;struct Hold {std::mutex &m;explicit Hold(HostLock &l):m(l.m){m.lock();}~Hold(){m.unlock();}};};
+using Music=MusicStream<HostLock>;
+using TaskHandle_t=void *;
+static void xTaskNotifyGive(TaskHandle_t){}
+struct MusicChannel:MusicOutput {
+  unsigned queued() override{return 0;}
+  bool queue(const int16_t *,size_t) override{return true;}
+  void volume(uint8_t) override{}
+  void stop() override{}
+};
+
 static struct {template<class... T>void printf(const char*,T...){};} Serial;
 static constexpr unsigned ESP_SLEEP_WAKEUP_ALL=0,GPIO_NUM_13=13,ESP_OK=0;
 static unsigned sleeps=0,delayCalls=0;

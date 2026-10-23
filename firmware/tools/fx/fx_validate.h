@@ -53,6 +53,14 @@ inline Scene fixture(uint16_t background=0) {
 // in proportion to how rarely it was seen: off by 0.5 ms rms a frame, 1 ms
 // at the 95th percentile (design note, "Device frame times"). A primitive
 // no file used then costs 10 us a call.
+// The renderer's pixel terms (pixels written, light probes, mask words
+// scanned, span fills) as Renderer::modelledUs() weighed them when the costs
+// below were fitted (run 5: the renderer at -Os, 2026-10-21). Kept until the
+// files are re-measured with the renderer at -O2, which only makes them
+// cheaper on the device, so the budget check stays on the safe side.
+inline double pixelUs(uint32_t plots,uint32_t probes,uint32_t scans,uint32_t fills,uint32_t spans) {
+  return 1100+1.8*plots+probes+13.0*scans+.082*fills+1.21*spans;
+}
 struct Cost {
   double opUs=.46;
   // In LoadableFx::Prim order: clip plot dot vdot spark twinkle star line fline segment ellipse glow bolt rimbolt fire prime
@@ -61,7 +69,7 @@ struct Cost {
   double stepUs[LoadableFx::PRIMS]={0,0,0,0,0,0,0,0,0,0,2.09,2.09,0,0,1.61,0,0,0,0,0,0,18.35,3.24,0.42,1.58,0.84,0.44,1.91,0,0,0.98,0,3.78,1.04,0};
   double us(const LoadableFx::Engine &engine)const{
     const LoadableFx::Engine::Stats &s=engine.stats();
-    double us=s.renderUs-.36*s.touches-2.3*s.roots+opUs*s.ops;  // the renderer's terms for pixels, probes and scans only
+    double us=pixelUs(s.plots,s.probes,s.scans,s.fills,s.spans)+opUs*s.ops;
     for(unsigned k=0;k<LoadableFx::PRIMS;++k)us+=callUs[k]*engine.primCalls[k]+stepUs[k]*engine.primTouches[k];
     return us;
   }

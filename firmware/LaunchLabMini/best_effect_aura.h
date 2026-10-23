@@ -690,12 +690,14 @@ inline void Renderer::auraWaterleaf(float t) {
   const Box &b=number_;const float cx=b.cx(),y1=float(b.y1);
   const Rgb rim=rgb8(214,240,255),water=rgb8(96,196,255),deep=rgb8(54,140,245),foam=rgb8(225,248,255);
   const Rgb leafLight=rgb8(150,230,90),leafDark=rgb8(40,150,60),aura=mixed(rgb8(255,236,170),accent_,.4f);
+  sorcMark(1);
   // The glass: 34 px tall, 32 wide at the brim and 26 at the base.
   const float gt=y1+12,gb=y1+45,topW=16,botW=13;
   const float slope=(botW-topW)*(1/(gb-gt));
   auto wallX=[&](float y,int side){return cx+side*(topW+slope*(y-gt));};
   const float glassK=smooth(t/GLASS)*(1-smooth((t-FADE-.3f)*(1/(END-FADE-.3f))));
   const float handK=smooth((t-HANDS)*(1/.3f))*(1-smooth((t-FADE)*(1/.6f)));
+  sorcMark(2);
   // The water: brim full, swelling over the brim before the surge, heaving
   // into a dome at it and settling to a low dome that keeps welling over.
   const float u=t-SURGE;
@@ -744,6 +746,7 @@ inline void Renderer::auraWaterleaf(float t) {
       if(dome>1.2f)for(int y=roundi(top)+1;y<roundi(ys);++y)addw(x,y,inkOf(water),(kq*2)/5);
     }
   }
+  sorcMark(3);
   // The rings round the leaf as the aura stirs the water.
   float lx=cx+3*sine(t*1.3f),ly=ys-dome+.5f;
   if(glassK>.01f && t>.55f && t<FADE+.4f) {
@@ -753,6 +756,7 @@ inline void Renderer::auraWaterleaf(float t) {
       for(int i=0;i<=24;++i){const float a=i*(2*HALF_TURN/24),x=lx+rr*cosine(a);if(std::fabs(x-cx)>topW-1.5f)continue;addw(roundi(x),roundi(ly+rr*.22f*sine(a)),inkOf(foam),q8(k*.7f));}
     }
   }
+  sorcMark(4);
   // The leaf: a small green spindle on the surface, turning; it spins fast
   // as the water surges and then keeps turning slowly.
   if(glassK>.01f) {
@@ -769,6 +773,7 @@ inline void Renderer::auraWaterleaf(float t) {
     }
     addw(roundi(fx-ca*8),roundi(fy-sa*8),inkOf(leafDark),q8(glassK));addw(roundi(fx-ca*9),roundi(fy-sa*9-.5f),inkOf(leafDark),q8(glassK*.7f));
   }
+  sorcMark(5);
   // The hands of aura either side, thumbs toward the glass, breathing; the
   // light streams from them into the water.
   if(handK>.01f) {
@@ -788,6 +793,7 @@ inline void Renderer::auraWaterleaf(float t) {
       }
     }
   }
+  sorcMark(6);
   // The hands burn: aura licks up round each in short tongues, taller as it
   // builds and flaring white at the surge.
   if(handK>.01f) {
@@ -807,6 +813,7 @@ inline void Renderer::auraWaterleaf(float t) {
   if(u<0)return;
   glint(t,SURGE+.22f,.42f);
   const float endK=1-smooth((t-FADE)*(1/(END-FADE-.2f)));
+  sorcMark(7);
   // The crack: a zigzag across the front of the glass, white at the surge,
   // fading to a faint line that glints now and then.
   {
@@ -815,6 +822,7 @@ inline void Renderer::auraWaterleaf(float t) {
     for(int i=0;i+1<6;++i)sorcLine(cx+CRACK[i][0],gt+CRACK[i][1],cx+CRACK[i+1][0],gt+CRACK[i+1][1],u<.15f?WHITE_INK:inkOf(foam),q8(k),q8(k));
     sorcLine(cx-4,gt+8,cx-11,gt+11,inkOf(foam),q8(k*.7f),0);sorcLine(cx-1,gt+17,cx+5,gt+15,inkOf(foam),q8(k*.6f),0);
   }
+  sorcMark(8);
   // The surge: water sprays out of the dome to both sides, arcing down
   // the screen, sparkling.
   for(unsigned i=0;i<24;++i) {
@@ -825,6 +833,7 @@ inline void Renderer::auraWaterleaf(float t) {
     if(i%3==0)twinkle(x,y,foam,k,1);else dot(x,y,i%2?mixed(water,foam,.4f):foam,k*1.2f);
     if(i&1)sorcLine(x-vx*.025f,y-vy*.025f,x,y,inkOf(water),0,q8(k*.6f));
   }
+  sorcMark(9);
   // Sustain: water wells over the brim and runs down both sides of the
   // glass, then drips off its base and falls away down the screen.
   const float slide=std::sqrt((gb-gt+1)*(1/60.0f));
@@ -842,10 +851,12 @@ inline void Renderer::auraWaterleaf(float t) {
       dot(x,y,i%3?water:foam,k*(1-smooth((fall-.15f)*(1/.12f))));plot(x,y-2.5f,water,k*.4f);
     }
   }
+  sorcMark(10);
   // Sparkles on the dome.
   for(unsigned i=0;i<6;++i) {
     const float a1=t*.8f+rnd(i,580),age=a1-floori(a1),x=cx+(rnd(i+uint32_t(t*.8f+rnd(i,580))*7,581)-.5f)*24;
     twinkle(x,ys-dome*.7f-.5f,foam,endK*sine(HALF_TURN*age)*.9f,1);
   }
+  sorcMark(11);
 }
 }

@@ -405,16 +405,19 @@ inline void Renderer::reaperMask(float t) {
   constexpr float SWEEP=.1f,FORMED=.62f,MARK=.85f,CRACK=3.05f,BREAK=3.55f,END=5.0f;
   constexpr int BAND=10;
   const Box &b=number_;const float cx=b.cx();
+  sorcMark(1);
   // A=25.5 keeps the shell inside two mask word columns on the centred
   // readout (x 40..93), so its rows scan two words instead of three.
   const float my=b.y1+34.0f,A=25.5f,B=27;
   const Rgb bone=rgb8(236,232,222),shade=rgb8(150,150,165),red=rgb8(255,30,40),crimson=rgb8(150,0,20),gold=rgb8(255,205,60);
   const Ink boneInk=inkOf(bone),shadeInk=inkOf(shade),redInk=inkOf(red),crimsonInk=inkOf(crimson),goldInk=inkOf(gold);
   const int frame=floori(t*20+.001f);
+  sorcMark(2);
   // The glint follows the awakening's flash and pulse rather than landing
   // on them, so the busiest frames do not coincide.
   glint(t,MARK+.42f,.45f);
   const int top=roundi(my-B),bottom=roundi(my+B);
+  sorcMark(3);
   // The hand's sweep: a bright line drawn down across the mask's place.
   const float sweep=top-4+(bottom-top+8)*smooth((t-SWEEP)/(FORMED-SWEEP-.08f));
   if(t>SWEEP-.05f && t<FORMED+.05f) {
@@ -424,6 +427,7 @@ inline void Renderer::reaperMask(float t) {
       reaperVdot(x,sweep,WHITE_INK,q8(k*e*1.2f));reaperVdot(x,sweep-2,shadeInk,q8(k*e*.5f));
     }
   }
+  sorcMark(4);
   // Each piece is a band of rows on one side of the mask, its seams zigzag;
   // a piece slides in from the side after the sweep passes it and flies
   // off when the mask breaks.
@@ -434,6 +438,7 @@ inline void Renderer::reaperMask(float t) {
   int8_t zhOf[MAX_W];for(int x=0;x<w_;++x)zhOf[x]=int8_t((((x*7)%6+6)%6-3)/2);
   constexpr int ROWS=2*32+12;uint8_t bandOf[ROWS][3];
   for(int r=0;r<ROWS;++r)for(int z=0;z<3;++z)bandOf[r][z]=uint8_t(std::max(0,r+rowsFrom-top+z-1+BAND)/BAND);
+  sorcMark(5);
   // Per row and seam step: whether the band changes from the row above
   // (bit 0: the seam itself) or toward the rows next to it (bit 1: a lip).
   uint8_t seamOf[ROWS][3];
@@ -444,6 +449,7 @@ inline void Renderer::reaperMask(float t) {
     return bandOf[r][z]*2+(x>=cxr);
   };
   constexpr int PIECES=2*(64/BAND+3);
+  sorcMark(6);
   // Per piece: its float offset, the same rounded (x+ox rounds to x plus
   // ox rounded, for whole x), and the last row the sweep has revealed.
   float pox[PIECES],poy[PIECES];int pxi[PIECES],pyi[PIECES],pyLim[PIECES];
@@ -460,6 +466,7 @@ inline void Renderer::reaperMask(float t) {
   const float formed=smooth((t-SWEEP)*10),gone=1-smooth((t-BREAK-.6f)*(1/.7f));
   const float breathe=t>MARK?.9f+.1f*sine((t-MARK)*3.4f):1;
   const float flash=t>=MARK?1-smooth((t-MARK)*(1/.3f)):0;
+  sorcMark(7);
   // The shell: per row, the band near the rim lit as a smooth gradient
   // that peaks just inside the edge and fades inward (fixed point: r^2 in
   // Q16 from a per-row reciprocal). Only the two spans of each row that
@@ -521,6 +528,7 @@ inline void Renderer::reaperMask(float t) {
       }
     }
   }
+  sorcMark(8);
   // Eye slits: slanted almonds, a faint rim while forming, then lit gold
   // from MARK, flickering; they go out as the mask breaks.
   const float eyes=smooth((t-MARK)/.08f)*(1-smooth((t-CRACK-.3f)/.25f));
@@ -537,6 +545,7 @@ inline void Renderer::reaperMask(float t) {
       else if(formed>0){reaperAdd(x,roundi(ey+slant-h+oy),shadeInk,q8(formed*.6f));reaperAdd(x,roundi(ey+slant+h+oy),shadeInk,q8(formed*.6f));}
     }
   }
+  sorcMark(9);
   // Red stripes: they flare across from MARK, hot white first, then red,
   // a highlight running along them; they fade as the cracks spread.
   const float stripes=t<MARK?0:(1-smooth((t-CRACK)/.4f));
@@ -563,6 +572,7 @@ inline void Renderer::reaperMask(float t) {
       }
     }
   }
+  sorcMark(10);
   // The pulse: a dark red ring rolls off the mask as it awakens.
   if(t>=MARK && t<MARK+.45f) {
     const float u=(t-MARK)/.45f,s=1.08f+.4f*easeOut(u),k=(1-u)*(1-u)*1.1f;
@@ -571,6 +581,7 @@ inline void Renderer::reaperMask(float t) {
       reaperAdd(roundi(cx+aw*s*cosine(an)),roundi(my+B*s*v),i&1?redInk:crimsonInk,q8(k));
     }
   }
+  sorcMark(11);
   // Embers of dark red energy drift off the mask's sides through the sustain.
   for(unsigned i=0;i<18;++i) {
     const float born=MARK+.1f+2.1f*rnd(i,706),age=t-born,life=.7f+.5f*rnd(i,707);
@@ -580,6 +591,7 @@ inline void Renderer::reaperMask(float t) {
     const float x=cx+side*(aw+2+(8+10*rnd(i,709))*age),y=my+B*v-(6+10*rnd(i,710))*age+1.5f*sine(age*8+i);
     dot(x,y,mixed(red,crimson,u),sine(HALF_TURN*u)*1.2f);
   }
+  sorcMark(11);
   // Motes condense onto the pieces as they form, and dust falls off the
   // fragments as they break.
   for(unsigned i=0;i<24;++i) {
@@ -589,6 +601,7 @@ inline void Renderer::reaperMask(float t) {
     const float r=late?1+.6f*u:1.6f-.6f*easeOut(u);
     dot(cx+A*r*cosine(an),my+B*r*sine(an)+(late?30*u*u:0),late?bone:mixed(shade,bone,u),sine(HALF_TURN*u)*1.1f);
   }
+  sorcMark(11);
 }
 
 // ---- Blink: something too fast to see steps round the readout. Each

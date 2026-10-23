@@ -89,9 +89,30 @@ struct SpeakerPeripheral {
     latencyUs=SoundSync::outputUs(playing);startedUs=hostUs;remaining=count;
     clip.assign(data,data+count);playing=true;++plays;return true;}
   bool isPlaying(){return playing;}
+  bool isPlaying(uint8_t){return playing;}
   void stop(){playing=false;++stops;}
+  void stop(uint8_t){stop();}
+  void setChannelVolume(uint8_t,uint8_t){}
 };
 static struct {SpeakerPeripheral Speaker;} M5;
+// The music streamer's stand-ins (best_effect_speaker.h defines them for
+// the device above the class this harness takes): a host lock, no task.
+#include "music_stream.h"
+#include <mutex>
+struct HostLock {std::mutex m;struct Hold {std::mutex &m;explicit Hold(HostLock &l):m(l.m){m.lock();}~Hold(){m.unlock();}};};
+using Music=MusicStream<HostLock>;
+using TaskHandle_t=void *;
+static void xTaskNotifyGive(TaskHandle_t){}
+// The speaker's music channel: holds up to two blocks until the test plays them.
+struct MusicChannel:MusicOutput {
+  static inline unsigned held=0,queuedBlocks=0,stops=0;static inline int lastVolume=-1;
+  unsigned queued() override{return held;}
+  bool queue(const int16_t *,size_t) override{if(held>=2)return false;++held;++queuedBlocks;return true;}
+  void volume(uint8_t v) override{lastVolume=v;}
+  void stop() override{held=0;++stops;}
+};
+#include "fx_compiler.h"
+
 struct IdleFake {bool ensureAwake(){return true;}};
 static IdleFake &pm1Idle(){static IdleFake idle;return idle;}
 static struct {template<class... T>void printf(const char*,T...){}void println(const char*){}} Serial;
@@ -396,6 +417,8 @@ int main() {
       bool sound(unsigned e,uint32_t &k,size_t &n) override{if(e!=96 || !has)return false;k=key;n=samples;return true;}
       bool begin(unsigned) override{++begins;at=0;return true;}
       size_t run(int16_t *out,size_t n) override{for(size_t i=0;i<n;++i)out[i]=int16_t((at+i)*7+key);at+=n;return n;}
+      bool song(unsigned) override{return false;}
+      bool readSong(unsigned,const uint8_t *&,size_t &) override{return false;}
       std::vector<int16_t> clip(size_t skip)const{std::vector<int16_t> c;for(size_t i=skip;i<samples;++i)c.push_back(int16_t(i*7+key));return c;}
     } fake;
     Appearance::loadedHooks().fallback=[](unsigned){return unsigned(Effect::Sparkles);};
@@ -416,10 +439,50 @@ int main() {
     soundPlayer.attach(nullptr);fake.has=true;assert(soundPlayer.prepared(mine));
     Appearance::loadedHooks()=Appearance::LoadedHooks();
   }
+  // A song (engine level 2) is streamed: always ready, it plays on past
+  // its celebration's frames, and a pull fades it to a stop within 20 ms
+  // through the production tickSound.
+  {
+    using Appearance::Effect;
+    const auto compiled=FxCompiler::compile("effect \"Song\"\nuid 0x4c4c4d5500000099\nduration 3000\nreadout 900\nframe { x = W }\n"
+      "voice lead = pulse(duty: .25, decay: 3, gain: .3)\nsong(tempo: 120, rows: 4) {\n pattern a {\n  lead: \"c5 . e5 . g5 . e5 .\"\n }\n order a a a a\n}\n");
+    assert(compiled.ok);
+    struct SongLoaded:BestEffectSpeaker::LoadedSounds {
+      std::vector<uint8_t> file;
+      bool sound(unsigned,uint32_t &,size_t &) override{return false;}
+      bool begin(unsigned) override{return false;}
+      size_t run(int16_t *,size_t) override{return 0;}
+      bool song(unsigned e) override{return e==96;}
+      bool readSong(unsigned e,const uint8_t *&f,size_t &n) override{if(e!=96)return false;f=file.data();n=file.size();return true;}
+    } songs;
+    songs.file=compiled.bytes;
+    static auto space=std::make_unique<Music::Space>();static Music stream(space.get());
+    const Effect mine=Effect(96);
+    reset(Effect::Orbit);soundPlayer.attach(&songs);soundPlayer.attachMusic(&stream,nullptr);
+    assert(soundPlayer.prepared(mine) && soundPlayer.prepare(mine));
+    assert(soundPlayer.play(mine,Appearance::Sound::Low) && soundPlayer.streaming() && soundPlayer.playing());
+    // Play it a while: the music task renders, the loop feeds and the channel plays.
+    auto run=[&](unsigned passes,Snapshot s){for(unsigned i=0;i<passes;++i){stream.render();hostUs+=4000;if(MusicChannel::held && i%8==7)--MusicChannel::held;tickSound(s);}};
+    run(50,Snapshot{});
+    assert(soundPlayer.streaming() && MusicChannel::queuedBlocks>0);
+    // Its celebration's frames have ended: a song keeps playing.
+    celebrationSound=true;run(10,Snapshot{});assert(soundPlayer.streaming());
+    // A pull starts: faded within 20 ms (five 4 ms passes and the stop).
+    const unsigned stops=MusicChannel::stops;
+    run(1,Snapshot{AnalogTachometer::Phase::Launch});assert(stream.fading() && soundPlayer.streaming());
+    run(6,Snapshot{AnalogTachometer::Phase::Launch});
+    assert(!soundPlayer.streaming() && MusicChannel::stops==stops+1 && MusicChannel::lastVolume<255);
+    // Without the streamer a song effect sounds as its stock fallback.
+    soundPlayer.attachMusic(nullptr,nullptr);M5.Speaker.playing=false;
+    Appearance::loadedHooks().fallback=[](unsigned){return unsigned(Effect::Sparkles);};
+    assert(!soundPlayer.prepared(mine));while(!soundPlayer.prepare(mine,4000)){}
+    assert(soundPlayer.play(mine,Appearance::Sound::Low));checkClip(Effect::Sparkles);
+    soundPlayer.attach(nullptr);Appearance::loadedHooks()=Appearance::LoadedHooks();
+  }
   // These buffers live for the firmware lifetime; release fake allocations
   // here so the host harness can also use leak detection.
   for(auto p:allocations)if(p)std::free(p);
-  std::cout<<"PASS: every effect's sound within "<<int(std::ceil(worstOffsetMs))<<" ms of its frames (celebration, USB preview, editor preview after another, celebration into a playing sound, late start); production Random/PB/hidden/cancel selection, first-frame cues, six USB preview sounds, milestone sounds rendered ahead, a bounded least-recently-used sound cache, actual Best effect/Sound editor helpers, real sliced synth/speaker buffer, pull/close cancellation, late deadline and timer wrap\n";
+  std::cout<<"PASS: every effect's sound within "<<int(std::ceil(worstOffsetMs))<<" ms of its frames (celebration, USB preview, editor preview after another, celebration into a playing sound, late start); production Random/PB/hidden/cancel selection, first-frame cues, six USB preview sounds, milestone sounds rendered ahead, a bounded least-recently-used sound cache, actual Best effect/Sound editor helpers, real sliced synth/speaker buffer, pull/close cancellation, late deadline and timer wrap, a streamed song outliving its frames and fading on a pull\n";
 }
 '''
 names = ["milestonePicks", "nextMilestonePick", "upcoming", "celebrationEffect", "soundTarget", "requestSound", "startSound", "tickSound", "prepareMotion", "previewBestEffect", "previewEffect", "previewSound"]
@@ -433,5 +496,5 @@ with tempfile.TemporaryDirectory(prefix="launchlab-best-sound-") as temporary:
     subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17", "-O1", "-g", "-fsanitize=address,undefined",
                     "-fno-omit-frame-pointer", "-I" + str(root / "firmware/tests/fakes"),
                     "-I" + str(root / "firmware/LaunchLabMini"), "-I" + str(root / "firmware/LaunchLabRpm"),
-                    str(cpp), "-o", str(executable)], check=True)
+                    "-I" + str(root / "firmware/tools/fx"), str(cpp), "-o", str(executable)], check=True)
     subprocess.run([str(executable)], check=True)
