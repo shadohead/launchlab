@@ -193,5 +193,14 @@ int main(){
     }
   }
 
-  std::cout<<"PASS: six classic effects at 5 s deterministic, halo-clipped, ink-exact from 3/4 duration, custom-background invariant, cost-model bounded at 8.0 ms, sustains alive, with per-effect identity properties\n";
+  // HIL !effectbench's primitive timings run every primitive, reading the
+  // clock around each, and light only background: the ink is untouched.
+  {
+    std::array<uint16_t,135*240> canvas=base;uint32_t cycles[BestEffectUI::Renderer::BENCH_OPS]={},tick=0;
+    assert(renderer.bench({canvas.data(),135,240},0x07ff,0,500,[&]{return tick+=3;},cycles));
+    for(uint32_t c:cycles)assert(c==3);
+    for(size_t i=0;i<canvas.size();++i)if(base[i])assert(canvas[i]==base[i]);
+    assert(canvas!=base);
+  }
+  std::cout<<"PASS: six classic effects at 5 s deterministic, halo-clipped, ink-exact from 3/4 duration, custom-background invariant, cost-model bounded at 8.0 ms, sustains alive, with per-effect identity properties; the device bench runs every primitive on background only\n";
 }

@@ -15,6 +15,7 @@ struct Run {
     for(char c:bytes) {
       now+=gapMs;
       if(gapMs)guard.idle(now); // keys typed apart: the queue was empty
+      if(guard.drop(c,now))continue;
       if(guard.due(now,out))ran.push_back(out);
       if(guard.feed(c,now,out))ran.push_back(out);
     }
@@ -41,6 +42,7 @@ struct Loop {
     if(guard.due(now,out))run(out);
     for(unsigned n=0;n<32 && !rx.empty();++n) {
       const char c=rx[0];rx.erase(0,1);
+      if(guard.drop(c,now))continue;
       if(guard.due(now,out))run(out);
       if(guard.feed(c,now,out))run(out);
     }
@@ -147,5 +149,33 @@ int main() {
     run.send("\x93");for(char c:std::string("!x\n"))run.guard.consumed(c,run.now);
     run.send("O\n");run.idle(30);assert((run.ran==std::vector<std::string>{"v"}));
   }
-  std::cout<<"PASS: 64 x 16 random 4 KiB bursts with dangerous-letter runs, slow passes and long exports run no guarded command; burst edges neither; K/R, status polling, bare, scripted, CRLF, typed, E<id>/g<pin> and post-HIL commands still run\n";
+  {
+    // The rest of a line a transfer refused runs nothing, not even K or R:
+    // an R in a backup line 0.18 refused started another restore, which took
+    // the commands after it. A lone letter left before the newline neither.
+    Run run;run.idle(100);run.guard.refused(run.now);run.send("QUJDRK3p\n");run.idle(30);
+    assert(run.ran.empty());
+    run.guard.refused(run.now);run.send("X\n");run.idle(30);assert(run.ran.empty());
+    // The next line, once the host waited for the error, is a command again.
+    run.send("L\n");assert((run.ran==std::vector<std::string>{"L"}));
+    // A host that stopped mid-line: after quiet, input is commands again.
+    run.idle(100);run.guard.refused(run.now);run.send("QU");run.idle(25);run.send("L\n");
+    assert((run.ran==std::vector<std::string>{"L","L"}));
+  }
+  {
+    // Through slow passes: base64-like lines refused at a random character,
+    // the rest arriving at USB speed. Nothing runs; then "L" does.
+    uint32_t state=2026102301u;auto next=[&]{state=state*1664525u+1013904223u;return uint8_t(state>>24);};
+    const std::string base64="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    for(unsigned trial=0;trial<256;++trial) {
+      Loop loop;loop.slow=trial%2;loop.idle(100);
+      std::string rest;const unsigned n=next()%97;
+      for(unsigned i=0;i<n;++i)rest+=next()%8?base64[next()%64]:"RKXpL"[next()%5];
+      loop.guard.refused(loop.now);loop.arrive(rest+"\n");loop.drain();loop.idle(60);
+      if(!loop.ran.empty())std::cout<<"refused line ran: "<<loop.ran[0]<<" from "<<rest<<"\n";
+      assert(loop.ran.empty());
+      loop.arrive("L\n");loop.drain();loop.idle(30);assert((loop.ran==std::vector<std::string>{"L"}));
+    }
+  }
+  std::cout<<"PASS: 64 x 16 random 4 KiB bursts with dangerous-letter runs, slow passes and long exports run no guarded command; burst edges neither; K/R, status polling, bare, scripted, CRLF, typed, E<id>/g<pin> and post-HIL commands still run; the rest of a refused transfer line runs nothing, K and R included\n";
 }

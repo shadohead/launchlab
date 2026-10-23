@@ -13,7 +13,7 @@ enum class Theme:uint8_t {Classic=0,Mint=1,Amber=2,Violet=3,GolemGreen=4,Phoenix
 // Stored values: each effect keeps its number, so older records keep their
 // meaning. Random came after Off, Slash after Random, then the elemental
 // effects (Tidal..Radiance) and the physical ones (Spin..Bloom) in 0.16,
-// then five anime-inspired sets of five in 0.17 (Crimson..Ravage) and six
+// then five anime-inspired sets of five in 0.17 (Crimson..Ravage) and eight
 // more in 0.18 (Haymaker..Blink), the first with a value above 63.
 // Firmware that predates a value rejects a record selecting it and falls
 // back to its other slot or the defaults.
@@ -178,12 +178,16 @@ public:
   void presented(uint32_t now){if(badge_ && !started_){started_=true;cue_=true;at_=now;}}
   // True once, right after the effect starts: the moment to start its sound.
   bool takeCue(){const bool cue=cue_;cue_=false;return cue;}
+  // Moves the started effect's clock to `at` (SoundSync::clockStart), so its
+  // frames meet its sound; until then the effect holds its first frame.
+  void align(uint32_t at){if(started_)at_=at;}
+  uint32_t startedAt()const{return at_;}
   bool badge()const{return badge_;}
   bool started()const{return started_;}
   Effect effect()const{return effect_;}
   bool best()const{return best_;}
   uint16_t milestone()const{return milestone_;}
-  uint32_t elapsed(uint32_t now)const{return started_?uint32_t(now-at_):0;}
+  uint32_t elapsed(uint32_t now)const{return started_ && int32_t(now-at_)>0?uint32_t(now-at_):0;}
   bool moving(uint32_t now)const{return badge_ && started_ && elapsed(now)<duration(effect_);}
 private:
   uint32_t number_=0,at_=0;Effect effect_=Effect::Off;bool pending_=false,badge_=false,started_=false,cue_=false,best_=true;

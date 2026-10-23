@@ -28,6 +28,7 @@ def function(source, name):
 
 RUNTIME = r'''
 #pragma once
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -37,6 +38,7 @@ RUNTIME = r'''
 #include <vector>
 using TickType_t = uint32_t;
 using TaskHandle_t = void *;
+using BaseType_t = int;
 struct FakeMutex {
   std::timed_mutex mutex;
   std::atomic<unsigned> attempts{0}, releases{0};
@@ -54,6 +56,18 @@ inline std::vector<std::unique_ptr<FakeMutex>> gates;
 inline std::function<void(FakeMutex *)> locked,released;
 inline std::function<void(unsigned)> delayed;
 inline bool inHook=false;
+// The scheduler model. By default every period wait blocks a whole period,
+// as on an idle core. A realistic run follows FreeRTOS instead: a
+// delay-until whose wake time has already passed returns at once without
+// blocking, and each I2C transfer costs busy CPU time (the bus is polled).
+inline bool realistic=false;
+inline uint64_t transferUs=0;
+// Longest stretch of task CPU time with no block: on device IDLE0 cannot run
+// in it, and the task watchdog resets the chip after 5 s.
+inline uint64_t busySince=0,longestBusyUs=0;
+inline void blocked(uint64_t until) {
+  longestBusyUs=std::max(longestBusyUs,now-busySince);now=std::max(now,until);busySince=now;
+}
 struct Stop {};
 inline void hook(const std::function<void(FakeMutex *)> &callback,FakeMutex *gate) {
   if(callback && !inHook) {inHook=true;callback(gate);inHook=false;}
@@ -66,8 +80,8 @@ inline int xSemaphoreTake(SemaphoreHandle_t gate,TickType_t wait) {
   if(!gate)return pdFALSE;
   ++gate->attempts;
   if(const uint32_t held=gate->heldByOtherMs) {
-    if(wait<held){Fake::now+=uint64_t(wait)*1000;return pdFALSE;}
-    Fake::now+=uint64_t(held)*1000;gate->heldByOtherMs=0;
+    if(wait<held){Fake::blocked(Fake::now+uint64_t(wait)*1000);return pdFALSE;}
+    Fake::blocked(Fake::now+uint64_t(held)*1000);gate->heldByOtherMs=0;
   }
   if(!gate->mutex.try_lock_for(std::chrono::milliseconds(wait)))return pdFALSE;
   Fake::hook(Fake::locked,gate);return pdTRUE;
@@ -80,12 +94,21 @@ inline int xTaskCreatePinnedToCore(void (*)(void *),const char *,unsigned,void *
   *out=reinterpret_cast<void *>(uintptr_t(1));return pdPASS;
 }
 inline unsigned uxTaskGetStackHighWaterMark(TaskHandle_t){return 4096;}
-inline void vTaskDelayUntil(TickType_t *last,TickType_t period) {
+inline BaseType_t xTaskDelayUntil(TickType_t *last,TickType_t period) {
   ++Fake::completed;
   if(Fake::delayed)Fake::delayed(Fake::completed);
-  *last+=period;Fake::now+=uint64_t(period)*1000;
+  BaseType_t delayed=pdTRUE;
+  if(!Fake::realistic){*last+=period;Fake::now+=uint64_t(period)*1000;Fake::busySince=Fake::now;}
+  else {
+    const TickType_t wake=*last+period;*last=wake;
+    delayed=int32_t(wake-xTaskGetTickCount())>0;
+    if(delayed)Fake::blocked(uint64_t(wake)*1000);
+  }
   if(Fake::completed==Fake::limit)throw Fake::Stop{};
+  return delayed;
 }
+inline void vTaskDelayUntil(TickType_t *last,TickType_t period){xTaskDelayUntil(last,period);}
+inline void vTaskDelay(TickType_t ticks){Fake::blocked((Fake::now/1000+ticks)*1000);}
 inline int64_t esp_timer_get_time(){return int64_t(Fake::now);}
 namespace m5 {
 struct IMU_Class {static constexpr unsigned sensor_mask_accel=1,sensor_mask_gyro=2;};
@@ -116,6 +139,7 @@ TESTS = r'''
 using Mode=MountOrientation::Mode;
 namespace FakeFifo {inline std::vector<uint8_t> pending;inline unsigned flushes=0,forcedLength=0;inline uint64_t stallUs=0;}
 bool Bmi270Fifo::readRegisters(uint8_t reg,uint8_t *data,size_t n) {
+  Fake::now+=Fake::transferUs;
   if(reg==FIFO_LENGTH_0 && n==2) {
     auto &p=FakeFifo::pending;p.clear();
     if(FakeFifo::forcedLength){p.assign(FakeFifo::forcedLength,0x8C);data[0]=uint8_t(p.size());data[1]=uint8_t(p.size()>>8);return true;}
@@ -152,6 +176,7 @@ static void vectorIs(const float *v,float x,float y,float z) {
 static void cleanRuntime() {
   Fake::now=1000000;Fake::completed=0;Fake::locked={};Fake::released={};Fake::delayed={};
   Fake::inHook=false;M5.Imu={};
+  Fake::realistic=false;Fake::transferUs=0;Fake::busySince=Fake::now;Fake::longestBusyUs=0;
 }
 static void runFor(StickS3MotionAcquisition &owner,unsigned count,
                    std::function<void(unsigned)> delayed={}) {
@@ -334,6 +359,54 @@ static void quietBarrierAndAnchoring() {
   FakeFifo::stallUs=9000;runFor(*owner,1);FakeFifo::stallUs=0;
   assert(owner->snapshot_.fifoStalls==0 && owner->ring_.size()==1 && owner->ring_.at(0).us==1000000);
 }
+// Runs the owner in the realistic scheduler until the virtual clock reaches
+// end. step sees every loop iteration as it reaches its period wait.
+static void runUntil(StickS3MotionAcquisition &owner,uint64_t end,std::function<void()> step) {
+  Fake::completed=0;Fake::limit=0;
+  Fake::delayed=[&](unsigned){step();if(Fake::now>=end)throw Fake::Stop{};};
+  try{owner.run();assert(false);}catch(const Fake::Stop &){}
+  Fake::delayed={};
+}
+static void lateLoopYields() {
+  // Held up for a minute (here: another task holds the IMU gate, so every
+  // poll waits 20 ms for it and the 5 ms schedule falls far behind), the
+  // loop must not then run back-to-back through every missed period. The
+  // FIFO already holds what those polls would have read, and on device that
+  // spin kept IDLE0 off core 0 until the task watchdog reset the chip.
+  cleanRuntime();Fake::realistic=true;Fake::transferUs=400;
+  auto owner=std::make_unique<StickS3MotionAcquisition>();assert(owner->begin());
+  M5.Imu.data.accel={0,0,1};
+  const uint64_t hold=Fake::now+2000000,release=hold+60000000;
+  unsigned before=0,polls=0,steady=0;uint64_t previous=0;
+  runUntil(*owner,release+30000000,[&] {
+    if(Fake::now<hold)return;
+    if(!before) {
+      // Settled and on schedule before the hold.
+      assert(owner->snapshot_.orientationReady && Fake::longestBusyUs<5000);
+      assert(owner->snapshot_.latePolls==0 && owner->snapshot_.missedPolls==0);
+      before=owner->ring_.size();owner->gate_->heldByOtherMs=60000;return;
+    }
+    if(owner->gate_->heldByOtherMs && Fake::now>=release)owner->gate_->heldByOtherMs=0;
+    if(Fake::now<release)return;
+    // Back on the 5 ms schedule at once after the release.
+    if(previous && Fake::now-previous==5000)++steady;
+    previous=Fake::now;++polls;
+  });
+  // Every iteration blocked: never anywhere near the 5 s watchdog.
+  assert(Fake::longestBusyUs<5000);
+  const auto &s=owner->snapshot_;
+  assert(s.gateMisses>2000 && s.latePolls>=s.gateMisses && s.missedPolls>=3*s.gateMisses);
+  assert(polls>=5995 && polls<=6002 && steady+3>=polls);
+  // Fusion and the ring carried on from the FIFO; the hold is one honest gap.
+  assert(before && s.gaps==1 && s.maxGapUs>60000000 && s.orientationReady);
+  assert(owner->ring_.latest()+10000>=Fake::now);
+  // A loop whose every poll costs more than its period (core 0 overloaded)
+  // still blocks once per poll.
+  cleanRuntime();Fake::realistic=true;Fake::transferUs=3000;
+  owner=std::make_unique<StickS3MotionAcquisition>();assert(owner->begin());
+  runUntil(*owner,Fake::now+10000000,[]{});
+  assert(Fake::longestBusyUs<7000 && owner->snapshot_.latePolls>1000);
+}
 static StickS3MotionAcquisition imuAcquisition;
 static StickS3Level level;
 static Mode liveMount=Mode::Top;
@@ -422,10 +495,10 @@ static void fallbackLevel() {
 int main() {
   ownerActivity();
   validationAndSerialization();continuousOwnerWarmup();currentModeAtFusion();
-  stalePublication(false);stalePublication(true);flashQuiet();quietBarrierAndAnchoring();fallbackLevel();
+  stalePublication(false);stalePublication(true);flashQuiet();quietBarrierAndAnchoring();lateLoopYields();fallbackLevel();
   std::cout<<"PASS: actual mount owner; mutex exclusion, invalid/failure/noop preservation, "
               "frame invalidation, fresh fusion warmup, canonical capture, late/current mapping, "
-              "stale/ABA publication guards, bounded flash-write quiet window, 250 ms quiet barrier/veto, length-time FIFO anchoring, actual level fallback and dot dropouts without timer renewal\n";
+              "stale/ABA publication guards, bounded flash-write quiet window, 250 ms quiet barrier/veto, length-time FIFO anchoring, late polls yield instead of starving IDLE0, actual level fallback and dot dropouts without timer renewal\n";
 }
 '''
 

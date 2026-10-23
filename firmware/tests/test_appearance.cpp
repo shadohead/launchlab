@@ -99,6 +99,11 @@ int main(){
   c.captured(7);assert(c.badge() && c.effect()==Effect::Orbit && !c.moving(10));c.presented(0xfffffff0u);
   assert(c.moving(40) && c.elapsed(40)==56);c.presented(40);assert(c.elapsed(40)==56);
   assert(c.moving(4980) && !c.moving(4984) && c.badge()); // Orbit runs 5000 ms from 0xfffffff0
+  // align() moves a started clock (to where its sound is heard): the first
+  // frame holds until then, and elapsed counts from it, across the wrap too.
+  {Celebration a;a.queue(true,3,Effect::Orbit);a.captured(3);a.align(500);assert(a.elapsed(600)==0);
+   a.presented(0xfffffff0u);a.align(0xfffffff0u+40);assert(a.elapsed(0xfffffff0u+20)==0 && a.elapsed(0xfffffff0u+40)==0);
+   assert(a.elapsed(16)==0 && a.elapsed(100)==76 && a.startedAt()==24);}
   Celebration off;off.queue(true,9,Effect::Off);off.captured(9);off.presented(0);assert(off.badge() && !off.moving(0));
   c.clear();c.captured(7);c.presented(20);assert(!c.badge());c.queue(false,8,Effect::Orbit);c.captured(8);assert(!c.badge());
   // Canvas pixels are stored as LGFX sprites keep them: RGB565 big-endian.

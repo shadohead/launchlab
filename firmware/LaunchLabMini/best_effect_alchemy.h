@@ -27,6 +27,7 @@ inline void Renderer::alchemyArc(float cx,float cy,float r,float a0,float sweep,
   const int n=std::max(2,int(std::fabs(sweep)*r*1.15f)+1);
   const float da=sweep/n,cd=cosine(da),sd=sine(da);
   float co=cosine(a0),si=sine(a0);int px=-9999,py=-9999;
+  touches_+=uint32_t(n);
   for(int i=0;i<n;++i) {
     const int x=roundi(cx+r*co),y=roundi(cy+r*si);
     if(x!=px || y!=py){if(unsigned(x)<unsigned(w_) && unsigned(y)<=unsigned(bottom_))addw(x,y,c,kq);px=x;py=y;}
@@ -182,8 +183,13 @@ inline void Renderer::alchemyFireball(float fx,float fy,float r,int cool,int boo
     const float span=std::sqrt(r*r-dy*dy);const int dy2=int(dy*dy),xc=roundi(fx)-1;
     const int xa=std::max(0,int(fx-span))&~1,xb=std::min(w_-2,int(fx+span));
     for(int x=xa;x<=xb;x+=2) {
-      if(blocked(x,y) && blocked(x+1,y+1) && blocked(x+1,y))continue;
+      ++touches_;
       const int dx=x-xc,q=std::min(256,((dx*dx+dy2)*inv)>>8);
+      // The hottest the cell can be (noise at its most, 255): a cell that
+      // cannot pass the threshold below needs neither its mask nor its two
+      // noise lookups, which on the device cost far more than the test.
+      if(((((256-q)*(150+((260*255)>>8)))>>8)*cool>>8)+boost-((q*q)>>9)<=36)continue;
+      if(blocked(x,y) && blocked(x+1,y+1) && blocked(x+1,y))continue;
       const int n=(170*noise(x*40,y*40+scroll,511)+86*noise(x*90,y*90+scroll*2,512))>>8;
       int heat=((((256-q)*(150+((260*n)>>8)))>>8)*cool>>8)+boost-((q*q)>>9);
       if(heat<=36)continue;

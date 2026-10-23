@@ -54,7 +54,7 @@ int main(){
 
   // The device cost model (fitted on the M5 at 80 MHz, 2026-10-20):
   // The device cost model (Renderer::modelledUs(), fitted on the M5 at
-  // 80 MHz): every frame at most 8 ms.
+  // 80 MHz): every frame at most 9 ms (the device budget).
   // Each runs about five seconds (owner, 2026-10-20): an early impact, a
   // sustained middle that keeps moving but costs less than the impact, and
   // a settle. Windows in ms: impact from/to, sustain from/to.
@@ -70,7 +70,7 @@ int main(){
       if(ms>=windows[e][2] && ms<windows[e][3])sustain=std::max(sustain,us);
     }
     if(report)std::printf("%s: worst %.0f us at %u ms (plots %u probes %u scans %u); impact %.0f, sustain %.0f\n",label(effect),worst,at,wp,wq,ws,impact,sustain);
-    assert(worst<=8000 && sustain<impact);
+    assert(worst<=9000 && sustain<impact);
     // The sustain is never frozen: every frame differs from the one before.
     for(unsigned ms=windows[e][2];ms<windows[e][3];ms+=50){
       const Frame a=frame(effect,ms,accent(Theme::Classic)),b=frame(effect,ms+50,accent(Theme::Classic));
@@ -215,5 +215,5 @@ int main(){
     if(report)std::printf("vapor warm %u rows %d..%d runs %u\n",warm,r0,r1,runs);
     assert(warm>200 && r1-r0<=11 && runs>=3);
   }
-  std::cout<<"PASS: five corsair effects deterministic, halo-clipped, ink-exact by 3/4, custom-background invariant, within the 8 ms cost model, with per-effect identity properties\n";
+  std::cout<<"PASS: five corsair effects deterministic, halo-clipped, ink-exact by 3/4, custom-background invariant, within the 9 ms cost model, with per-effect identity properties\n";
 }

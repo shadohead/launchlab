@@ -29,3 +29,4 @@ python3 firmware/tests/check_cpu_power_pipeline.py
 python3 firmware/tests/check_usb_flush.py
 python3 firmware/tests/check_usb_command_pipeline.py
 python3 firmware/tests/check_main_layout.py
+python3 firmware/tests/check_usb_config.py

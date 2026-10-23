@@ -32,6 +32,7 @@ prefix = r'''
 #define PM1_IDLE_NATIVE
 #include "pm1_idle.h"
 #include "best_effect_sound.h"
+#include "sound_sync.h"
 #include <cassert>
 #include <cstdlib>
 #include <iostream>
@@ -59,7 +60,7 @@ struct StickS3MotionAcquisition {
 };
 static StickS3MotionAcquisition imu;
 struct Speaker {
-  struct Config {int task_pinned_core=0;};
+  struct Config {int task_pinned_core=0;bool stereo=true;};
   unsigned begins=0,ends=0;bool active=false;
   Config config(){return {};}
   void config(Config){}

@@ -142,7 +142,10 @@ inline void Renderer::reaperCrescent(float t) {
         // Inside, a smooth deep red glow off each rim, fading to a dark
         // core: the tear opens onto dark energy.
         const int kg=(k*q8(smooth((age-.45f)/.3f)))>>8,l=roundi(xl)+2,r=roundi(xr)-2;
-        for(int x=l;x<=r;++x){const int d=std::min(x-l,r-x);if(d<4)reaperAdd(x,y,d?crimsonInk:redInk,(kg*(d?150-30*d:200))>>8);}
+        // Only the four pixels inside each rim are lit: those are all that are stepped.
+        auto glowAt=[&](int x){++touches_;const int d=std::min(x-l,r-x);reaperAdd(x,y,d?crimsonInk:redInk,(kg*(d?150-30*d:200))>>8);};
+        for(int x=l;x<=std::min(r,l+3);++x)glowAt(x);
+        for(int x=std::max(l+4,r-3);x<=r;++x)glowAt(x);
       }
     }
     // Licks of dark flame off the open rims, a few each frame.
@@ -474,31 +477,46 @@ inline void Renderer::reaperMask(float t) {
       const float invf=1.0f/inv;
       const int dxOut=int(root(std::max(0,71300-v2)*invf))+1,dxIn=std::max(0,int(root(std::max(0,46200-v2)*invf))-1);
       const int xLo=roundi(cx-half),xHi=roundi(cx+half),crackW=crack>0?floori(crack*half):-1;
+      // Per row, once: for each seam step (zhOf+1) and side, the piece's
+      // offset and whether the sweep has revealed this row of it. Pixels
+      // then take the cheap tests first (radius, crack, the faint parts'
+      // alternate pixels) and look their piece up only if still drawn: on
+      // the device the per-pixel piece lookups cost about 1.5 ms a frame.
+      const int row=std::max(0,std::min(ROWS-1,y-rowsFrom));
+      int ox[3][2],oy[3][2];bool shown[3][2];
+      for(int z=0;z<3;++z)for(int side=0;side<2;++side) {
+        const int p=clampPiece(bandOf[row][z]*2+side);
+        ox[z][side]=pxi[p];oy[z][side]=pyi[p];shown[z][side]=y<=pyLim[p];
+      }
+      const uint8_t *seams=seamOf[row];
       for(int span=0;span<2;++span) {
         const int x0=std::max(xLo,span?std::max(cxr-dxIn+1,cxr+dxIn):cxr-dxOut),x1=std::min(xHi,span?cxr+dxOut:cxr-dxIn);
         for(int x=x0;x<=x1;++x) {
+          ++touches_;
           const int dx=x-cxr,r2=dx*dx*inv+v2;
           if(r2<46200 || r2>71300)continue; // between r .84 and 1.04
-          // Weight: rising from r .84 to a peak at .95, a short fall after 1.
-          const int w=r2<59000?((r2-46200)*1311)>>16:r2<65536?256:256-(((r2-65536)*2893)>>16);
-          const int p=clampPiece(pieceOf(x,y));
-          if(y>pyLim[p])continue;
-          int kq=(kBase*w)>>8;
           // Cracks: the seams between pieces open dark, spreading out from
           // the middle, their lips lit, before the pieces fly apart.
           bool lip=false;
           if(std::abs(dx)<=crackW) {
-            const int f=seamOf[std::max(0,std::min(ROWS-1,y-rowsFrom))][zhOf[x]+1];
-            if((f&1) || dx==0 || dx==-1)continue;
-            lip=(f&2) || dx==1 || dx==-2;
-            if(lip)kq=std::max(kq,kLip);
+            const int s=seams[zhOf[x]+1];
+            if((s&1) || dx==0 || dx==-1)continue;
+            lip=(s&2) || dx==1 || dx==-2;
           }
           // The faint parts of the gradient (its inner rise below about two
           // thirds of the peak and its outer fall below a half) are drawn on
           // alternate pixels at twice the weight: the same light on average
           // at about two fifths fewer pixels for the shell.
-          if(!lip && (r2<54500 || r2>68400)){if((x+y)&1)continue;kq=std::min(256,kq*2);}
-          reaperAdd(x+pxi[p],y+pyi[p],lip || r2>62000?boneInk:shade2,kq);
+          const bool faint=!lip && (r2<54500 || r2>68400);
+          if(faint && ((x+y)&1))continue;
+          const int z=unsigned(x)<unsigned(w_)?zhOf[x]+1:1,side=x>=cxr;
+          if(!shown[z][side])continue;
+          // Weight: rising from r .84 to a peak at .95, a short fall after 1.
+          const int w=r2<59000?((r2-46200)*1311)>>16:r2<65536?256:256-(((r2-65536)*2893)>>16);
+          int kq=(kBase*w)>>8;
+          if(lip)kq=std::max(kq,kLip);
+          if(faint)kq=std::min(256,kq*2);
+          reaperAdd(x+ox[z][side],y+oy[z][side],lip || r2>62000?boneInk:shade2,kq);
         }
       }
     }

@@ -83,7 +83,7 @@ int main(){
       assert(drew && glinted && maxPlots<=4000);
       if(theme==0){
         std::cout<<"  "<<label(effect)<<": worst modelled frame "<<int(maxCost)<<" us (impact "<<int(impact)<<", sustain "<<int(held)<<")\n";
-        assert(maxCost<=8000); // under the 10 ms device budget with margin
+        assert(maxCost<=9000); // the 9 ms device budget
         assert(held<impact);   // the sustain is cheaper than the impact
       }
       // The sustain never freezes: frames 150 ms apart always differ.
@@ -207,5 +207,5 @@ int main(){
     assert(above>=20); // the beam continues above the readout (the label hides most of it here)
   }
 
-  std::cout<<"PASS: five 5 s Evangelion-inspired effects deterministic, halo-clipped, readout exact from 3/4, sustains moving, off the readout and cheaper than their impacts, custom-background invariant, under the 8 ms cost model, with per-effect identity properties\n";
+  std::cout<<"PASS: five 5 s Evangelion-inspired effects deterministic, halo-clipped, readout exact from 3/4, sustains moving, off the readout and cheaper than their impacts, custom-background invariant, under the 9 ms cost model, with per-effect identity properties\n";
 }

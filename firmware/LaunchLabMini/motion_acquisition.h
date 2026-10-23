@@ -21,6 +21,8 @@ public:
   struct Snapshot {
     float a[3]={},g[3]={},gravity[3]={},bias[3]={},biasSigma=0;uint64_t accelUs=0,pairedUs=0,fusedUs=0;
     uint32_t accelSamples=0,pairedSamples=0,maxGapUs=0,maxPollUs=0,stackFree=0,gateMisses=0,gaps=0;
+    // Polls that began a period or more late, and the whole periods skipped.
+    uint32_t latePolls=0,missedPolls=0;
     uint32_t fusionSamples=0,fusionResets=0,maxFusionUs=0;
     uint32_t fifoReads=0,fifoErrors=0,fifoSkipped=0,fifoAnchors=0,fifoMaxBytes=0,quietPolls=0;float fifoPeriodUs=0;
     // Error causes: length read, data read (chunk offset), parse, oversize length.
@@ -177,8 +179,21 @@ private:
         xSemaphoreGive(ringGate_);
       }
       span.ringUs=std::max(span.ringUs,uint32_t(esp_timer_get_time()-publishStart));
-      vTaskDelayUntil(&last,pdMS_TO_TICKS(5));
+      pace(last,s);
     }
+  }
+  // One poll per 5 ms. Once a period or more behind, FreeRTOS's delay-until
+  // returns without blocking, so a loop held up for long (gate waits, an
+  // overloaded core 0) would run back-to-back through every missed period
+  // and keep IDLE0 off core 0 until the task watchdog resets the chip. The
+  // FIFO already holds the samples those polls would have read, so a late
+  // poll skips them: the period restarts now, after a one-tick block.
+  static constexpr TickType_t PERIOD=pdMS_TO_TICKS(5);
+  static void pace(TickType_t &last,Snapshot &s) {
+    if(xTaskDelayUntil(&last,PERIOD)==pdTRUE)return;
+    const TickType_t now=xTaskGetTickCount();
+    ++s.latePolls;s.missedPolls+=(now-last)/PERIOD;
+    last=now;vTaskDelay(1);
   }
   // Reads every complete FIFO byte. Returns 0 when empty or on a failed
   // length read, which consumes nothing and is retried on the next poll.

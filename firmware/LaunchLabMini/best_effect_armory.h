@@ -31,6 +31,12 @@ inline void Renderer::armoryPlot(int x,int y,const Ink &c,int kq) {
 inline void Renderer::armoryTo(int &lx,int &ly,int x,int y,const Ink &c,int kq) {
   const int dx=x-lx,dy=y-ly,n=std::max(std::abs(dx),std::abs(dy));
   if(n==0)return;
+  // A step lying wholly where armoryPlot draws nothing (the header rows,
+  // below the bottom, off either side) only moves the path: the great
+  // gear behind the readout stepped its upper half point by point for
+  // nothing.
+  if(std::max(ly,y)<=number_.y1+HALO || std::min(ly,y)>bottom_ || std::max(lx,x)<0 || std::min(lx,x)>=w_){lx=x;ly=y;return;}
+  touches_+=uint32_t(n);
   if(n>1) {
     // Fixed-point steps in Q16, one integer division per call: a float
     // division per pixel is a library call on the device.
@@ -137,11 +143,13 @@ inline void Renderer::armorySwordland(float t) {
   if(horizonK>.02f) {
     const int y=roundi(yh);
     for(int x=0;x<w_;++x) {
+      ++touches_;
       const float d=std::fabs(x-cx);if(d>R)continue;
       const float front=std::max(0.0f,1-(R-d)*(1/16.0f))*ringK;
-      const float haze=.7f+.3f*(noise(x*28,frame*40,401)*(1/255.0f));
-      // Dotted once the front has passed: a heat shimmer, at half the cost.
+      // Dotted once the front has passed: a heat shimmer, at half the cost
+      // (tested before the haze's noise, which a skipped pixel never needs).
       if(front<.05f && ((x+frame)&1))continue;
+      const float haze=.7f+.3f*(noise(x*28,frame*40,401)*(1/255.0f));
       armoryPlot(x,y,inkOf(mixed(rust,ember,front)),q8(horizonK*(.42f*haze+.6f*front)));
     }
   }
@@ -456,10 +464,22 @@ inline void Renderer::armorySunblade(float t) {
     // Its gold trailing edge thins away as it reaches the header.
     armoryArc(hx,hy,front-2.5f,A0-.12f,A1+.12f,goldI,q8(.8f*k*(1-smooth((front-len-6)*(1/14.0f)))));
     // Glyphs inside the band are pulled toward pale gold (brighten only).
+    // Each row visits only its one or two runs inside the band (from two
+    // exact integer square roots) instead of every pixel of the readout:
+    // the per-pixel loop cost about a millisecond on the device.
     const int lo=int((front-3.5f)*(front-3.5f)),hi=int((front+.5f)*(front+.5f)),k8=q8(.85f*k);
+    const int cx=roundi(hx),cy=roundi(hy);
+    // The largest a with a*a<=v (v>=0), from a float root corrected exactly.
+    auto isqrt=[this](int v){int a=int(std::sqrt(float(v)));++roots_;while(a*a>v)--a;while((a+1)*(a+1)<=v)++a;return a;};
     for(int y=b.y0;y<=b.y1;++y) {
-      const int dy=y-roundi(hy),dy2=dy*dy;if(dy2>hi)continue;
-      for(int x=b.x0;x<=b.x1;++x){const int dx=x-roundi(hx),d=dx*dx+dy2;if(d>=lo && d<=hi)sorcHeat(x,y,paleI,k8);}
+      const int dy=y-cy,dy2=dy*dy;if(dy2>hi)continue;
+      // |dx| from `inner` (the smallest with dx*dx+dy2>=lo) to `outer`.
+      const int outer=isqrt(hi-dy2),need=lo-dy2;
+      int inner=0;if(need>0){inner=isqrt(need);if(inner*inner<need)++inner;}
+      if(inner>outer)continue;
+      // Left of the centre column, then from it (or past the inner edge) rightward.
+      for(int x=std::max(b.x0,cx-outer),x1=std::min(b.x1,cx-std::max(inner,1));x<=x1;++x)sorcHeat(x,y,paleI,k8);
+      for(int x=std::max(b.x0,cx+inner),x1=std::min(b.x1,cx+outer);x<=x1;++x)sorcHeat(x,y,paleI,k8);
     }
   }
   glint(t,SWING+.18f,.4f);

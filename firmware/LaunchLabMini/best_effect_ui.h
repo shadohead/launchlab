@@ -89,13 +89,8 @@ public:
     for(auto &s:stage)s=0;
     markAt_=BEST_EFFECT_CYCLES();
 #endif
-    if(!s.pixels || s.width<64 || s.width>MAX_W || s.height<NUMBER_BOTTOM+HALO+1 || s.height>MAX_H ||
-       elapsed>=Appearance::duration(effect))return;
-    px_=s.pixels;w_=s.width;h_=s.height;
-    // A new stamp invalidates every cached mask row without clearing them.
-    if(++stamp_==0){for(auto &r:inkStamp_)r.fill(0);for(auto &r:blockedStamp_)r.fill(0);stamp_=1;}
-    findNumber(anchor);
-    accent_=rgb(accent);
+    if(!fits(s) || elapsed>=Appearance::duration(effect))return;
+    prepare(s,anchor,accent);
     const float t=elapsed*.001f;
     sorcMark(0);
     using Appearance::Effect;
@@ -138,6 +133,42 @@ public:
       }
     }
   }
+  // The device cost of the primitives a frame is built from, for HIL
+  // `!effectbench`: the cycles `clock` (the cycle counter) reads over `n`
+  // calls of each. BENCH_LOOP is the bare loop every other one includes. The
+  // light lands on `s` (the recap), so the caller restores it afterwards.
+  enum Bench:uint8_t {BENCH_LOOP,BENCH_SINE,BENCH_RND,BENCH_ROUNDI,BENCH_FLOORI,BENCH_Q8,BENCH_SMOOTH,BENCH_DIVIDE,
+    BENCH_COLOUR,BENCH_ROOT,BENCH_WEAK,BENCH_BLOCKED,BENCH_ADDW,BENCH_PLOT,BENCH_TOUCH,BENCH_OPS};
+  static constexpr const char *BENCH_NAMES[BENCH_OPS]={"loop","sine","rnd","roundi","floori","q8","smooth","divide",
+    "colour","root","weak","blocked","addw","plot","touch"};
+  template<class Clock> bool bench(const Surface &s,uint16_t accent,uint16_t background,uint32_t n,Clock clock,uint32_t cycles[BENCH_OPS]) {
+    plots_=probes_=scans_=fills_=spans_=touches_=roots_=0;bg_=store(background);
+    if(!fits(s) || n==0)return false;
+    prepare(s,Anchor(),accent);bottom_=h_-1;
+    // A pixel of the anchor's ink, and open background with no UI near it.
+    int ix=-1,iy=-1,ox=-1,oy=-1;
+    for(int y=number_.y0;y<=number_.y1 && ix<0;++y)for(int x=number_.x0;x<=number_.x1;++x)if(px_[y*w_+x]!=bg_){ix=x;iy=y;break;}
+    for(int y=number_.y1+4*HALO;y<h_ && ox<0;++y)for(int x=8;x<w_-8;++x)if(!blocked(x,y) && !blocked(x+1,y)){ox=x;oy=y;break;}
+    if(ix<0 || ox<0)return false;
+    volatile float sinkF=0;volatile int sinkI=0;const float inv=1.0f/n;int x=0;
+    auto measure=[&](Bench op,auto body){const uint32_t start=clock();for(uint32_t i=0;i<n;++i)body(i);cycles[op]=clock()-start;};
+    measure(BENCH_LOOP,[&](uint32_t i){sinkF=sinkF+float(i)*.37f;});
+    measure(BENCH_SINE,[&](uint32_t i){sinkF=sinkF+sine(float(i)*.37f);});
+    measure(BENCH_RND,[&](uint32_t i){sinkF=sinkF+rnd(i,7);});
+    measure(BENCH_ROUNDI,[&](uint32_t i){sinkI=sinkI+roundi(float(i)*.37f);});
+    measure(BENCH_FLOORI,[&](uint32_t i){sinkI=sinkI+floori(float(i)*.37f);});
+    measure(BENCH_Q8,[&](uint32_t i){sinkI=sinkI+q8(float(i)*inv);});
+    measure(BENCH_SMOOTH,[&](uint32_t i){sinkF=sinkF+smooth(float(i)*inv);});
+    measure(BENCH_DIVIDE,[&](uint32_t i){sinkF=sinkF+1.0f/(float(i)+1.5f);});
+    measure(BENCH_COLOUR,[&](uint32_t i){sinkI=sinkI+inkOf(mixed(WHITE,accent_,float(i)*inv)).g;});
+    measure(BENCH_ROOT,[&](uint32_t i){sinkF=sinkF+root(float(i)+1.5f);});
+    measure(BENCH_WEAK,[&](uint32_t i){addw(ox,oy,WHITE_INK,int(i&3));});
+    measure(BENCH_BLOCKED,[&](uint32_t){addw(ix,iy,WHITE_INK,64);});
+    measure(BENCH_ADDW,[&](uint32_t i){addw(ox,oy,WHITE_INK,8+int(i&7));});
+    measure(BENCH_PLOT,[&](uint32_t i){plot(ox+.3f,oy-.2f,WHITE,.03f+float(i&7)*.01f);});
+    measure(BENCH_TOUCH,[&](uint32_t){++touches_;sinkI=sinkI+(px_[oy*w_+x]!=bg_);if(++x==w_)x=0;});
+    return true;
+  }
   // Pixels written by the last draw; a portable cost measure for previews.
   uint32_t plots()const{return plots_;}
   // The last draw's other work, for the host cost model: light probes
@@ -153,10 +184,13 @@ public:
   // edge step (each about as costly on the device), and float square roots.
   uint32_t touches()const{return touches_;}
   uint32_t roots()const{return roots_;}
-  // The last draw's modelled device time in us (see the cost model above).
-  double modelledUs()const{
-    return 1100+1.8*plots_+probes_+13.0*scans_+.082*fills_+1.21*spans_+.36*touches_+2.3*roots_;
+  // The last draw's modelled device time in us (see the cost model above),
+  // plus the speaker's task on the drawing core while a sound plays
+  // (`sounding`: Sound Low against Off, the same frames, 2026-10-22).
+  double modelledUs(bool sounding=false)const{
+    return 1100+1.8*plots_+probes_+13.0*scans_+.082*fills_+1.21*spans_+.36*touches_+2.3*roots_+(sounding?SOUND_US:0);
   }
+  static constexpr double SOUND_US=400;
   // Until when (ms) an effect may hide the UI below its anchor's halo: it
   // then owns those rows outright and gives them back exactly at that time,
   // well before 3/4 of its duration; 0 for every effect that never does.
@@ -262,6 +296,7 @@ private:
   void spark(float x,float y,const Rgb &col,float k,float radius) {
     const int r=int(radius+.999f),ix=roundi(x),iy=roundi(y),kq=q8(k);const float inv=1/(radius*radius);
     const Ink c=inkOf(col);
+    touches_+=uint32_t((2*r+1)*(2*r+1));
     for(int dy=-r;dy<=r;++dy)for(int dx=-r;dx<=r;++dx) {
       const float ex=ix+dx-x,ey=iy+dy-y;const int f=q8(1-(ex*ex+ey*ey)*inv);
       if(f>0)addw(ix+dx,iy+dy,mixedInk(c,WHITE_INK,(f*f)>>8),(kq*f)>>8);
@@ -287,6 +322,7 @@ private:
       const float centre=head-(y-number_.cy())*.45f;
       const int c8=q8(centre);
       for(int x=std::max(0,int(centre-7));x<=std::min(w_-1,int(centre+7));++x) {
+        ++touches_;
         uint16_t &p=px_[y*w_+x];if(p==bg_)continue;
         // Band weight (1-|x-centre|/7)*0.9 in Q8.
         const int k=((7*256-std::abs(x*256-c8))*33)>>8;if(k<=0)continue;
@@ -346,6 +382,14 @@ private:
   }
   // The anchor's ink bounds frame every effect; each row stops at its first
   // ink pixel from either side.
+  bool fits(const Surface &s)const{return s.pixels && s.width>=64 && s.width<=MAX_W && s.height>=NUMBER_BOTTOM+HALO+1 && s.height<=MAX_H;}
+  void prepare(const Surface &s,const Anchor &anchor,uint16_t accent) {
+    px_=s.pixels;w_=s.width;h_=s.height;
+    // A new stamp invalidates every cached mask row without clearing them.
+    if(++stamp_==0){for(auto &r:inkStamp_)r.fill(0);for(auto &r:blockedStamp_)r.fill(0);stamp_=1;}
+    findNumber(anchor);
+    accent_=rgb(accent);
+  }
   void findNumber(const Anchor &a) {
     const int top=std::max(0,a.top),bottom=std::min(h_-1,a.bottom),first=std::max(0,a.left),last=std::min(w_-1,a.right);
     int x0=w_,y0=h_,x1=-1,y1=-1;
@@ -447,11 +491,17 @@ private:
       // about a third fewer cells pass, which is most of the saving.
       const int tongue=int(height*(10+19*noise(x*18,sway,11)*(1/255.0f))),inv=65536/std::max(1,tongue);
       for(int y=base;y>=0 && base-y<=tongue+2;y-=2) {
-        if(blocked(x,y) && blocked(x+1,y) && blocked(x,y+1) && blocked(x+1,y+1))continue;
-        const int rise=base-y,n=(158*noise(x*31,y*26+rise1,12)+97*noise(x*67,y*54+rise2,13))>>8;
+        ++touches_;
+        const int rise=base-y;
         // heat=((1.12-rise/tongue)(.45+.85n)-.1)*smooth(rise/12), all in Q8;
         // the smoothstep fades the bottom rows so the fire has no hard floor.
-        int heat=((((287-((rise*inv)>>8))*(115+((218*n)>>8)))>>8)-26)*detail::SMOOTH[std::min(255,rise*21)]>>8;
+        auto heatAt=[&](int n){return ((((287-((rise*inv)>>8))*(115+((218*n)>>8)))>>8)-26)*detail::SMOOTH[std::min(255,rise*21)]>>8;};
+        // The hottest the cell can be (noise 0 or 255, whichever is hotter):
+        // a cell that cannot pass needs neither its mask nor its noise.
+        if(std::max(heatAt(0),heatAt(255))<=34)continue;
+        if(blocked(x,y) && blocked(x+1,y) && blocked(x,y+1) && blocked(x+1,y+1))continue;
+        const int n=(158*noise(x*31,y*26+rise1,12)+97*noise(x*67,y*54+rise2,13))>>8;
+        int heat=heatAt(n);
         if(heat<=34)continue;
         heat=std::min(255,heat);
         const Ink c=fire(heat);const int k=std::min(256,(heat*666)>>8);
@@ -618,9 +668,15 @@ private:
     // The four-band echoes step a little wider (about 2 px, like the main
     // rings at their cap) to pay for the extra stroke.
     const int n=bands==4?std::min(300,std::max(24,int(r*2.6f))):std::min(460,std::max(24,int(r*3.8f)));const float step=2*HALF_TURN/n;
-    for(int i=0;i<n;++i) {
+    // Along each ray the strokes move outward from the readout, which is on
+    // screen, so where the innermost stroke is off screen every stroke is:
+    // only the arcs where it can be on screen are stepped (on the device
+    // the off-screen points of a large ring cost about 2 ms a frame).
+    int arcs[6][2];const int narcs=ringArcs(cx,cy,std::max(1.0f,r-width*off[nb-1]),.72f,n,arcs);
+    for(int arc=0;arc<narcs;++arc)for(int i=arcs[arc][0];i<=arcs[arc][1];++i) {
       const float a=i*step,ca=cosine(a),sa=sine(a);
       for(int band=0;band<nb;++band) {
+        ++touches_;
         const float rr=r-width*off[band];if(rr<1)continue;
         // Squashed to the screen's perspective, like the burst lines: the
         // ring touches about a quarter fewer mask rows than a circle.
@@ -629,6 +685,46 @@ private:
         addw(roundi(x),roundi(y),mixedInk(WHITE_INK,accent,mix[band]),q8(k*bf[band]));
       }
     }
+  }
+
+  // The steps i (of n round the circle) where a point at radius r from
+  // (cx, cy), squashed vertically by `squash`, can be on screen, as up to
+  // six increasing ranges with two steps of margin; the count is returned.
+  int ringArcs(float cx,float cy,float r,float squash,int n,int (&arcs)[6][2])const {
+    constexpr float TURN=2*HALF_TURN;
+    // Angles where x = cx + r cos a lies on the screen, then y = cy + r squash sin a.
+    float xa[2][2],ya[3][2];int nx=0,ny=0;
+    const float c0=-cx/r,c1=(w_-cx)/r,s0=-cy/(r*squash),s1=(bottom_+1-cy)/(r*squash);
+    if(c0<=-1 && c1>=1){xa[0][0]=0;xa[0][1]=TURN;nx=1;}
+    else {
+      const float lo=std::acos(std::min(1.0f,std::max(-1.0f,c1))),hi=std::acos(std::min(1.0f,std::max(-1.0f,c0)));
+      xa[0][0]=lo;xa[0][1]=hi;xa[1][0]=TURN-hi;xa[1][1]=TURN-lo;nx=2;
+    }
+    if(s0<=-1 && s1>=1){ya[0][0]=0;ya[0][1]=TURN;ny=1;}
+    else {
+      const float lo=std::asin(std::min(1.0f,std::max(-1.0f,s0))),hi=std::asin(std::min(1.0f,std::max(-1.0f,s1)));
+      // sin a in [s0, s1]: a in [lo, hi] and [pi - hi, pi - lo], kept in
+      // 0..2pi (a range below 0 wraps to the top end).
+      auto add=[&](float a0,float a1){if(a0<=a1){ya[ny][0]=a0;ya[ny][1]=a1;++ny;}};
+      if(hi<0)add(TURN+lo,TURN+hi);
+      else if(lo<0){add(0,hi);add(TURN+lo,TURN);}
+      else add(lo,hi);
+      add(HALF_TURN-hi,HALF_TURN-lo);
+    }
+    const float perStep=n/TURN;int count=0;
+    for(int i=0;i<nx;++i)for(int j=0;j<ny;++j) {
+      const float a0=std::max(xa[i][0],ya[j][0]),a1=std::min(xa[i][1],ya[j][1]);if(a0>a1)continue;
+      const int s=std::max(0,int(a0*perStep)-2),e=std::min(n-1,int(a1*perStep)+2);
+      arcs[count][0]=s;arcs[count][1]=e;++count;
+    }
+    // In order, without overlaps, so no point is stepped twice.
+    for(int k=1;k<count;++k)for(int j=k;j>0 && arcs[j-1][0]>arcs[j][0];--j){std::swap(arcs[j-1][0],arcs[j][0]);std::swap(arcs[j-1][1],arcs[j][1]);}
+    int merged=0;
+    for(int k=0;k<count;++k) {
+      if(merged && arcs[k][0]<=arcs[merged-1][1]+1)arcs[merged-1][1]=std::max(arcs[merged-1][1],arcs[k][1]);
+      else{arcs[merged][0]=arcs[k][0];arcs[merged][1]=arcs[k][1];++merged;}
+    }
+    return merged;
   }
 
   // ---- Lightning: bolts strike from the readout down behind the replay ------
@@ -840,6 +936,8 @@ private:
       const int cutX=(cx2*S8-(2*y-cy2)*C8)/(2*S8),srcCutX=(cx2*S8-(2*sy-cy2)*C8)/(2*S8)+dx;
       const int edge=std::max(cutX,srcCutX);
       const int from=upper?left:std::max(left,std::min(cutX,srcCutX)-1),to=upper?std::min(right,edge+1):right;
+      // Every pixel of this half's span is visited, written or not.
+      touches_+=uint32_t(std::max(0,to-from+1));
       for(int x=xstep>0?from:to;x>=from && x<=to;x+=xstep) {
         const int side=(2*x-cx2)*S8+(2*y-cy2)*C8,sx=x-dx;
         // Upper half: side < 0; lower: side >= 0. The source is side-shift.

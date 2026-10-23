@@ -18,7 +18,9 @@
 // "g<pin>\n" and "E<id>" may be typed key by key (TYPING_MS between keys),
 // except that an id's second digit must follow its first within QUIET_MS;
 // a pin needs its newline. Inside a continuous burst of other bytes nothing
-// can qualify.
+// can qualify. The rest of a line a transfer refused runs nothing either, not
+// even K or R: an R in a refused backup line started another restore, which
+// took the commands after it.
 class UsbCommandGuard {
 public:
   static constexpr uint32_t QUIET_MS=20,TYPING_MS=2000;
@@ -76,13 +78,26 @@ public:
     else {chain_=false;lineStart_=false;}
     chainNext_=false;
   }
+  // A transfer (restore, theme, milestone or effect request) refused the
+  // line it was reading: drop() takes the rest of that line.
+  void refused(uint32_t now){dropping_=true;dropMs_=now;}
+  // Before feed() and any other parser: true when `c` belongs to a refused
+  // line. The line ends with its newline, or with QUIET_MS of quiet if the
+  // host stopped in the middle of it.
+  bool drop(char c,uint32_t now) {
+    if(!dropping_)return false;
+    if(emptySeen_ && int32_t(emptyMs_-dropMs_)>=int32_t(QUIET_MS)){dropping_=false;return false;}
+    dropMs_=now;
+    if(c=='\n' || c=='\r'){dropping_=false;lineStart_=true;chain_=chainNext_=false;}
+    return true;
+  }
   // Call whenever the receive queue is seen empty (each pass).
   void idle(uint32_t now){emptyMs_=now;emptySeen_=true;}
-  void cancel(){used_=0;pending_[0]=0;chain_=chainNext_=otherLine_=false;}
+  void cancel(){used_=0;pending_[0]=0;chain_=chainNext_=otherLine_=dropping_=false;}
 private:
   char pending_[MAX+1]={};unsigned used_=0;
-  bool seen_=false,lineStart_=true,chain_=false,chainNext_=false,otherLine_=false,otherBoundary_=false;
-  uint32_t lastMs_=0,emptyMs_=0;bool emptySeen_=false;
+  bool seen_=false,lineStart_=true,chain_=false,chainNext_=false,otherLine_=false,otherBoundary_=false,dropping_=false;
+  uint32_t lastMs_=0,emptyMs_=0,dropMs_=0;bool emptySeen_=false;
   // The queue was seen empty at least `ms` after the last byte.
   bool quietFor(uint32_t ms)const {return !seen_ || (emptySeen_ && int32_t(emptyMs_-lastMs_)>=int32_t(ms));}
   // How long a pending command may wait for its next key.

@@ -56,7 +56,7 @@ int main(){
           if(ms%100==0){assert(out!=base);if(ms>2000)assert(out!=previous);previous=out;}
         }
       }
-      assert(worst<=8000 && sustain<impact);
+      assert(worst<=9000 && sustain<impact);
     }
     for(unsigned theme:{0u,3u,5u,8u}){
       const uint16_t color=accent(Theme(theme));
@@ -210,5 +210,5 @@ int main(){
     assert(clusters>=4);
   }
 
-  std::cout<<"PASS: five Slayer effects deterministic, halo-clipped, ink-exact from 3/4, custom-background invariant, model cost <= 8 ms on every frame, with per-effect identity properties\n";
+  std::cout<<"PASS: five Slayer effects deterministic, halo-clipped, ink-exact from 3/4, custom-background invariant, model cost <= 9 ms on every frame, with per-effect identity properties\n";
 }

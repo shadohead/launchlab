@@ -870,5 +870,20 @@
     ],
     "published_channel": "beta",
     "channel_note": "published as beta, promoted to stable 2026-10-22"
+  },
+  {
+    "release": "0.18.1-sticks3-anime-pm",
+    "runtime_version": "0.18.1-sticks3-anime-pm",
+    "board": "M5StickS3 K150",
+    "date": "2026-10-22",
+    "binary": "LaunchLabMini.ino.bin",
+    "binary_bytes": 1512848,
+    "sha256": "4fa5060703ebfbe36ae782c550437c0c9f3e14a2439617cb4444cf78d3e83d89",
+    "application_offset": "0x10000",
+    "profiles": [
+      "qre1113",
+      "tcrt5000"
+    ],
+    "published_channel": "beta"
   }
 ]

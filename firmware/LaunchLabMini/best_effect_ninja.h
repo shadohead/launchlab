@@ -770,6 +770,7 @@ inline void Renderer::ninjaSummon(float t) {
         for(auto &word:lit[i])word=0;
         if(K[i]<=.02f)continue;
         const float r=R[i],dy=y-Y[i];if(dy*dy>=r*r)continue;
+        ++touches_;
         const float span=ninja::root(r*r-dy*dy);
         const int xa=std::max(0,int(X[i]-span)+1),xb=std::min(w_-1,int(X[i]+span));
         if(xa>xb)continue;
@@ -822,11 +823,14 @@ inline void Renderer::ninjaSummon(float t) {
     // The circle's points by rotation, one step per point.
     float cd,sd;ninja::cosSin(2*HALF_TURN/n,cd,sd);
     float ca=1,sa=0;
+    touches_+=uint32_t(n);
+    // Hidden points come in runs: the puff that hid the last point is tried first.
+    int last=0;
     for(int s=0;s<n;++s,ninja::turn(ca,sa,cd,sd)) {
       const float y=Y[i]+r*sa;if(y<number_.y1+2)continue;
       const int w=(kq*(205-int(50*sa)))>>8;if(w<5)continue;
-      bool inside=false;
-      for(int k=0;k<nearN && !inside;++k)inside=ca*ux[k]+sa*uy[k]>cut[k];
+      bool inside=nearN && ca*ux[last]+sa*uy[last]>cut[last];
+      for(int k=0;k<nearN && !inside;++k)if(k!=last && ca*ux[k]+sa*uy[k]>cut[k]){inside=true;last=k;}
       if(!inside)addw(ninja::Mask::floorOf(X[i]+r*ca+.5f),ninja::Mask::floorOf(y+.5f),rim,w);
     }
   }

@@ -5,6 +5,7 @@
 #include "best_effect_sound.h"
 #include "motion_acquisition.h"
 #include "pm1_idle.h"
+#include "sound_sync.h"
 
 // Plays personal-best sounds on the StickS3 speaker (ES8311 codec and amp).
 // They are powered only while a sound plays: M5.Speaker.begin() before and
@@ -21,8 +22,14 @@ class BestEffectSpeaker {
 public:
   explicit BestEffectSpeaker(StickS3MotionAcquisition &imu):imu_(imu){}
   // Call once after M5.begin() with the internal speaker configured.
+  // Mono output: M5Unified sets the StickS3 up as stereo, so its task mixed
+  // two identical channels from our mono sounds, refilling the DMA on the UI
+  // core during effect frames (0.6-1 ms of a worst frame with sound on). Mono
+  // halves that mixing at the same loudness (mono folds left and right
+  // without the stereo gain shift) and the same I2S frames (the S3's mono
+  // slot mode sends each sample on both slots, so the ES8311 sees no change).
   void configure() {
-    auto c=M5.Speaker.config();c.task_pinned_core=1;M5.Speaker.config(c);
+    auto c=M5.Speaker.config();c.task_pinned_core=1;c.stereo=false;M5.Speaker.config(c);
     configured_=M5.Speaker.isEnabled();
   }
   // Renders up to `slice` more samples of the effect's sound into its own
@@ -47,23 +54,31 @@ public:
     return prepared(e);
   }
   bool prepared(Appearance::Effect e)const{return Appearance::drawn(unsigned(e)) && rendered_[Appearance::drawnIndex(e)];}
-  bool play(Appearance::Effect e,Appearance::Sound level) {
+  // Powers the codec if it is off (under the IMU owner's gate).
+  bool power() {
+    if(begun_)return true;
+    if(!imu_.lock()){++lockMisses_;return false;}
+    const int64_t started=esp_timer_get_time();
+    if(!pm1Idle().ensureAwake()){imu_.unlock();return false;}
+    const bool ok=M5.Speaker.begin();
+    beginUs_=std::max(beginUs_,uint32_t(esp_timer_get_time()-started));imu_.unlock();
+    begun_=ok;return ok;
+  }
+  // Starts the effect's sound `skip` samples in; false if it is not ready,
+  // the codec cannot start or nothing is left.
+  bool play(Appearance::Effect e,Appearance::Sound level,size_t skip=0) {
     // Rendering is the sketch's job, a slice per idle pass; play only what is ready.
-    if(level==Appearance::Sound::Off || !prepared(e))return false;
-    if(!begun_) {
-      if(!imu_.lock()){++lockMisses_;return false;}
-      const int64_t started=esp_timer_get_time();
-      if(!pm1Idle().ensureAwake()){imu_.unlock();return false;}
-      const bool ok=M5.Speaker.begin();
-      beginUs_=std::max(beginUs_,uint32_t(esp_timer_get_time()-started));imu_.unlock();
-      if(!ok)return false;
-      begun_=true;
-    }
+    if(level==Appearance::Sound::Off || !prepared(e) || skip>=BestEffectSound::samples(e) || !power())return false;
     M5.Speaker.setVolume(level==Appearance::Sound::High?HIGH_VOLUME:LOW_VOLUME);
     const unsigned i=Appearance::drawnIndex(e);
-    if(!M5.Speaker.playRaw(buffers_[i],BestEffectSound::samples(e),BestEffectSound::RATE,false,1,0,true))return false;
+    outputUs_=SoundSync::outputUs(M5.Speaker.isPlaying());
+    if(!M5.Speaker.playRaw(buffers_[i]+skip,BestEffectSound::samples(e)-skip,BestEffectSound::RATE,false,1,0,true))return false;
     used_[i]=++clock_;playingIndex_=i;++plays_;return true;
   }
+  // The latency of the last play's first sample (SoundSync::outputUs), and
+  // what the next would have now.
+  uint32_t outputUs()const{return outputUs_;}
+  uint32_t nextOutputUs(){return SoundSync::outputUs(begun_ && M5.Speaker.isPlaying());}
   // Silence now: no bus traffic, safe during a measured pull.
   void stop(){if(begun_ && M5.Speaker.isPlaying()){M5.Speaker.stop();++stops_;}}
   // Powers the codec down once silent, but never while a pull is measured.
@@ -110,5 +125,5 @@ private:
   BestEffectSound::Synth synth_{Appearance::Effect::Off,0};
   Appearance::Effect target_=Appearance::Effect::Off;
   bool configured_=false,begun_=false;
-  uint32_t plays_=0,stops_=0,lockMisses_=0,renderUs_=0,maxSliceUs_=0,beginUs_=0,endUs_=0;
+  uint32_t plays_=0,stops_=0,lockMisses_=0,renderUs_=0,maxSliceUs_=0,beginUs_=0,endUs_=0,outputUs_=0;
 };

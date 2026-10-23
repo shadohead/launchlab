@@ -33,9 +33,15 @@ inline void Renderer::shadeAnchor(const Ink &target,int k8,bool lighten) {
   // The readout is drawn in one colour, so the last result is remembered:
   // the per-pixel channel arithmetic was most of this pass's cost.
   uint16_t lastIn=bg_,lastOut=bg_;
+  // Background pixels are skipped two at a time (one 32-bit read for an
+  // aligned pair), as most of the box is background.
+  typedef uint32_t __attribute__((may_alias)) Pair;
+  const uint32_t both=uint32_t(bg_)*0x10001u;
   for(int y=b.y0;y<=b.y1;++y) {
     uint16_t *row=px_+y*w_;
     for(int x=b.x0;x<=b.x1;++x) {
+      ++touches_;
+      if(!(reinterpret_cast<uintptr_t>(row+x)&2) && x<b.x1 && *reinterpret_cast<const Pair *>(row+x)==both){++x;continue;}
       const uint16_t p=row[x];if(p==bg_)continue;
       if(p!=lastIn) {
         const unsigned v=load(p);
@@ -366,6 +372,7 @@ inline void Renderer::eclipse(float t) {
   if(t<COVER+.06f) {
     const float edge=-1+2.1f*smooth(t/COVER),fadeOut=t<COVER?1:1-(t-COVER)/.06f;
     const int n=int(r*6.4f);
+    touches_+=uint32_t(n);
     for(int i=0;i<n;++i) {
       const float a=i*(2*HALF_TURN/n),lit=(cosine(a-SUN)-edge)*(1/.35f);if(lit<=0)continue;
       const float k=std::min(1.0f,lit)*fadeOut,ca=cosine(a),sa=sine(a);

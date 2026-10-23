@@ -11,6 +11,9 @@
 #include <cstring>
 #include <cstdlib>
 #include <nvs.h>
+#include <esp_cpu.h>
+#include <esp_heap_caps.h>
+#include "esp_freertos_hooks.h"
 #include "esp_random.h"
 #include "esp_system.h"
 #include "hil_optical.h"
@@ -19,7 +22,8 @@
 #include "hil_resync.h"
 
 namespace Hil {
-static constexpr size_t RX_BUFFER=8192,UPLOAD_CHUNK=4096;
+// The sketch's RX queue is the production one (USB_RX_BUFFER_BYTES): HIL never resizes it.
+static constexpr size_t UPLOAD_CHUNK=USB_RX_BUFFER_BYTES/2;
 inline uint32_t bootId=0;
 inline uint32_t uploads=0,uploadErrors=0;
 // After any failed upload, input is swallowed until "!sync" or 1 s of quiet.
@@ -41,6 +45,36 @@ inline void reply(const char *format,...) {
   if(length>0 && sent<size_t(length))++txShort;
 }
 inline void replyLine(const char *text){reply("%s\n",text);}
+
+// ---- IDLE0 starvation probe. The task watchdog resets the chip once IDLE0
+// has not run for 5 s; this keeps the longest gap between IDLE0 runs so a
+// scenario can assert a margin rather than mere survival. The hook runs
+// once per tick in IDLE0 and is its only writer; !idle0 reset asks it to
+// restart the maximum.
+inline volatile uint32_t idle0LastUs=0,idle0MaxGapUs=0;
+inline std::atomic<bool> idle0Restart{false};
+inline bool idle0Hook() {
+  const uint32_t now=uint32_t(esp_timer_get_time());
+  if(idle0Restart.exchange(false))idle0MaxGapUs=0;
+  else if(idle0LastUs && now-idle0LastUs>idle0MaxGapUs)idle0MaxGapUs=now-idle0LastUs;
+  idle0LastUs=now;return true;
+}
+// Every task's CPU time (run-time stats clock: esp_timer us) and core, for
+// measuring a core's load as the difference between two reports.
+inline void tasks() {
+  constexpr UBaseType_t MAX=40;static TaskStatus_t list[MAX];
+  uint32_t total=0;const UBaseType_t count=uxTaskGetSystemState(list,MAX,&total);
+  for(UBaseType_t i=0;i<count;++i) {
+#if configTASKLIST_INCLUDE_COREID
+    const int core=list[i].xCoreID==tskNO_AFFINITY?-1:int(list[i].xCoreID);
+#else
+    const int core=-2;
+#endif
+    Hil::reply("HIL_TASK name=%s core=%d priority=%u run_us=%lu stack_free=%u\n",list[i].pcTaskName,core,
+      unsigned(list[i].uxCurrentPriority),(unsigned long)list[i].ulRunTimeCounter,unsigned(list[i].usStackHighWaterMark));
+  }
+  Hil::reply("HIL_TASKS count=%u total_us=%lu now_us=%lld\n",unsigned(count),(unsigned long)total,(long long)esp_timer_get_time());
+}
 
 // ---- NVS write faults (linker --wrap of the Preferences setters).
 struct NvsFaults {
@@ -84,7 +118,7 @@ inline const char *resetName(esp_reset_reason_t r) {
 inline uint32_t fnv(const uint8_t *p,size_t n,uint32_t h=2166136261u){for(size_t i=0;i<n;++i)h=(h^p[i])*16777619u;return h;}
 
 // Binary upload with per-chunk acknowledgement. HWCDC drops bytes when its RX
-// queue is full, so the host sends one chunk (<= RX_BUFFER/2) per ACK.
+// queue is full, so the host sends one chunk (<= USB_RX_BUFFER_BYTES/2) per ACK.
 inline bool receive(uint8_t *out,size_t bytes,uint32_t expected) {
   // A partial USB packet can sit in the TX buffer until more output follows:
   // flush every line the host waits on before it may send.
@@ -161,6 +195,7 @@ static void hilGateTask(void *arg) {
 
 LOOP_HELPER static void hilBoot() {
   Hil::bootId=esp_random();
+  esp_register_freertos_idle_hook_for_cpu(Hil::idle0Hook,0);
   Hil::reply("HIL_BOOT boot_id=%08lx reset=%s runtime=%s psram_free=%u\n",(unsigned long)Hil::bootId,
     Hil::resetName(esp_reset_reason()),VERSION,unsigned(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
 }
@@ -177,7 +212,7 @@ LOOP_HELPER static void hilCommand(char *line) {
   if(!strcmp(cmd,"sync")){Hil::reply("HIL_SYNC reason=idle discarded=0\n");return;}
   if(!strcmp(cmd,"reset")) {
     Hil::pullStartUs=0;optical().setMode(Hil::Optical::Mode::Pass);imu().setMode(Hil::Imu::Mode::Pass);
-    imu().faults.clear();Hil::nvs.fail=Hil::nvs.slow=0;Hil::nvs.armed=false;Hil::usbIdle=false;
+    imu().faults.clear();Hil::nvs.fail=Hil::nvs.slow=0;Hil::nvs.armed=false;Hil::usbIdle=false;Hil::allowSleep=false;
     Hil::replyLine("HIL_OK reset");return;
   }
   if(!strcmp(cmd,"opt")) {
@@ -297,6 +332,15 @@ LOOP_HELPER static void hilCommand(char *line) {
     snprintf(Hil::nvs.armKey,sizeof(Hil::nvs.armKey),"%s",key && strcmp(key,"*")?key:"");Hil::nvs.armed=true;
     Hil::reply("HIL_OK arm key=%s delay_ms=%ld\n",Hil::nvs.armKey,(long)Hil::nvs.armDelayMs);return;
   }
+  if(!strcmp(cmd,"idle0")) {
+    // !idle0 [reset]: the longest IDLE0 gap since boot or the last reset.
+    const char *what=arg();const bool restart=what && !strcmp(what,"reset");
+    Hil::reply("HIL_IDLE0 max_gap_us=%lu last_age_us=%lu restarted=%d\n",(unsigned long)Hil::idle0MaxGapUs,
+      (unsigned long)(uint32_t(esp_timer_get_time())-Hil::idle0LastUs),restart);
+    if(restart)Hil::idle0Restart=true;
+    return;
+  }
+  if(!strcmp(cmd,"tasks")){Hil::tasks();return;}
   if(!strcmp(cmd,"gate")) {
     const uint32_t ms=uint32_t(num(300));
     const bool ok=xTaskCreatePinnedToCore(hilGateTask,"hil_gate",3072,reinterpret_cast<void *>(uintptr_t(ms)),2,nullptr,1)==pdPASS;
@@ -308,6 +352,57 @@ LOOP_HELPER static void hilCommand(char *line) {
     for(unsigned i=0;i<effectFrames.count && used<sizeof(line)-16;++i)
       used+=snprintf(line+used,sizeof(line)-used," %u:%u",unsigned(effectFrames.elapsed[i]),unsigned(effectFrames.us[i]));
     Hil::replyLine(line);return;
+  }
+  if(!strcmp(cmd,"effectbench")) {
+    // !effectbench [calls] [step_ms], on the recap: the cycles per call of
+    // each primitive the cost model may count, then every drawn effect drawn
+    // over the recap as it stands every step_ms (default 100), each frame
+    // timed (us) and hashed, so builds can be compared frame for frame.
+    const uint32_t calls=uint32_t(std::max(100.0,num(2000))),step=uint32_t(std::max(20.0,num(100)));
+    if(!screenReady || !launchFeedback.shown()){Hil::replyLine("HIL_ERR effectbench needs the recap");return;}
+    const BestEffectUI::Surface surface{static_cast<uint16_t *>(screen.getBuffer()),screen.width(),screen.height()};
+    const size_t bytes=size_t(surface.width)*surface.height*2;
+    uint16_t *recap=static_cast<uint16_t *>(heap_caps_malloc(bytes,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
+    if(!recap){Hil::replyLine("HIL_ERR effectbench no buffer");return;}
+    std::memcpy(recap,surface.pixels,bytes);
+    const Palette::Colors colors=ui();
+    uint32_t cycles[BestEffectUI::Renderer::BENCH_OPS]={};
+    const int64_t benchStart=esp_timer_get_time();const uint32_t cycleStart=esp_cpu_get_cycle_count();
+    const bool benched=bestEffectRenderer.bench(surface,colors.accent,colors.background,calls,[]{return uint32_t(esp_cpu_get_cycle_count());},cycles);
+    const float mhz=float(esp_cpu_get_cycle_count()-cycleStart)/float(std::max<int64_t>(1,esp_timer_get_time()-benchStart));
+    std::memcpy(surface.pixels,recap,bytes);
+    static char line[1024];
+    {
+      size_t used=snprintf(line,sizeof(line),"HIL_EFFECT_BENCH_OPS ok=%d mhz=%.1f calls=%lu",benched,mhz,(unsigned long)calls);
+      for(int op=0;op<BestEffectUI::Renderer::BENCH_OPS && used<sizeof(line)-24;++op) {
+        const float per=float(cycles[op])/calls-(op?float(cycles[0])/calls:0);
+        used+=snprintf(line+used,sizeof(line)-used," %s=%.2f",BestEffectUI::Renderer::BENCH_NAMES[op],per);
+      }
+      Hil::replyLine(line);delay(2);
+    }
+    unsigned frames=0;
+    for(unsigned e=0;e<Appearance::DRAWN;++e) {
+      const Appearance::Effect effect=Appearance::drawnEffect(e);
+      // Frames hashed a 32-bit word at a time (a byte-wise 64-bit hash costs
+      // about 16 ms a frame here).
+      uint32_t hash=2166136261u;size_t used=snprintf(line,sizeof(line),"HIL_EFFECT_BENCH effect=%s frames=%08lx",Appearance::label(effect),0ul);
+      const size_t hashAt=used-8;
+      for(uint32_t ms=step/2;ms<Appearance::duration(effect);ms+=step) {
+        std::memcpy(surface.pixels,recap,bytes);
+        const int64_t started=esp_timer_get_time();
+        bestEffectRenderer.draw(surface,effect,ms,colors.accent,BestEffectUI::Renderer::Anchor(),colors.background);
+        const uint32_t us=uint32_t(esp_timer_get_time()-started);
+        const uint32_t *p=reinterpret_cast<const uint32_t *>(surface.pixels);
+        for(size_t i=0;i<bytes/4;++i)hash=(hash^p[i])*16777619u;
+        if(used<sizeof(line)-16)used+=snprintf(line+used,sizeof(line)-used," %lu:%lu",(unsigned long)ms,(unsigned long)us);
+        ++frames;
+      }
+      char hex[9];snprintf(hex,sizeof(hex),"%08lx",(unsigned long)hash);std::memcpy(line+hashAt,hex,8);
+      Hil::replyLine(line);delay(2); // also lets IDLE1 run
+    }
+    std::memcpy(surface.pixels,recap,bytes);heap_caps_free(recap);dirty=true;
+    Hil::reply("HIL_EFFECT_BENCH_DONE effects=%u frames=%u ms=%lu\n",Appearance::DRAWN,frames,(unsigned long)((esp_timer_get_time()-benchStart)/1000));
+    return;
   }
 #ifdef BEST_EFFECT_PROFILE
   if(!strcmp(cmd,"effectstages")) {
@@ -332,6 +427,7 @@ LOOP_HELPER static void hilCommand(char *line) {
     return;
   }
   if(!strcmp(cmd,"usbidle")){Hil::usbIdle=num(1)!=0;Hil::reply("HIL_OK usbidle %d\n",Hil::usbIdle);return;}
+  if(!strcmp(cmd,"sleepok")){Hil::allowSleep=num(1)!=0;Hil::reply("HIL_OK sleepok %d\n",Hil::allowSleep.load());return;}
   if(!strcmp(cmd,"powerlog")) {
     // The next loop pass runs the real 5-minute power-log checkpoint.
     powerRecord(PowerDiagnostics::Sample);lastPowerSaveTry=millis()-300000;

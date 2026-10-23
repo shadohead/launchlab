@@ -20,6 +20,10 @@ namespace Hil {
 // frame it reads, as a DMA that stopped with its interrupt held off past the
 // ring delivers none: reads find nothing and nothing reports an overflow.
 inline std::atomic<int64_t> adcSilentUntil{0};
+// The inactivity power-off (standby) only when a scenario allows it (!sleepok
+// 1): a rig whose USB link dropped after a reboot would otherwise sleep after
+// the timeout and stay unreachable until someone shakes it.
+inline std::atomic<bool> allowSleep{false};
 // Shared start of a scripted pull (host clock, us). 0 = no pull scheduled.
 inline std::atomic<int64_t> pullStartUs{0};
 inline std::atomic<uint32_t> pullCount{0};

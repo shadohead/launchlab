@@ -716,11 +716,19 @@ inline void Renderer::auraWaterleaf(float t) {
       const int band8=std::max(0,q8(1-(y-ys)*(1/3.5f))),inv16=65536/(r-l+1),depth8=q8(1-.35f*d);
       const Ink c=inkOf(mixed(water,deep,d)),edge=inkOf(mixed(water,deep,.4f+.6f*d));
       const int sh=noise(y*90,int(t*300),581),kRow=q8(glassK*(.85f+.15f*(sh-128)*(1/128.0f)));
-      for(int x=l;x<=r;++x) {
+      // Below the lit band only pixels toward the walls are lit (e8 >= 131):
+      // the clear middle is stepped over, from a little inside its bound.
+      const int clear=band8>5?0:std::max(0,(131*256)/inv16-2);
+      auto light=[&](int x) {
+        ++touches_;
         const int e8=(std::abs(2*x-l-r)*inv16)>>8,g8=std::max(band8,e8<128?0:(e8-128)*2);
-        if(g8<=5)continue;
+        if(g8<=5)return;
         addw(x,y,e8>179?edge:c,(kRow*((((g8*g8)>>8)*depth8)>>8))>>8);
-      }
+      };
+      // |2x-l-r| >= clear: x <= (l+r-clear)/2 or x >= (l+r+clear)/2.
+      const int innerL=floori((l+r-clear)*.5f),innerR=floori((l+r+clear)*.5f+.5f);
+      if(clear<=0)for(int x=l;x<=r;++x)light(x);
+      else{for(int x=l;x<=std::min(r,innerL);++x)light(x);for(int x=std::max(l,std::max(innerL+1,innerR));x<=r;++x)light(x);}
     }
     // The walls and base, with a highlight down the left wall.
     sorcLine(cx-topW,gt,cx-botW,gb,inkOf(rim),kq,kq);sorcLine(cx+topW,gt,cx+botW,gb,inkOf(rim),(kq*3)>>2,(kq*3)>>2);

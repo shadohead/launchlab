@@ -62,11 +62,11 @@ namespace Hil{inline bool nvsWrite(const char *key,size_t bytes);}
 #define LOOP_HELPER __attribute__((noinline))
 #if LAUNCHLAB_HIL
 // Test-only hardware-in-the-loop build; never a release. See tools/hil.
-static constexpr char VERSION[] = "0.18.0-sticks3-anime-hil-pm";
+static constexpr char VERSION[] = "0.18.1-sticks3-anime-hil-pm";
 #elif LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = "0.18.0-sticks3-anime-pm";
+static constexpr char VERSION[] = "0.18.1-sticks3-anime-pm";
 #else
-static constexpr char VERSION[] = "0.18.0-sticks3-anime";
+static constexpr char VERSION[] = "0.18.1-sticks3-anime";
 #endif
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ
@@ -202,13 +202,24 @@ static BestEffectSpeaker soundPlayer(imuAcquisition);
 // waits for the idle slices rather than stalling the UI loop to render it.
 static bool celebrationSound=false,soundPreview=false;
 static struct {bool active=false,celebration=false;Appearance::Effect effect=Appearance::Effect::Off;Appearance::Sound level=Appearance::Sound::Off;} soundRequest;
+// From reading an effect frame's elapsed time to that frame on the glass
+// (effect draw and push), measured each frame: SoundSync lines sound up with it.
+static int64_t effectReadUs=0;static uint32_t presentLagUs=15000;
+// The last sound start: how far its effect's clock moved, or the samples it
+// skipped to join late (SOUND_SYNC).
+static int32_t soundShiftMs=0;static uint32_t soundSkipped=0;
 // A celebration sound that cannot start within this long after its effect is dropped.
 static constexpr uint32_t SOUND_LATE_MS=300;
-static void requestSound(Appearance::Effect effect,Appearance::Sound level,bool celebration);
+static void requestSound(Appearance::Effect effect,Appearance::Sound level,bool celebration);static void startSound(bool late);
 static const char *milestoneStoreName();static const char *effectSetFields();
 static Appearance::Effect celebrationEffect();static Appearance::Effect soundTarget();
 static const Appearance::Effect *milestonePicks();static void nextMilestonePick(uint16_t rpm,Appearance::Effect played);
 static constexpr size_t USB_TX_BUFFER_BYTES=8192;
+// HWCDC drops bytes once its RX queue is full, and a tool's request line
+// arrives in one burst. Every build uses this size: the HIL build alone once
+// had a large queue, which hid that production's 256-byte one lost the end of
+// every v3 milestone request (312 characters), so no save reached 0.18.0.
+static constexpr size_t USB_RX_BUFFER_BYTES=8192;
 static constexpr uint32_t MOTION_INIT_RETRY_MS=5000,MOTION_DATA_TIMEOUT_MS=250;
 // The 1024-sample ring (10 s at 100 Hz) still holds a pull for this long.
 static constexpr uint64_t MOTION_CAPTURE_RETRY_US=3000000;
@@ -384,10 +395,14 @@ static const char *tournamentViewName() {
 LOOP_HELPER static void heapStatus() {
   constexpr uint32_t INTERNAL=MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT;
   const void *canvas=screenReady?screen.getBuffer():nullptr;
-  Serial.printf("HEAP_STATUS internal_free=%u internal_largest=%u internal_min_free=%u psram_free=%u psram_largest=%u canvas=%s canvas_bytes=%u\n",
+  // DMA-capable internal RAM: the ADC's continuous driver, the speaker's I2S
+  // ring and USB need it; a build once boot-looped when the ADC found none.
+  constexpr uint32_t DMA=MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL;
+  Serial.printf("HEAP_STATUS internal_free=%u internal_largest=%u internal_min_free=%u dma_free=%u dma_largest=%u dma_min_free=%u psram_free=%u psram_largest=%u canvas=%s canvas_bytes=%u\n",
     unsigned(heap_caps_get_free_size(INTERNAL)),unsigned(heap_caps_get_largest_free_block(INTERNAL)),
-    unsigned(heap_caps_get_minimum_free_size(INTERNAL)),unsigned(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
-    unsigned(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)),
+    unsigned(heap_caps_get_minimum_free_size(INTERNAL)),unsigned(heap_caps_get_free_size(DMA)),
+    unsigned(heap_caps_get_largest_free_block(DMA)),unsigned(heap_caps_get_minimum_free_size(DMA)),
+    unsigned(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),unsigned(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)),
     !canvas?"none":esp_ptr_internal(canvas)?"internal":"psram",unsigned(screenReady?screen.bufferLength():0));
 }
 
@@ -431,6 +446,8 @@ LOOP_HELPER static void status() {
   Serial.printf("MILESTONE_STATUS mode=%s rows=%u revision=%lu store=%s\n",Milestones::name(milestones.mode()),milestones.count(),
     (unsigned long)milestones.revision,milestoneStoreName());
   soundPlayer.status(appearance.sound);
+  Serial.printf("SOUND_SYNC present_lag_us=%lu output_us=%lu clock_shift_ms=%ld skipped_samples=%lu\n",(unsigned long)presentLagUs,
+    (unsigned long)soundPlayer.outputUs(),(long)soundShiftMs,(unsigned long)soundSkipped);
   Serial.printf("UI_STATUS page=%u menu=%u history=%u setting=%u draft=%u recording=%s\n",
     unsigned(controls.page),controls.menu,controls.history,controls.setting,controls.draft,
     s.resting?"idle_paused":LAUNCHLAB_MOTION_ADC_GATE?"motion_gated":"always");
@@ -505,9 +522,9 @@ LOOP_HELPER static void status() {
   Serial.printf("IMU_STARTUP_STATUS attempts=%lu last_try_ms=%lu last_paired=%d last_success=%d retry_ms=%lu\n",
     (unsigned long)motionInitAttempts,(unsigned long)lastMotionInit,motionInitPaired,motionInitSuccess,
     (unsigned long)MOTION_INIT_RETRY_MS);
-  Serial.printf("MOTION_STATUS imu_core=0 imu_task=%d paired_samples=%lu accel_samples=%lu max_gap_us=%lu gaps=%lu max_poll_us=%lu stack_free=%lu gate_misses=%lu latest=%lu quality=%s pending=%d ref=%lu ref_rpm=%.1f ref_store_ready=%d ref_load_error=%d dropped=%lu demo=%d feedback=%d\n",
+  Serial.printf("MOTION_STATUS imu_core=0 imu_task=%d paired_samples=%lu accel_samples=%lu max_gap_us=%lu gaps=%lu max_poll_us=%lu stack_free=%lu gate_misses=%lu late_polls=%lu missed_polls=%lu latest=%lu quality=%s pending=%d ref=%lu ref_rpm=%.1f ref_store_ready=%d ref_load_error=%d dropped=%lu demo=%d feedback=%d\n",
     imuAcquisition.running(),(unsigned long)imu.pairedSamples,(unsigned long)imu.accelSamples,
-    (unsigned long)imu.maxGapUs,(unsigned long)imu.gaps,(unsigned long)imu.maxPollUs,(unsigned long)imu.stackFree,(unsigned long)imu.gateMisses,
+    (unsigned long)imu.maxGapUs,(unsigned long)imu.gaps,(unsigned long)imu.maxPollUs,(unsigned long)imu.stackFree,(unsigned long)imu.gateMisses,(unsigned long)imu.latePolls,(unsigned long)imu.missedPolls,
     (unsigned long)latestMotion.number,LaunchMotion::name(latestMotion.quality),motionPending,
     (unsigned long)referenceMotion.number,referenceMotion.rpm,motionStore.ready(),referenceError,
     (unsigned long)motionDrops,motionDemo,launchFeedback.shown());
@@ -685,7 +702,7 @@ LOOP_HELPER static void draw(const Snapshot &s) {
         (controls.setting==4 && controls.draft!=uint8_t(sensorProfile)));
         // The previewed effect frames the value text inside its card.
         if(screenReady && controls.setting==unsigned(Controls::Setting::BestEffect) && editorEffect.badge()) {
-          const int64_t effectStarted=esp_timer_get_time();BestEffectUI::Renderer::Anchor card;
+          const int64_t effectStarted=esp_timer_get_time();effectReadUs=effectStarted;BestEffectUI::Renderer::Anchor card;
           card.top=72;card.bottom=128;card.left=8;card.right=view.width()-9;
           bestEffectRenderer.draw({static_cast<uint16_t *>(screen.getBuffer()),screen.width(),screen.height()},
             editorEffect.effect(),editorEffect.elapsed(millis()),colors.accent,card,colors.background);
@@ -704,7 +721,7 @@ LOOP_HELPER static void draw(const Snapshot &s) {
     ControlsUI::footer(view,"A Main  B Menu");
     // Direct-draw fallback stays functional without reading the hardware LCD.
     if(screenReady && !motionDemo && !motionPending && bestEffect.badge()) {
-      const int64_t effectStarted=esp_timer_get_time();
+      const int64_t effectStarted=esp_timer_get_time();effectReadUs=effectStarted;
       bestEffectRenderer.draw({static_cast<uint16_t *>(screen.getBuffer()),screen.width(),screen.height()},
         bestEffect.effect(),bestEffect.elapsed(millis()),colors.accent,BestEffectUI::Renderer::Anchor(),colors.background);
       maxEffectUs=std::max(maxEffectUs,uint32_t(esp_timer_get_time()-effectStarted));
@@ -743,11 +760,15 @@ LOOP_HELPER static void draw(const Snapshot &s) {
   // cannot overwrite pixels still being sent.
   if(screenReady){acquisition.displayBoundary(true);M5.Display.startWrite();screen.pushSprite(0,0);M5.Display.waitDMA();}
   M5.Display.endWrite();
+  if(effectReadUs){presentLagUs=uint32_t(esp_timer_get_time()-effectReadUs);effectReadUs=0;}
   acquisition.displayBoundary(false);
   if(!tournamentMode && !diagnostics && !historyPage && launchFeedback.shown() && !motionDemo && !motionPending)
     bestEffect.presented(millis());
-  // The sound starts with the effect's first presented frame.
-  if(controls.page==Controls::Page::Edit && controls.setting==unsigned(Controls::Setting::BestEffect))editorEffect.presented(millis());
+  // The sound starts with the effect's first presented frame. The editor's
+  // preview holds its first frame until its sound is rendered, so the two
+  // start together.
+  if(controls.page==Controls::Page::Edit && controls.setting==unsigned(Controls::Setting::BestEffect) &&
+     (appearance.sound==Appearance::Sound::Off || !editorEffect.badge() || soundPlayer.prepared(editorEffect.effect())))editorEffect.presented(millis());
   if(bestEffect.takeCue()) {
     Serial.printf("CELEBRATION_START launch=%lu effect=%s milestone=%u best=%d\n",(unsigned long)latestMotion.number,
       Appearance::label(bestEffect.effect()),unsigned(bestEffect.milestone()),bestEffect.best());
@@ -941,6 +962,7 @@ LOOP_HELPER static Appearance::Effect celebrationEffect() {
 // sound cue, including USB previews of an effect other than the saved one.
 LOOP_HELPER static Appearance::Effect soundTarget(){
   if(bestEffect.badge() && !bestEffect.started())return bestEffect.effect();
+  if(editorEffect.badge() && !editorEffect.started())return editorEffect.effect();
   return appearance.effect==Appearance::Effect::Random?upcoming():appearance.effect;
 }
 // Plays now if the sound is rendered, otherwise once the idle slices finish it.
@@ -948,9 +970,25 @@ LOOP_HELPER static void requestSound(Appearance::Effect effect,Appearance::Sound
   soundRequest={};
   if(level==Appearance::Sound::Off){soundPlayer.stop();celebrationSound=soundPreview=false;return;}
   soundRequest.active=true;soundRequest.celebration=celebration;soundRequest.effect=effect;soundRequest.level=level;
-  if(!soundPlayer.prepared(effect))return;
-  const bool started=soundPlayer.play(effect,level);
-  (celebration?celebrationSound:soundPreview)=started;soundRequest.active=false;
+  if(soundPlayer.prepared(effect))startSound(false);
+}
+// Starts the requested sound in step with its effect (SoundSync). At the
+// effect's cue the effect's clock moves to where the sound will be heard; a
+// sound ready only later (`late`) starts at the sample matching the frame
+// then on the glass.
+LOOP_HELPER static void startSound(bool late) {
+  auto &shown=soundRequest.celebration?bestEffect:editorEffect;
+  const bool synced=shown.started() && shown.effect()==soundRequest.effect;
+  size_t skip=0;
+  if(late && synced && soundPlayer.power())
+    skip=SoundSync::skipSamples(millis(),soundPlayer.nextOutputUs(),presentLagUs,shown.startedAt(),BestEffectSound::RATE);
+  const bool started=soundPlayer.play(soundRequest.effect,soundRequest.level,skip);
+  if(started){soundSkipped=uint32_t(skip);soundShiftMs=0;}
+  if(started && synced && !late) {
+    const uint32_t at=SoundSync::clockStart(millis(),soundPlayer.outputUs(),presentLagUs);
+    soundShiftMs=int32_t(at-shown.startedAt());shown.align(at);
+  }
+  (soundRequest.celebration?celebrationSound:soundPreview)=started;soundRequest.active=false;
 }
 // Each B in the Sound editor plays the current effect at the draft level.
 LOOP_HELPER static void previewSound(){requestSound(soundTarget(),Appearance::Sound(controls.draft),false);}
@@ -959,7 +997,10 @@ LOOP_HELPER static void previewSound(){requestSound(soundTarget(),Appearance::So
 LOOP_HELPER static void previewEffect() {
   static Appearance::Effect lastShown=Appearance::Effect::Off;
   const auto choice=Appearance::Effect(controls.draft);
+  // A new preview silences the last one: its first frame must not hold under
+  // the old sound while its own renders.
   editorEffect.clear();dirty=true;
+  if(soundPreview || soundRequest.active){soundPlayer.stop();soundPreview=false;soundRequest={};}
   if(!Appearance::drawn(unsigned(choice)) && choice!=Appearance::Effect::Random){soundPlayer.stop();soundPreview=false;soundRequest={};return;}
   lastShown=choice==Appearance::Effect::Random?EffectSet::pick(esp_random(),lastShown,effectSet.mask()):choice;
   editorEffect.queue(true,1,lastShown);editorEffect.captured(1);
@@ -1347,6 +1388,9 @@ LOOP_HELPER static ShutdownFlush flushForShutdown(uint32_t now,const Snapshot &s
 
 LOOP_HELPER static void autoPowerOff(uint32_t now,const Snapshot &s) {
   if(wipeBlocked || controls.page==Controls::Page::Wipe)return;
+#if LAUNCHLAB_HIL
+  if(!Hil::allowSleep.load())return;
+#endif
   if(usbAwake.inhibited(now))return;
   if(motionPending || !inactivity.due(now,s.phase==AnalogTachometer::Phase::Launch) ||
      (lastShutdownTry && now-lastShutdownTry<60000))return;
@@ -1531,7 +1575,7 @@ LOOP_HELPER static void pollRestore(const Snapshot &s) {
     switch(restoreRx.feed(Serial.read(),now)) {
       case DeviceBackup::Receiver::Event::Chunk:Serial.printf("RESTORE_CHUNK chars=%u\n",restoreRx.received());break;
       case DeviceBackup::Receiver::Event::Complete:finishRestore(s);break;
-      case DeviceBackup::Receiver::Event::Error:Serial.printf("RESTORE_ERROR reason=%s written=0\n",restoreRx.error());break;
+      case DeviceBackup::Receiver::Event::Error:usbCommands.refused(now);Serial.printf("RESTORE_ERROR reason=%s written=0\n",restoreRx.error());break;
       case DeviceBackup::Receiver::Event::None:break;
     }
   }
@@ -1632,7 +1676,7 @@ LOOP_HELPER static void pollThemeRequest(const Snapshot &s) {
     switch(themeRx.feed(Serial.read(),now)) {
       case DeviceBackup::Receiver::Event::Chunk:Serial.printf("THEME_CHUNK chars=%u\n",themeRx.received());themeReply();break;
       case DeviceBackup::Receiver::Event::Complete:finishThemeRequest(s);break;
-      case DeviceBackup::Receiver::Event::Error:Serial.printf("THEME_ERROR reason=%s written=0\n",themeRx.error());themeReply();break;
+      case DeviceBackup::Receiver::Event::Error:usbCommands.refused(now);Serial.printf("THEME_ERROR reason=%s written=0\n",themeRx.error());themeReply();break;
       case DeviceBackup::Receiver::Event::None:break;
     }
   }
@@ -1778,7 +1822,7 @@ LOOP_HELPER static void pollMilestoneRequest(const Snapshot &s) {
     switch(milestoneRx.feed(Serial.read(),now)) {
       case DeviceBackup::TransferEvent::Chunk:Serial.printf("MILESTONE_CHUNK chars=%u\n",milestoneRx.received());milestoneReply();break;
       case DeviceBackup::TransferEvent::Complete:if(!finishEffectSetRequest(s))finishMilestoneRequest(s);break;
-      case DeviceBackup::TransferEvent::Error:Serial.printf("MILESTONE_ERROR reason=%s written=0\n",milestoneRx.error());milestoneReply();break;
+      case DeviceBackup::TransferEvent::Error:usbCommands.refused(now);Serial.printf("MILESTONE_ERROR reason=%s written=0\n",milestoneRx.error());milestoneReply();break;
       case DeviceBackup::TransferEvent::None:break;
     }
   }
@@ -1877,12 +1921,15 @@ LOOP_HELPER static void releaseOrphanCheckpoint(uint32_t now,const Snapshot &s) 
 #if LAUNCHLAB_HIL
 #include "hil.h"
 #endif
+// The longest request lines (a v3 milestone request, a theme request, a
+// restore line) fit the RX queue twice over.
+static_assert(USB_RX_BUFFER_BYTES>=2*((Milestones::Request::BYTES+2)/3*4+2) &&
+              USB_RX_BUFFER_BYTES>=2*((Themes::Request::BYTES+2)/3*4+2) && USB_RX_BUFFER_BYTES>=2*(96+2),
+              "a request line must fit the USB RX queue");
 void setup() {
   const auto wakeCause=esp_sleep_get_wakeup_cause();
   const int64_t sleepEnded=wallUs();
-#if LAUNCHLAB_HIL
-  Serial.setRxBufferSize(Hil::RX_BUFFER); // Before begin: binary uploads.
-#endif
+  Serial.setRxBufferSize(USB_RX_BUFFER_BYTES); // Before begin.
   // The core's 256-byte USB TX ring cannot hold one status block, so with the
   // 10 ms timeout below whole lines were dropped while the host was reading
   // (truncated status, a failed backup checksum). Must be set before begin.
@@ -2044,6 +2091,9 @@ void setup() {
   for(unsigned attempt=0;attempt<3 && !startMotion();++attempt)if(attempt<2)delay(100);
   if(!imuAcquisition.running())Serial.println("MOTION_NOTICE IMU startup failed; automatic idle retry enabled");
   acquisition.setRequestHook(quietImuForFlash);
+  // What the ADC's continuous driver finds when it allocates (HEAP_BOOT).
+  constexpr uint32_t DMA_HEAP=MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL;
+  const unsigned dmaFreeBeforeAdc=unsigned(heap_caps_get_free_size(DMA_HEAP)),dmaLargestBeforeAdc=unsigned(heap_caps_get_largest_free_block(DMA_HEAP));
   if(!acquisition.begin(pin,rpmEstimator,sensorProfile))Serial.println("ADC_ERROR acquisition_task_allocation");
   pollBattery(millis(),acquisition.snapshot());
   powerRecord(wakingFromStandby?PowerDiagnostics::Wake:PowerDiagnostics::Boot,loggedWake);
@@ -2052,6 +2102,9 @@ void setup() {
   // Use hardware wake evidence; the optional diagnostic log can fail to save
   // and must not determine the battery policy.
   inactivity.begin(millis(),(pm1WakeValid && (pm1WakeFlags&0x20)) || wakeCause==ESP_SLEEP_WAKEUP_EXT0);
+  Serial.printf("HEAP_BOOT before_adc_dma_free=%u before_adc_dma_largest=%u dma_free=%u dma_largest=%u internal_free=%u usb_rx_bytes=%u\n",
+    dmaFreeBeforeAdc,dmaLargestBeforeAdc,unsigned(heap_caps_get_free_size(DMA_HEAP)),unsigned(heap_caps_get_largest_free_block(DMA_HEAP)),
+    unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)),unsigned(USB_RX_BUFFER_BYTES));
   Serial.printf("BOOT %s ppr=1 min_rpm=1000 min_mark=%.0f edge_fraction=%.2f sample_hz=50000 task_core=0\n",VERSION,
     StickS3SensorProfile::minMark(sensorProfile),StickS3SensorProfile::EDGE_SWING_FRACTION);
   Serial.printf("RPM_SETTING_BOOT selected=%s default=%s legacy_history=retained_metric_not_encoded\n",RpmEstimator::name(rpmEstimator),
@@ -2084,12 +2137,15 @@ LOOP_HELPER static void tickSound(const Snapshot &s) {
   // milestone table can play, since a milestone is known only once its pull ends.
   constexpr size_t SLICE=BestEffectSound::RATE/64;
   if(soundRequest.active) {
-    if(soundPlayer.prepare(soundRequest.effect,SLICE))requestSound(soundRequest.effect,soundRequest.level,soundRequest.celebration);
+    if(soundPlayer.prepare(soundRequest.effect,SLICE))startSound(true);
     return;
   }
   const bool wanted=appearance.sound!=Appearance::Sound::Off || editing;
   if(!wanted)return;
-  if(!soundPlayer.prepared(soundTarget())){soundPlayer.prepare(soundTarget(),SLICE);return;}
+  // The editor's preview holds its first frame for its sound: render all of
+  // it now (about 0.3 s on the device) rather than a slice per pass.
+  const bool waiting=editorEffect.badge() && !editorEffect.started();
+  if(!soundPlayer.prepared(soundTarget())){soundPlayer.prepare(soundTarget(),waiting?SIZE_MAX:SLICE);return;}
   if(appearance.sound==Appearance::Sound::Off || !Milestones::milestones(milestones.mode()))return;
   const auto *picks=milestonePicks();
   for(unsigned i=0;i<milestones.count();++i) {
@@ -2256,6 +2312,7 @@ LOOP_HELPER static void pollCommands(const Snapshot &s) {
       if(c=='p')status();else if(c=='b' && !wipeBlocked)cancelWipe();
       continue;
     }
+    if(guard.drop(c,now))continue;  // the rest of a refused transfer line
 #if LAUNCHLAB_HIL
     if(hilFeed(c)){guard.consumed(c,now);continue;}
 #endif

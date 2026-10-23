@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Exercise production Random selection, recap cues and speaker preparation."""
+"""Exercise production Random selection, recap cues and speaker preparation,
+and hold every effect's sound within 20 ms of its frames (SoundSync)."""
 from pathlib import Path
 import argparse
 import os
@@ -43,12 +44,14 @@ prefix = r'''
 #include "milestones.h"
 #include "analog_tachometer.h"
 #include "best_effect_sound.h"
+#include "sound_sync.h"
 #include "controls.h"
 #include "accel_range.h"
 #include "launch_feedback.h"
 #include "launch_motion.h"
 #include "practice_history.h"
 #include <cassert>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <new>
@@ -69,17 +72,22 @@ static unsigned liveAllocations(){unsigned n=0;for(auto *a:allocations)n+=a!=nul
 struct StickS3MotionAcquisition {
   bool lock(){return true;}void unlock(){}
 };
+// The speaker's timing: starting the codec takes beginUs of the loop; a clip
+// is heard from startedUs plus the output latency its DMA ring imposes.
 struct SpeakerPeripheral {
-  struct Config {int task_pinned_core=0;} settings;
+  struct Config {int task_pinned_core=0;bool stereo=true;} settings;
   bool powered=false,playing=false;
   unsigned plays=0,stops=0;
   std::vector<int16_t> clip;
+  uint64_t beginUs=28000,startedUs=0;uint32_t latencyUs=0;size_t remaining=0;
   Config config(){return settings;}void config(Config c){settings=c;}
   bool isEnabled(){return true;}
-  bool begin(){powered=true;return true;}
+  bool begin(){hostUs+=beginUs;powered=true;return true;}
   void end(){powered=false;}
   void setVolume(unsigned){}
-  bool playRaw(const int16_t *data,size_t count,unsigned,bool,unsigned,unsigned,bool){clip.assign(data,data+count);playing=true;++plays;return true;}
+  bool playRaw(const int16_t *data,size_t count,unsigned,bool,unsigned,unsigned,bool){
+    latencyUs=SoundSync::outputUs(playing);startedUs=hostUs;remaining=count;
+    clip.assign(data,data+count);playing=true;++plays;return true;}
   bool isPlaying(){return playing;}
   void stop(){playing=false;++stops;}
 };
@@ -109,6 +117,8 @@ static bool tournamentMode=false,historyPage=false,diagnostics=false,motionDemo=
 static uint32_t lastAcceptedAt=0,historyPendingSince=0,motionDrops=0,maxEffectUs=0,maxDrawUs=0;
 static uint64_t motionStart=0,motionEnd=0;
 static struct {bool active=false,celebration=false;Appearance::Effect effect=Appearance::Effect::Off;Appearance::Sound level=Appearance::Sound::Off;} soundRequest;
+static int64_t effectReadUs=0;static uint32_t presentLagUs=15000;
+static int32_t soundShiftMs=0;static uint32_t soundSkipped=0;
 struct Snapshot {
   AnalogTachometer::Phase phase=AnalogTachometer::Phase::Ready;
   unsigned sensorProfile=0,estimator=0;
@@ -119,6 +129,7 @@ struct Snapshot {
 static void cancelSettingEdit(){controls.page=Controls::Page::Settings;}
 static void syncNavigation(){}
 static Appearance::Effect celebrationEffect();
+static void startSound(bool late);
 '''
 tests = r'''
 static void reset(Appearance::Effect effect=Appearance::Effect::Random) {
@@ -139,13 +150,33 @@ static void accepted(float rpm) {
 }
 static void captured(){motionPending=false;bestEffect.captured(latestMotion.number);}
 static void prepared(){M5.Speaker.playing=false;tickSound(Snapshot{});assert(soundPlayer.prepare(soundTarget()));}
+// The owner, 2026-10-22: "the sound seems to play a little late". The sound's
+// sample heard as each frame of the effect reaches the glass, against that
+// frame's own elapsed time: within 20 ms, all the way through. A frame whose
+// clock reads e is seen present lag later; the clip's first sample (the
+// effect's sample `skipped`) is heard its output latency after playRaw.
+static double worstOffsetMs=0;
+static void checkSync(const Appearance::Celebration &shown,Appearance::Effect effect) {
+  const size_t skipped=BestEffectSound::samples(effect)-M5.Speaker.remaining;
+  const double heardMs=(M5.Speaker.startedUs+M5.Speaker.latencyUs)/1000.0;
+  for(uint32_t e=0;e<Appearance::duration(effect);e+=50) {
+    const double seenMs=double(shown.startedAt())+e+presentLagUs/1000.0;
+    const double sampleMs=skipped*1000.0/BestEffectSound::RATE+(seenMs-heardMs);
+    if(sampleMs<0 || sampleMs*BestEffectSound::RATE/1000>=BestEffectSound::samples(effect))continue;  // silent then
+    worstOffsetMs=std::max(worstOffsetMs,std::fabs(sampleMs-e));
+    assert(std::fabs(sampleMs-e)<=20);
+  }
+}
 static void checkClip(Appearance::Effect effect) {
   std::vector<int16_t> expected(BestEffectSound::samples(effect));
   BestEffectSound::render(effect,expected.data(),expected.size());
   assert(M5.Speaker.clip==expected);
 }
 int main() {
-  reset();prepared();assert(soundTarget()==Appearance::Effect::Orbit);
+  // The speaker task runs on the UI core and mixes mono: stereo mixed two
+  // identical channels during effect frames (0.18.1).
+  reset();assert(M5.Speaker.settings.task_pinned_core==1 && !M5.Speaker.settings.stereo);
+  prepared();assert(soundTarget()==Appearance::Effect::Orbit);
   accepted(6100);captured();tickSound(Snapshot{});presentFrame();
   assert(M5.Speaker.plays==1);checkClip(Appearance::Effect::Orbit);
   const auto next=upcomingEffect;const unsigned calls=randomCalls;
@@ -181,14 +212,17 @@ int main() {
   reset();prepared();hostUs=uint64_t(0xfffffff0u)*1000;accepted(6100);
   tickSound(Snapshot{});assert(soundPlayer.prepared(Appearance::Effect::Orbit));
   captured();tickSound(Snapshot{});presentFrame();checkClip(Appearance::Effect::Orbit);
-  hostUs+=56000;assert(bestEffect.elapsed(millis())==56 && M5.Speaker.plays==1);
+  // Measured from the clock's start, which moves to where the sound is heard.
+  const uint32_t from=millis()>bestEffect.startedAt()?millis():bestEffect.startedAt();
+  hostUs=uint64_t(from)*1000+56000;assert(bestEffect.elapsed(millis())==uint32_t(millis()-bestEffect.startedAt()) && M5.Speaker.plays==1);
   // The existing Best effect editor previews every concrete draft through
   // its actual helper and first-frame cue, including an unprepared clip.
   for(unsigned e=0;e<Appearance::DRAWN;++e) {
     reset(Appearance::Effect::Orbit);controls.page=Controls::Page::Edit;controls.setting=unsigned(Controls::Setting::BestEffect);controls.draft=unsigned(Appearance::drawnEffect(e));
     previewEffect();assert(editorEffect.badge() && editorEffect.effect()==Appearance::drawnEffect(e));
+    // The preview holds its first frame until its sound is rendered, then both start.
     tickSound(Snapshot{});presentFrame();
-    for(unsigned i=0;soundRequest.active && i<200;++i){hostUs+=10000;tickSound(Snapshot{});}
+    for(unsigned i=0;!editorEffect.started() && i<200;++i){hostUs+=10000;tickSound(Snapshot{});presentFrame();}
     assert(M5.Speaker.plays==1 && !soundRequest.active);checkClip(Appearance::drawnEffect(e));
     controls.page=Controls::Page::Settings;tickSound(Snapshot{});
     assert(!editorEffect.badge() && !soundPlayer.playing() && !soundPlayer.powered());
@@ -309,13 +343,55 @@ int main() {
       previous=next;
     }
   }
+  // Sync: every effect's sound meets its frames, for a celebration (the codec
+  // off, so it starts first), a USB preview, the Best effect editor's
+  // preview after another, a celebration cutting into a playing sound (the
+  // whole DMA ring ahead of it), and a sound ready only after its effect
+  // started.
+  for(unsigned e=0;e<Appearance::DRAWN;++e) {
+    using Appearance::drawnEffect;const auto effect=drawnEffect(e);
+    reset(effect);prepared();accepted(6100);captured();tickSound(Snapshot{});presentFrame();
+    assert(bestEffect.effect()==effect && M5.Speaker.plays==1 && soundPlayer.outputUs()==SoundSync::outputUs(false));
+    checkSync(bestEffect,effect);
+    // The clock starts where the sound is heard: after the codec's start,
+    // not at the first frame before it.
+    assert(bestEffect.startedAt()>=millis()-5 && millis()-bestEffect.startedAt()<=5);
+    reset(Appearance::Effect::Orbit);latestMotion.number=1;previewBestEffect(effect);presentFrame();checkSync(bestEffect,effect);
+    // The Best effect editor: a new preview silences the one still playing at
+    // once, holds its first frame without sound while its own renders (in one
+    // pass), then starts with it from a fresh codec.
+    reset(Appearance::Effect::Orbit);controls.page=Controls::Page::Edit;controls.setting=unsigned(Controls::Setting::BestEffect);
+    controls.draft=unsigned(drawnEffect((e+1)%Appearance::DRAWN));previewEffect();
+    for(unsigned i=0;i<4 && !editorEffect.started();++i){tickSound(Snapshot{});presentFrame();}
+    assert(editorEffect.started() && M5.Speaker.playing);hostUs+=400000;
+    controls.draft=unsigned(effect);previewEffect();assert(!M5.Speaker.playing);
+    presentFrame();assert(!editorEffect.started() && M5.Speaker.plays==1);
+    tickSound(Snapshot{});assert(soundPlayer.prepared(effect));presentFrame();
+    assert(editorEffect.started() && M5.Speaker.plays==2 && soundPlayer.outputUs()==SoundSync::outputUs(false));
+    checkSync(editorEffect,effect);
+    // A cue cutting into a sound still playing (a pull or a new preview
+    // stops sound first, so only a direct start leaves one playing): the
+    // whole DMA ring is ahead of it, and the clock allows for that.
+    reset(effect);prepared();const auto other=drawnEffect((e+1)%Appearance::DRAWN);
+    assert(soundPlayer.prepare(other) && soundPlayer.play(other,Appearance::Sound::Low) && M5.Speaker.playing);
+    accepted(6100);captured();presentFrame();
+    assert(bestEffect.effect()==effect && M5.Speaker.plays==2 && soundPlayer.outputUs()==SoundSync::outputUs(true));
+    checkSync(bestEffect,effect);
+    // Late: the celebration starts before its sound is rendered, which then
+    // joins partway in, at the sample of the frame on the glass.
+    reset(effect);accepted(6100);captured();presentFrame();assert(bestEffect.started() && M5.Speaker.plays==0);
+    for(unsigned i=0;i<4000 && soundRequest.active;++i){hostUs+=1000;tickSound(Snapshot{});}
+    if(M5.Speaker.plays) {
+      assert(M5.Speaker.remaining<BestEffectSound::samples(effect));checkSync(bestEffect,effect);
+    }
+  }
   // These buffers live for the firmware lifetime; release fake allocations
   // here so the host harness can also use leak detection.
   for(auto p:allocations)if(p)std::free(p);
-  std::cout<<"PASS: production Random/PB/hidden/cancel selection, first-frame cues, six USB preview sounds, milestone sounds rendered ahead, a bounded least-recently-used sound cache, actual Best effect/Sound editor helpers, real sliced synth/speaker buffer, pull/close cancellation, late deadline and timer wrap\n";
+  std::cout<<"PASS: every effect's sound within "<<int(std::ceil(worstOffsetMs))<<" ms of its frames (celebration, USB preview, editor preview after another, celebration into a playing sound, late start); production Random/PB/hidden/cancel selection, first-frame cues, six USB preview sounds, milestone sounds rendered ahead, a bounded least-recently-used sound cache, actual Best effect/Sound editor helpers, real sliced synth/speaker buffer, pull/close cancellation, late deadline and timer wrap\n";
 }
 '''
-names = ["milestonePicks", "nextMilestonePick", "upcoming", "celebrationEffect", "soundTarget", "requestSound", "tickSound", "prepareMotion", "previewBestEffect", "previewEffect", "previewSound"]
+names = ["milestonePicks", "nextMilestonePick", "upcoming", "celebrationEffect", "soundTarget", "requestSound", "startSound", "tickSound", "prepareMotion", "previewBestEffect", "previewEffect", "previewSound"]
 code = prefix + speaker + state + deadline + "\n".join(function(source, name) for name in names)
 code += "\nstatic void presentFrame(){\n" + cue + "}\n" + tests
 with tempfile.TemporaryDirectory(prefix="launchlab-best-sound-") as temporary:
