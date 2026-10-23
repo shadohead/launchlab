@@ -110,9 +110,39 @@ int main() {
     Config back;assert(back.decode(image.data(),image.size()) && back.mask()==mine && back.revision==c.revision);
     for(size_t i=0;i<image.size();++i)for(uint8_t flip:{1,0x80}){auto bad=image;bad[i]^=flip;Config x;assert(!x.decode(bad.data(),bad.size()) && x.isDefault());}
     auto reseal=[](Config::Image &b){Appearance::put32(b.data()+24,Appearance::hash(b.data(),24));};
-    for(Mask mask:{Mask(),flag(5),flag(6),flag(Appearance::EFFECTS),flag(Appearance::EFFECTS)|flag(0),flag(100),flag(127)|flag(0)}){auto bad=image;putMask(bad.data()+8,mask);reseal(bad);Config x;assert(!x.decode(bad.data(),bad.size()));}
+    for(Mask mask:{Mask(),flag(5),flag(6),flag(Appearance::EFFECTS),flag(Appearance::EFFECTS)|flag(0),flag(95)}){auto bad=image;putMask(bad.data()+8,mask);reseal(bad);Config x;assert(!x.decode(bad.data(),bad.size()));}
+    // A stored set keeps loaded slots (96-127) even when none is installed now: they are simply not offered.
+    for(Mask mask:{flag(100),flag(127)|flag(0)}){auto ok=image;putMask(ok.data()+8,mask);reseal(ok);Config x;assert(x.decode(ok.data(),ok.size()) && x.mask()==mask && !x.offers(Effect(100)));}
     Config x;assert(!x.decode(image.data(),image.size()-1));
     c.reset();assert(c.isDefault() && c.revision==0x01020305);
+  }
+  // Loaded effects (96-127) through the firmware's hooks: playable slots
+  // celebrate, follow the built-ins in Settings order, join Random and a
+  // checked set; a slot that cannot play resolves to its fallback or Orbit;
+  // firmware without loaded effects sees the set's drawn effects only.
+  {
+    auto &h=Appearance::loadedHooks();
+    h.playable=[](unsigned e){return e==97 || e==99;};
+    h.name=[](unsigned e)->const char *{return e==97?"Comet":"Glass";};
+    h.duration=[](unsigned e)->uint32_t{return e==97?4000:4500;};
+    h.fallback=[](unsigned e)->unsigned{return e==98?unsigned(Effect::Tidal):e==100?200u:unsigned(Effect::Sparkles);};
+    assert(Appearance::celebrates(97) && !Appearance::celebrates(98) && !Appearance::drawn(97) && Appearance::loaded(98) && !Appearance::loaded(95));
+    assert(!std::strcmp(Appearance::label(Effect(97)),"Comet") && !std::strcmp(Appearance::label(Effect(98)),"Missing effect"));
+    assert(Appearance::duration(Effect(99))==4500 && Appearance::duration(Effect(98))==0);
+    assert(Appearance::resolve(Effect(97))==Effect(97) && Appearance::resolve(Effect(98))==Effect::Tidal &&
+           Appearance::resolve(Effect(100))==Effect::Orbit && Appearance::resolve(Effect::Random)==Effect::Random);
+    assert(Appearance::nextChoice(Effect::Blink)==Effect(97) && Appearance::nextChoice(Effect(97))==Effect(99) &&
+           Appearance::nextChoice(Effect(98))==Effect(99) && Appearance::nextChoice(Effect(99))==Effect::Off);
+    const Mask mine=flag(Effect::Slash)|flag(97)|flag(98);
+    assert(check(mine)==Problem::Effect);  // 98 does not play: a new set may not offer it
+    const Mask ok=flag(Effect::Slash)|flag(97)|flag(99);
+    assert(check(ok)==Problem::None && next(Effect::Slash,ok)==Effect(97) && next(Effect(97),ok)==Effect(99) && next(Effect(99),ok)==Effect::Off);
+    assert(next(Effect(98),ok)==Effect(99));  // a deleted slot continues from its position
+    Mask seen;for(uint32_t bits=0;bits<200;++bits)seen|=flag(pick(bits,Effect::Off,mine));
+    assert(seen==(flag(Effect::Slash)|flag(97)));  // the missing slot is never picked
+    assert(olderView(ok)==flag(Effect::Slash) && olderView(flag(97))==DEFAULT_MASK && celebrating()==(ALL|flag(97)|flag(99)));
+    h=Appearance::LoadedHooks();
+    assert(!Appearance::celebrates(97) && Appearance::resolve(Effect(97))==Effect::Orbit && celebrating()==ALL);
   }
   // Store: alternating verified slots in ll-appearance beside the other
   // records; a damaged record (both slots bad) offers the default, stays
@@ -134,8 +164,8 @@ int main() {
     Config fallback;AppearanceStore<Config> damaged;
     assert(!damaged.begin(fallback,"ll-appearance","eset0","eset1",true) && damaged.damaged() && damaged.ready() && fallback.isDefault());
     assert(!damaged.pending(fallback) && Preferences::data==kept);
-    // A record from a firmware with more effects reads as damaged here too.
-    {auto future=kept;Config::Image image;Config f;f.encode(image);putMask(image.data()+8,DEFAULT_MASK|flag(100));Appearance::put32(image.data()+24,Appearance::hash(image.data(),24));
+    // A record from a firmware with more built-in effects (83-95) reads as damaged here too.
+    {auto future=kept;Config::Image image;Config f;f.encode(image);putMask(image.data()+8,DEFAULT_MASK|flag(90));Appearance::put32(image.data()+24,Appearance::hash(image.data(),24));
      Preferences::data["ll-appearanceeset0"].assign(image.begin(),image.end());Preferences::data["ll-appearanceeset1"].assign(image.begin(),image.end());
      Config g;AppearanceStore<Config> newer;assert(!newer.begin(g,"ll-appearance","eset0","eset1",true) && newer.damaged() && g.isDefault());
      Preferences::data=kept;}

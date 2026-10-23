@@ -12,6 +12,19 @@ struct SpiffsFlash {
     return partition && partition->size>=FlashLayout::PARTITION_BYTES;
   }
   bool read(uint32_t at,void *out,size_t n){return partition && esp_partition_read(partition,at,out,n)==ESP_OK;}
+#if LAUNCHLAB_HIL
+  // HIL only (`!fxcut`): bytes left to program before a simulated power cut,
+  // which writes what fits and restarts at once; -1 never.
+  long cutAfter=-1;
+  bool write(uint32_t at,const void *data,size_t n){
+    if(cutAfter>=0) {
+      if(long(n)>cutAfter){if(cutAfter)esp_partition_write(partition,at,data,size_t(cutAfter));esp_restart();}
+      cutAfter-=long(n);
+    }
+    return partition && esp_partition_write(partition,at,data,n)==ESP_OK;
+  }
+#else
   bool write(uint32_t at,const void *data,size_t n){return partition && esp_partition_write(partition,at,data,n)==ESP_OK;}
+#endif
   bool erase(uint32_t at,size_t n){return partition && esp_partition_erase_range(partition,at,n)==ESP_OK;}
 };

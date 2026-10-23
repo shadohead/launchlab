@@ -42,6 +42,42 @@ constexpr unsigned THEMES=10,EFFECTS=83,DRAWN=81,SOUNDS=3;
 constexpr unsigned CUSTOM_THEMES=4,ALL_THEMES=THEMES+CUSTOM_THEMES;
 inline bool custom(Theme t){return unsigned(t)>=THEMES && unsigned(t)<ALL_THEMES;}
 inline bool drawn(unsigned e){return e<EFFECTS && e!=unsigned(Effect::Off) && e!=unsigned(Effect::Random);}
+// Loaded effects (docs/FIRMWARE_LOADABLE_EFFECTS.md, "IDs and compatibility"):
+// stored values 96-127 name the 32 slots of the effect store; 83-95 stay free
+// for built-ins. drawn() stays the built-ins (the renderer and the sound
+// synth index by it). Which slots hold a playable effect, their names,
+// lengths and fallbacks are the firmware's to answer (loaded_effects.h)
+// through these hooks; until it does, no slot plays.
+constexpr unsigned FIRST_LOADED=96,LOADED=32;
+inline bool loaded(unsigned e){return e>=FIRST_LOADED && e<FIRST_LOADED+LOADED;}
+struct LoadedHooks {
+  bool (*playable)(unsigned e)=nullptr;
+  const char *(*name)(unsigned e)=nullptr;
+  uint32_t (*duration)(unsigned e)=nullptr;
+  unsigned (*fallback)(unsigned e)=nullptr;  // a built-in's value, or anything else for Orbit
+};
+inline LoadedHooks &loadedHooks(){static LoadedHooks hooks;return hooks;}
+inline bool playable(unsigned e){return loaded(e) && loadedHooks().playable && loadedHooks().playable(e);}
+// The built-in that stands in for a loaded slot wherever loaded effects are
+// unknown (older firmware's view of a record): its fallback, or Orbit; a
+// built-in stands for itself.
+inline Effect stockFallback(Effect e) {
+  const unsigned v=unsigned(e);
+  if(!loaded(v))return e;
+  const unsigned f=loadedHooks().fallback?loadedHooks().fallback(v):~0u;
+  return drawn(f)?Effect(f):Effect::Orbit;
+}
+// Whether a stored value celebrates here: a drawn built-in or a playable loaded effect.
+inline bool celebrates(unsigned e){return drawn(e) || playable(e);}
+// What plays for a stored value: itself when it celebrates here; for a
+// loaded slot that cannot (deleted, damaged, a newer engine), its fallback,
+// or Orbit; Off and Random as they are.
+inline Effect resolve(Effect e) {
+  const unsigned v=unsigned(e);
+  if(celebrates(v) || !loaded(v))return e;
+  const unsigned f=loadedHooks().fallback?loadedHooks().fallback(v):~0u;
+  return drawn(f)?Effect(f):Effect::Orbit;
+}
 // The drawn effects in Settings order, 0..DRAWN-1, and back: the stored
 // order without Off and Random.
 inline Effect drawnEffect(unsigned i){return Effect(i<5?i:i+2);}
@@ -64,13 +100,27 @@ inline const char *label(Effect e) {
     "Slingshot","Presence","Threefold","Banner","Vapor",
     "Crescent","Release","Petalfall","Mask","Blink"};
   static_assert(sizeof(s)/sizeof(s[0])==EFFECTS,"one label per effect");
+  if(loaded(unsigned(e))) {
+    const char *name=playable(unsigned(e)) && loadedHooks().name?loadedHooks().name(unsigned(e)):nullptr;
+    return name?name:"Missing effect";
+  }
   return unsigned(e)<EFFECTS?s[unsigned(e)]:s[0];
 }
-// Settings order: Random first, then each drawn effect, Off last.
+// The name of what plays for a stored value (resolve()): a deleted added
+// effect celebrates as its fallback, so it is named as that, not "Missing effect".
+inline const char *playedLabel(Effect e){return label(resolve(e));}
+// The playable loaded slot after `after` (FIRST_LOADED-1 for the first), or Off.
+inline Effect nextLoaded(unsigned after) {
+  for(unsigned v=std::max(after+1,FIRST_LOADED);v<FIRST_LOADED+LOADED;++v)if(playable(v))return Effect(v);
+  return Effect::Off;
+}
+// Settings order: Random first, then each drawn effect, then each playable
+// loaded effect, Off last.
 inline Effect nextChoice(Effect e) {
   if(e==Effect::Random)return Effect::Orbit;
+  if(loaded(unsigned(e)))return nextLoaded(unsigned(e));
   if(!drawn(unsigned(e)))return Effect::Random;
-  const unsigned i=drawnIndex(e)+1;return i<DRAWN?drawnEffect(i):Effect::Off;
+  const unsigned i=drawnIndex(e)+1;return i<DRAWN?drawnEffect(i):nextLoaded(FIRST_LOADED-1);
 }
 // A Random pick: any drawn effect except the previous one.
 inline Effect pick(uint32_t bits,Effect previous) {
@@ -97,6 +147,7 @@ inline uint32_t duration(Effect e) {
     4900,4900,4800,5000,5000,  // Slingshot..Vapor (corsair set)
     4900,5000,5100,5000,4900}; // Crescent..Blink (reaper set)
   static_assert(sizeof(ms)/sizeof(ms[0])==EFFECTS,"one duration per effect");
+  if(playable(unsigned(e)))return loadedHooks().duration?loadedHooks().duration(unsigned(e)):0;
   return unsigned(e)<EFFECTS?ms[unsigned(e)]:0;
 }
 // How long each effect's sound runs, from the effect's start: the hit and a
@@ -131,15 +182,20 @@ struct Config {
   uint32_t generation()const{return revision;}
   bool select(Theme t,Effect e){return select(t,e,sound);}
   bool select(Theme t,Effect e,Sound s){
-    if(unsigned(t)>=ALL_THEMES || unsigned(e)>=EFFECTS || unsigned(s)>=SOUNDS)return false;
+    if(unsigned(t)>=ALL_THEMES || (unsigned(e)>=EFFECTS && !loaded(unsigned(e))) || unsigned(s)>=SOUNDS)return false;
     if(t!=theme || e!=effect || s!=sound){theme=t;effect=e;sound=s;++revision;}return true;
   }
+  // A Best effect that is a loaded slot: firmware without loaded effects
+  // rejects the record, so it is saved with a view naming the slot's stock
+  // fallback, one revision below (AppearanceStore::saveWithOlderView).
+  bool needsOlderView()const{return loaded(unsigned(effect));}
+  Config olderView()const{Config c=*this;c.effect=stockFallback(effect);c.revision=revision-1;return c;}
   // Byte 10 holds the sound level; it was reserved as zero before, so older
   // records read as Off. Firmware older than the sound setting rejects a
   // record with sound on and falls back to its other slot or defaults.
   void encode(Image &b)const{b={};put32(b.data(),0x01414c4c);put32(b.data()+4,revision);b[8]=uint8_t(theme);b[9]=uint8_t(effect);b[10]=uint8_t(sound);put32(b.data()+12,hash(b.data(),12));}
   bool decode(const uint8_t *b,size_t n){
-    if(n!=16 || get32(b)!=0x01414c4c || get32(b+12)!=hash(b,12) || b[8]>=ALL_THEMES || b[9]>=EFFECTS || b[10]>=SOUNDS || b[11])return false;
+    if(n!=16 || get32(b)!=0x01414c4c || get32(b+12)!=hash(b,12) || b[8]>=ALL_THEMES || (b[9]>=EFFECTS && !loaded(b[9])) || b[10]>=SOUNDS || b[11])return false;
     revision=get32(b+4);theme=Theme(b[8]);effect=Effect(b[9]);sound=Sound(b[10]);return true;
   }
 };

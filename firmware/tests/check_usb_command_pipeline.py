@@ -76,6 +76,7 @@ static struct Receiver {
   bool active()const{return receiving;}void cancel(){receiving=false;}
   void start(uint32_t){receiving=true;text.clear();act("restore_start");}
 }restoreRx;
+static void startRestore(){restoreRx.start(0);}
 // Theme requests: the same framing as a restore.
 namespace Themes {struct Request {static constexpr unsigned BYTES=44;};}
 static struct ThemeReceiver {
@@ -112,6 +113,22 @@ static void pollMilestoneRequest(const Snapshot &) {
     milestoneRx.receiving=false;++milestoneRx.errors;
   }
 }
+// Loaded-effect requests: the same framing again.
+static struct EffectReceiver {
+  bool receiving=false;std::string text;unsigned received=0,errors=0;
+  bool active()const{return receiving;}void cancel(){receiving=false;}
+}effectRx;
+static void listEffects(){act("effect_list");}
+static void startEffectRequest(){effectRx.receiving=true;effectRx.text.clear();act("effect_start");}
+static void pollEffectRequest(const Snapshot &) {
+  while(effectRx.active() && Serial.available()) {
+    const char c=Serial.read();
+    const bool b64=(c>='A' && c<='Z')||(c>='a' && c<='z')||(c>='0' && c<='9')||c=='+'||c=='/'||c=='=';
+    if(c=='.'){effectRx.receiving=false;++effectRx.received;continue;}
+    if(b64 || c=='\n'){effectRx.text+=c;continue;}
+    effectRx.receiving=false;++effectRx.errors;
+  }
+}
 static void pollRestore(const Snapshot &) {
   while(restoreRx.active() && Serial.available()) {
     const char c=Serial.read();
@@ -122,7 +139,7 @@ static void pollRestore(const Snapshot &) {
   }
 }
 namespace DeviceBackup {constexpr unsigned TEXT_BYTES=5248;}
-namespace Appearance {enum class Effect:uint8_t{Orbit};inline bool drawn(unsigned d){return d<6;}}
+namespace Appearance {enum class Effect:uint8_t{Orbit};inline bool drawn(unsigned d){return d<6;}inline bool celebrates(unsigned d){return drawn(d);}}
 static Appearance::Effect celebrationEffect(){return Appearance::Effect::Orbit;}
 static void previewBestEffect(Appearance::Effect){act("effect");}
 struct Motion {};static Motion demoMotion;
@@ -154,7 +171,7 @@ static uint32_t loopRng=11;
 static void pass(){pollCommands(Snapshot{});loopRng=loopRng*1664525u+1013904223u;clockMs+=5+(loopRng>>24)%31;}
 static void send(const std::string &bytes){for(char c:bytes)Serial.input.push_back(c);while(Serial.available())pass();}
 static void idle(unsigned ms){for(unsigned t=0;t<ms;t+=5)pass();}
-static void reset(){acted.clear();Serial.input.clear();Serial.output.clear();restoreRx={};themeRx={};milestoneRx={};idle(100);}
+static void reset(){acted.clear();Serial.input.clear();Serial.output.clear();restoreRx={};themeRx={};milestoneRx={};effectRx={};idle(100);}
 static unsigned harmful() {
   unsigned n=0;
   for(auto &[what,count]:acted)
@@ -198,6 +215,11 @@ int main() {
   reset();send("U\n");idle(50);assert(acted["milestone_start"]==1 && milestoneRx.active());
   send("TExVAQAA\n.\n");idle(50);assert(!milestoneRx.active() && milestoneRx.received==1 && milestoneRx.text=="TExVAQAA\n" && !milestoneRx.errors);
   reset();send("xxMxxUxx");idle(50);assert(!acted.count("milestone_list") && !acted.count("milestone_start"));
+  // Loaded effects: F lists, X takes one framed request, the same way.
+  reset();send("F\n");idle(50);assert(acted["effect_list"]==1);
+  reset();send("X\n");idle(50);assert(acted["effect_start"]==1 && effectRx.active());
+  send("TExYAQAA\n.\n");idle(50);assert(!effectRx.active() && effectRx.received==1 && effectRx.text=="TExYAQAA\n" && !effectRx.errors);
+  reset();send("xxFxxXxx");idle(50);assert(!acted.count("effect_list") && !acted.count("effect_start"));
   std::cout<<"updater: K backup and R restore lines intact\n";
   // Tools: a bare letter after a pause, scripted lines, typed keys.
   reset();send("w");idle(30);assert(acted["export"]==1);

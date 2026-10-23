@@ -34,7 +34,7 @@ public:
     const unsigned history=NvsBudget::blobEntries(PracticeHistory::IMAGE_BYTES),next=slot_^1u;
     if(!ready_)return history+SLOT_ENTRIES;
     unsigned grows=held(next)<SLOT_ENTRIES?SLOT_ENTRIES-held(next):0;
-    if(!c.fitsV016() && held(slot_)<SLOT_ENTRIES)grows+=SLOT_ENTRIES-held(slot_);
+    if((c.namesLoaded() || !c.fitsV016()) && held(slot_)<SLOT_ENTRIES)grows+=SLOT_ENTRIES-held(slot_);
     return NvsBudget::optionalNeeded(SLOT_ENTRIES,grows,history);
   }
   // False when no record could be read (the defaults stand in); damaged()
@@ -81,7 +81,10 @@ public:
     const unsigned next=slot_^1u;
     if(!write(next,c))return false;
     slot_=next;saved_=c.generation();damaged_=false;source_=c.fitsV2()?Source::Narrow:Source::Wide;
-    if(!c.fitsV016())write(next^1u,c.forV016());
+    // A table naming loaded slots leaves the view 0.18 reads (fallbacks for
+    // the slots); otherwise one 0.16 cannot read leaves 0.16's.
+    if(c.namesLoaded())write(next^1u,c.forOlder());
+    else if(!c.fitsV016())write(next^1u,c.forV016());
     return true;
   }
 private:

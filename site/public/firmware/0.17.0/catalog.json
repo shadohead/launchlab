@@ -553,6 +553,15 @@
       "md5": "a66a2f1f19b74bf2aa35e63db7cc964b",
       "elfSha256": "f35bb4088c412f6c9cc5a18b07095095be5db820f5b9488639eb2f4c4358def9",
       "sensor": "qre1113"
+    },
+    {
+      "version": "0.19.0",
+      "runtime": "0.19.0-sticks3-loadable-pm",
+      "size": 1570480,
+      "sha256": "8a2ff3bf53130a48fa429e63bf1ab44d6d2c5373ce2e088633dac23f6f5736b6",
+      "md5": "851b3dc098f2b8ada555c8f4b5a56886",
+      "elfSha256": "ef397aec09149e92e23ab0f5cc89024622bc6578637d14c6fe3fe968694e3070",
+      "sensor": "qre1113"
     }
   ],
   "published_channel": "beta"

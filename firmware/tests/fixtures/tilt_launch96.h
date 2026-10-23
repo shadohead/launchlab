@@ -1,18 +1,61 @@
+// Archived device export: launch #96, 0.6.1 orientation, optical span 83 ms.
+// Timestamp/pose regression fixture only; not an absolute orientation accuracy claim.
+// Original firmware/evidence/sticks3-0.6.1-orientation/latest-real-console.txt
+// SHA-256: 281b6ad78e27651fc9ae68f6a9cf0d6c6ddf46d07f53d6762c40fa6ea8136185
 #pragma once
-#include <cmath>
-// Synthetic timing/pose regression: 83 ms optical span, irregular context
-// timestamps and changing tilt/yaw. Contains no device or practice export.
-// Historical function name is retained for the playback harness interface.
 inline LaunchMotion::Trace savedTiltLaunch96() {
   LaunchMotion::Trace t;t.quality=LaunchMotion::Quality::Valid;t.fused=true;
-  t.number=1;t.rpm=5000;t.durationMs=83;t.count=48;t.gravity[2]=1;
-  for(unsigned i=0;i<t.count;++i) {
-    auto &p=t.points[i];
-    p.ms=i<12?-500+int(i*500/12):i<36?int((i-12)*83/23):83+int((i-35)*250/12);
-    const float roll=0.4f*std::sin(float(i)*0.17f),yaw=float(i)*0.016f;
-    const float cr=std::cos(roll/2),sr=std::sin(roll/2),cy=std::cos(yaw/2),sy=std::sin(yaw/2);
-    const float q[4]={cr*cy,sr*cy,sr*sy,cr*sy};
-    for(unsigned j=0;j<4;++j)p.q[j]=int16_t(std::lround(q[j]*16384));
-  }
+  t.number=96;t.rpm=4891.304f;t.durationMs=83;t.count=48;t.gravity[2]=1;
+  static constexpr int data[48][5]={
+    {-500,15346,1854,5418,-389},
+    {-458,15273,2125,5510,-554},
+    {-416,15172,2153,5761,-641},
+    {-375,15114,2183,5891,-729},
+    {-333,15030,2220,6071,-858},
+    {-291,14883,2344,6356,-1015},
+    {-250,14743,2473,6608,-1134},
+    {-208,14626,2482,6848,-1202},
+    {-166,14551,2380,7041,-1204},
+    {-125,14469,2396,7197,-1243},
+    {-83,14410,2343,7329,-1263},
+    {-41,14655,1838,6982,-1241},
+    {0,15340,1526,5380,-1359},
+    {3,15410,1514,5217,-1203},
+    {7,15477,1515,5049,-1054},
+    {10,15540,1515,4880,-904},
+    {14,15600,1520,4712,-751},
+    {18,15655,1530,4546,-593},
+    {21,15707,1541,4378,-435},
+    {25,15753,1574,4208,-279},
+    {29,15796,1619,4036,-124},
+    {32,15835,1664,3863,32},
+    {36,15877,1675,3676,196},
+    {39,15916,1682,3488,362},
+    {43,15952,1683,3292,531},
+    {47,15995,1652,3060,720},
+    {50,16031,1619,2827,908},
+    {54,16065,1569,2586,1102},
+    {58,16095,1491,2334,1307},
+    {61,16119,1412,2081,1510},
+    {65,16142,1295,1813,1703},
+    {68,16161,1155,1535,1888},
+    {72,16172,1015,1257,2072},
+    {76,16180,832,985,2233},
+    {79,16180,641,713,2390},
+    {83,16173,451,444,2544},
+    {104,16034,-618,-837,3203},
+    {125,15911,-1329,-1598,3309},
+    {145,15885,-1670,-1949,3086},
+    {166,15897,-1811,-2059,2862},
+    {187,15918,-1919,-2091,2647},
+    {208,15952,-1935,-2097,2410},
+    {229,15990,-1949,-2043,2190},
+    {250,16036,-1861,-1904,2047},
+    {270,16090,-1696,-1757,1893},
+    {291,16134,-1534,-1624,1773},
+    {312,16179,-1379,-1426,1657},
+    {333,16232,-1214,-1162,1461},
+  };
+  for(unsigned i=0;i<t.count;++i) {t.points[i].ms=data[i][0];for(unsigned j=0;j<4;++j)t.points[i].q[j]=data[i][j+1];}
   LaunchMotion::recordLevels(t);return t;
 }

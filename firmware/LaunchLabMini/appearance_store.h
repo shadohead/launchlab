@@ -27,12 +27,34 @@ public:
   }
   bool save(const Value &value){
     if(!ready_)return false;if(!pending(value))return true;
-    typename Value::Image image{},readback{};value.encode(image);
     const unsigned next=slot_^1u;
-    if(prefs_.putBytes(keys_[next],image.data(),image.size())!=image.size() ||
-       prefs_.getBytes(keys_[next],readback.data(),readback.size())!=readback.size() || image!=readback)return false;
-    Value decoded;if(!decoded.decode(readback.data(),readback.size()))return false;
+    if(!write(next,value))return false;
     slot_=next;saved_=value.generation();damaged_=false;return true;
+  }
+  // A record that firmware without loaded effects cannot read (it names a
+  // loaded slot) goes with the view that firmware can read, one generation
+  // below it, in the other slot: the view first, then the record over the
+  // slot that held the newest. Older firmware loads the view, and its own
+  // next save lands on the record's slot, so a change made there wins when
+  // the unit is upgraded again. A power cut after the view leaves the view
+  // as the newest record: the change without its loaded effects.
+  bool saveWithOlderView(const Value &value,const Value &older){
+    if(!ready_)return false;if(!pending(value))return true;
+    if(older.generation()!=value.generation()-1)return false;
+    const unsigned view=slot_^1u,record=view^1u;
+    if(!write(view,older))return false;
+    slot_=view;saved_=older.generation();damaged_=false;
+    if(!write(record,value))return false;
+    slot_=record;saved_=value.generation();return true;
+  }
+  // save() for a record that may name a loaded effect (Value has
+  // needsOlderView() and olderView()): such a record goes with the view
+  // older firmware reads, through saveWithOlderView(); the extra revision
+  // keeps that view newer than the record it replaces.
+  bool saveViewed(Value &value){
+    if(!value.needsOlderView())return save(value);
+    if(!pending(value))return true;
+    ++value.revision;return saveWithOlderView(value,value.olderView());
   }
   bool ready()const{return ready_;}
   // Whether both slots hold a record, so the next save replaces one in place.
@@ -44,5 +66,11 @@ public:
   // The generation the store holds now (saved or loaded).
   uint32_t savedGeneration()const{return saved_;}
 private:
+  bool write(unsigned slot,const Value &value){
+    typename Value::Image image{},readback{};value.encode(image);
+    if(prefs_.putBytes(keys_[slot],image.data(),image.size())!=image.size() ||
+       prefs_.getBytes(keys_[slot],readback.data(),readback.size())!=readback.size() || image!=readback)return false;
+    Value decoded;return decoded.decode(readback.data(),readback.size());
+  }
   Preferences prefs_;const char *keys_[2]={};uint32_t saved_=0;unsigned slot_=0;bool ready_=false,damaged_=false,present_=false;
 };

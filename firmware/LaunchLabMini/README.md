@@ -1,15 +1,16 @@
 # LaunchLab for M5StickS3
 
-This source is **0.18.1-sticks3-anime-pm** (beta). The recommended stable release is **0.18.0-sticks3-anime-pm**. Both are for **M5StickS3 K150 (ESP32-S3, 8 MB flash / 8 MB OPI PSRAM)**.
+This source is **0.19.0-sticks3-loadable-pm** (beta). The recommended stable release is **0.18.0-sticks3-anime-pm**. Both are for **M5StickS3 K150 (ESP32-S3, 8 MB flash / 8 MB OPI PSRAM)**.
 One application supports analog QRE1113 and TCRT5000 through the saved Sensor profile setting.
-See the beta [build context](../../docs/FIRMWARE_0.18.1.md) and [release notes](../releases/0.18.1-sticks3-anime-pm/README.md), or the stable [build context](../../docs/FIRMWARE_0.18.0.md).
+See the beta [build context](../../docs/FIRMWARE_0.19.0.md) and [release notes](../releases/0.19.0-sticks3-loadable-pm/README.md), or the stable [build context](../../docs/FIRMWARE_0.18.0.md).
 
 Tilt replay is reliable on hard pulls: the accelerometer uses its ±16 g range, and every IMU sample is read from the BMI270 FIFO, so the live level and recordings no longer drop out at rest or during saves. A pull that reaches the gyro's 2000 °/s limit keeps its replay, marked **Tilt approx.**
 A single click of the side power key saves pending pulls and powers off.
 RPM detection treats the cord rewind after a pull as part of that pull, confirms sharp pulls and rides through a missed mark. State-changing USB letters run only when sent on their own, so stray serial data cannot power off the device or change settings; backup and restore work as before.
 
 Filtered movement renews the 30-second unused shake-wake timer. Stillness also enables RESTING, which pauses ADC sampling until movement or a button resumes it. The shared sensor supply remains powered. USB keeps the device awake.
-0.18.1 beta starts celebration sounds in step with their animation, receives milestone saves from the website whole (an 8 KB USB queue in every build), fixes a rare IMU task watchdog reset and plays the speaker in mono.
+0.19.0 beta plays celebration effects added without a firmware update: shared as codes in the [website effects library](https://launchlab.beywatch.gg/effects), checked against the frame budget and installed over USB, with their own sounds. The compiler and example effects are in [`firmware/tools/fx`](../tools/fx).
+0.18.1 starts celebration sounds in step with their animation, receives milestone saves from the website whole (an 8 KB USB queue in every build), fixes a rare IMU task watchdog reset and plays the speaker in mono.
 0.18.0 adds 40 more celebration effects in eight sets of five (81 in all, any of which a milestone can play) and redesigns Boundless over the whole screen.
 Automatic saves go to a separate log in flash in a few milliseconds while the ADC keeps sampling, so saving never interrupts a pull; a storage reserve refuses a new custom theme, milestone table or effect set before saves would slow down.
 A unit that never saved these choices now uses the 1-turn peak RPM method, 30% brightness and Celebrate Both.

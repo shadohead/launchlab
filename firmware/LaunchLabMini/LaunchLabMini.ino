@@ -6,6 +6,8 @@
 #include "practice_store.h"
 #include "history_log.h"
 #include "spiffs_flash.h"
+#include "loaded_effects.h"
+#include "fx_transfer.h"
 #if LAUNCHLAB_HIL
 // Test builds: the NVS write faults (hil.h) also slow, fail or arm the history log writes.
 namespace Hil{inline bool nvsWrite(const char *key,size_t bytes);}
@@ -62,11 +64,11 @@ namespace Hil{inline bool nvsWrite(const char *key,size_t bytes);}
 #define LOOP_HELPER __attribute__((noinline))
 #if LAUNCHLAB_HIL
 // Test-only hardware-in-the-loop build; never a release. See tools/hil.
-static constexpr char VERSION[] = "0.18.1-sticks3-anime-hil-pm";
+static constexpr char VERSION[] = "0.19.0-sticks3-loadable-hil-pm";
 #elif LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = "0.18.1-sticks3-anime-pm";
+static constexpr char VERSION[] = "0.19.0-sticks3-loadable-pm";
 #else
-static constexpr char VERSION[] = "0.18.1-sticks3-anime";
+static constexpr char VERSION[] = "0.19.0-sticks3-loadable";
 #endif
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ
@@ -93,6 +95,14 @@ static AppearanceStore<Appearance::Bests> bestStore;
 // records as the mirror written at sleep, power-off and restore. Without the
 // log (another layout found there), they go to NVS in a checkpoint as before.
 static SpiffsFlash spiffsFlash;static HistoryLog::Store<SpiffsFlash> historyLog;
+// Loaded effects (loaded_effects.h, docs/FIRMWARE_LOADABLE_EFFECTS.md): the
+// store in the same partition and the engine that plays them, allocated at
+// boot after the ADC has its DMA memory (internal heap), the playing file in
+// PSRAM. Null when either allocation failed: loaded IDs then play their fallbacks.
+static LoadedEffects<SpiffsFlash> *loadedEffects=nullptr;
+// USB `X`: the request's base64 text and its bytes, in PSRAM, allocated at the first `X`.
+static FxTransfer::Receiver effectRx;static char *effectRxText=nullptr;static uint8_t *effectRxBytes=nullptr;
+static int64_t effectGuardStart=0;
 static uint32_t loggedHistory=0,loggedBests=0;
 static uint32_t powerMirror=0;  // checksum of the power log NVS holds
 // The user's custom themes (theme IDs THEMES..), beside the appearance record.
@@ -145,6 +155,8 @@ static uint32_t lastDraw=0,lastStatus=0,lastRevision=0,maxDrawUs=0,maxEffectUs=0
 // HIL only: each recap effect pass since the last E preview (elapsed ms, us),
 // listed by `!effectframes`, to see where in an effect its time goes.
 static struct {uint16_t elapsed[128],us[128];unsigned count=0;} effectFrames;
+// The loaded-effects spike (hil_fx.h): draws a previewing file instead.
+static bool hilFxDraw(uint16_t *pixels,int width,int height,uint32_t elapsed,uint16_t accent,uint16_t background);
 #ifdef BEST_EFFECT_PROFILE
 // A profiling debug build only: each pass's cycles per renderer stage, for
 // `!effectstages`.
@@ -228,7 +240,9 @@ static bool motionRestoreNeeded=false;
 static uint32_t motionInitAttempts=0,lastMotionInit=0;
 static bool motionInitPaired=false,motionInitSuccess=false;
 static MotionStore motionStore;
-static DeviceBackup::Receiver restoreRx;
+// A restore's base64 text, in PSRAM (allocated at the first R): a backup
+// with loaded effects can carry up to 32 of them. Decoded in place.
+static DeviceBackup::BufferReceiver restoreRx;static char *restoreText=nullptr;
 // One framed custom theme request (USB `T`).
 static DeviceBackup::LineReceiver<(Themes::Request::BYTES+2)/3*4> themeRx;
 // One framed milestone request (USB `U`).
@@ -704,8 +718,7 @@ LOOP_HELPER static void draw(const Snapshot &s) {
         if(screenReady && controls.setting==unsigned(Controls::Setting::BestEffect) && editorEffect.badge()) {
           const int64_t effectStarted=esp_timer_get_time();effectReadUs=effectStarted;BestEffectUI::Renderer::Anchor card;
           card.top=72;card.bottom=128;card.left=8;card.right=view.width()-9;
-          bestEffectRenderer.draw({static_cast<uint16_t *>(screen.getBuffer()),screen.width(),screen.height()},
-            editorEffect.effect(),editorEffect.elapsed(millis()),colors.accent,card,colors.background);
+          drawEffect(editorEffect.effect(),editorEffect.elapsed(millis()),card,colors);
           maxEffectUs=std::max(maxEffectUs,uint32_t(esp_timer_get_time()-effectStarted));
         }
         break;
@@ -722,8 +735,10 @@ LOOP_HELPER static void draw(const Snapshot &s) {
     // Direct-draw fallback stays functional without reading the hardware LCD.
     if(screenReady && !motionDemo && !motionPending && bestEffect.badge()) {
       const int64_t effectStarted=esp_timer_get_time();effectReadUs=effectStarted;
-      bestEffectRenderer.draw({static_cast<uint16_t *>(screen.getBuffer()),screen.width(),screen.height()},
-        bestEffect.effect(),bestEffect.elapsed(millis()),colors.accent,BestEffectUI::Renderer::Anchor(),colors.background);
+#if LAUNCHLAB_HIL
+      if(!hilFxDraw(static_cast<uint16_t *>(screen.getBuffer()),screen.width(),screen.height(),bestEffect.elapsed(millis()),colors.accent,colors.background))
+#endif
+      drawEffect(bestEffect.effect(),bestEffect.elapsed(millis()),BestEffectUI::Renderer::Anchor(),colors);
       maxEffectUs=std::max(maxEffectUs,uint32_t(esp_timer_get_time()-effectStarted));
 #if LAUNCHLAB_HIL
       if(effectFrames.count<128 && bestEffect.moving(millis())){
@@ -861,7 +876,7 @@ LOOP_HELPER static void prepareMotion(const Snapshot &event) {
   bestEffect.queue(decision.show,latestMotion.number,decision.effect,decision.best,decision.milestone);
   Serial.printf("CELEBRATION launch=%lu rpm=%.1f shown_rpm=%ld valid=%d mode=%s best=%d milestone=%u effect=%s celebrate=%d\n",(unsigned long)latestMotion.number,
     event.resultRpm,Milestones::shown(event.resultRpm),event.valid,Milestones::name(milestones.mode()),beat,unsigned(decision.milestone),
-    decision.show?Appearance::label(decision.effect):"none",decision.show);
+    decision.show?Appearance::playedLabel(decision.effect):"none",decision.show);
   motionStart=event.burstStartHostUs;motionEnd=event.burstEndHostUs;motionPending=true;
   // Update the recording regardless of navigation, without stealing an edit
   // or revealing results in tournament. Main/recap alone follows new pulls.
@@ -939,12 +954,12 @@ LOOP_HELPER static void previewSetting() {
 }
 // Random's upcoming pick stays available until a celebration is presented.
 LOOP_HELPER static Appearance::Effect upcoming() {
-  if(!Appearance::drawn(unsigned(upcomingEffect)))upcomingEffect=EffectSet::pick(esp_random(),Appearance::Effect::Off,effectSet.mask());
+  if(!Appearance::celebrates(unsigned(upcomingEffect)))upcomingEffect=EffectSet::pick(esp_random(),Appearance::Effect::Off,effectSet.mask());
   return upcomingEffect;
 }
 LOOP_HELPER static const Appearance::Effect *milestonePicks() {
   if(!milestonePicksReady || !milestonePicked.same(milestones)) {
-    for(unsigned i=0;i<milestones.count();++i)milestoneNext[i]=Milestones::pick(milestones.row(i).pool,esp_random(),Appearance::Effect::Off);
+    for(unsigned i=0;i<milestones.count();++i)milestoneNext[i]=Milestones::pick(Milestones::playable(milestones.row(i).pool),esp_random(),Appearance::Effect::Off);
     milestonePicked=milestones;milestonePicksReady=true;
   }
   return milestoneNext;
@@ -952,10 +967,11 @@ LOOP_HELPER static const Appearance::Effect *milestonePicks() {
 LOOP_HELPER static void nextMilestonePick(uint16_t rpm,Appearance::Effect played) {
   milestonePicks();
   for(unsigned i=0;i<milestones.count();++i)
-    if(milestones.row(i).rpm==rpm)milestoneNext[i]=Milestones::pick(milestones.row(i).pool,esp_random(),played);
+    if(milestones.row(i).rpm==rpm)milestoneNext[i]=Milestones::pick(Milestones::playable(milestones.row(i).pool),esp_random(),played);
 }
 LOOP_HELPER static Appearance::Effect celebrationEffect() {
-  if(appearance.effect!=Appearance::Effect::Random)return appearance.effect;
+  // A loaded Best effect that cannot play here (deleted, damaged) plays its fallback.
+  if(appearance.effect!=Appearance::Effect::Random)return Appearance::resolve(appearance.effect);
   return upcoming();
 }
 // Keep a queued recap's clip intact until its first presented frame takes the
@@ -1001,7 +1017,7 @@ LOOP_HELPER static void previewEffect() {
   // the old sound while its own renders.
   editorEffect.clear();dirty=true;
   if(soundPreview || soundRequest.active){soundPlayer.stop();soundPreview=false;soundRequest={};}
-  if(!Appearance::drawn(unsigned(choice)) && choice!=Appearance::Effect::Random){soundPlayer.stop();soundPreview=false;soundRequest={};return;}
+  if(!Appearance::celebrates(unsigned(choice)) && choice!=Appearance::Effect::Random){soundPlayer.stop();soundPreview=false;soundRequest={};return;}
   lastShown=choice==Appearance::Effect::Random?EffectSet::pick(esp_random(),lastShown,effectSet.mask()):choice;
   editorEffect.queue(true,1,lastShown);editorEffect.captured(1);
 }
@@ -1042,7 +1058,7 @@ static void writeSettings() {
     }
     if(current && MountOrientationSetting::save(prefs,mountMode))saved|=SettingsSave::Mount;
   }
-  if((items&SettingsSave::Appearance) && appearanceStore.save(appearance))saved|=SettingsSave::Appearance;
+  if((items&SettingsSave::Appearance) && appearanceStore.saveViewed(appearance))saved|=SettingsSave::Appearance;
   if((items&SettingsSave::Milestones) && milestoneStore.save(milestones))saved|=SettingsSave::Milestones;
   if((items&SettingsSave::Pin) && prefs.putUChar("ao_pin",live.pin)==1)saved|=SettingsSave::Pin;
   if((items&SettingsSave::ExtPower) && prefs.putBool("ext5v",extPower)==1)saved|=SettingsSave::ExtPower;
@@ -1305,6 +1321,58 @@ static void openHistoryLog() {
     opened==Open::Unsupported?"unsupported_layout":"failed",historyLog.isOpen()?historyLog.log().readyCount():0u,
     (long long)(esp_timer_get_time()-started));
 }
+// A loaded effect's own sound, for the speaker: rendered by the store's
+// engine from its own copy of the file.
+struct LoadedSoundSource:BestEffectSpeaker::LoadedSounds {
+  bool sound(unsigned effect,uint32_t &key,size_t &samples) override{return loadedEffects && loadedEffects->soundOf(effect,key,samples);}
+  bool begin(unsigned effect) override{return loadedEffects && loadedEffects->beginSound(effect);}
+  size_t run(int16_t *out,size_t count) override{return loadedEffects?loadedEffects->renderSound(out,count):0;}
+};
+static LoadedSoundSource loadedSounds;
+// After the ADC has its DMA memory: the runtime, the file buffers and the
+// sound renderer from PSRAM; the playing file's hot 4 KB from the internal
+// heap on the first added-effect play, so a unit without added effects keeps
+// all its DMA-capable memory (0.19 first took 10.5 KB of it at boot).
+// The store reads every installed effect once (a few ms each).
+static void openLoadedEffects() {
+  if(!spiffsFlash.partition){Serial.println("FX_STORE_BOOT state=no_partition");return;}
+  using Loaded=LoadedEffects<SpiffsFlash>;
+  void *memory=heap_caps_malloc(sizeof(Loaded),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+  auto *file=static_cast<uint8_t *>(heap_caps_malloc(Loaded::Store::MAX_PAYLOAD,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
+  if(!memory || !file){heap_caps_free(memory);heap_caps_free(file);Serial.println("FX_STORE_BOOT state=no_memory");return;}
+  // The sound's file copy and renderer go to PSRAM too; without them loaded
+  // effects sound as their stock fallbacks.
+  auto *soundFile=static_cast<uint8_t *>(heap_caps_malloc(Loaded::Store::MAX_PAYLOAD,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
+  void *soundMemory=heap_caps_malloc(sizeof(Loaded::SoundSpace),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+  Loaded::SoundSpace *sound=soundMemory?new(soundMemory) Loaded::SoundSpace():nullptr;
+  if(!soundFile || !sound){heap_caps_free(soundFile);heap_caps_free(soundMemory);soundFile=nullptr;sound=nullptr;Serial.println("FX_STORE_BOOT sound=no_memory");}
+  const Loaded::HotMemory hot=[]{return static_cast<uint8_t *>(heap_caps_malloc(LoadableFx::HOT_BYTES,MALLOC_CAP_INTERNAL|MALLOC_CAP_32BIT));};
+  loadedEffects=new(memory) Loaded(bestEffectRenderer,file,Loaded::Store::MAX_PAYLOAD,hot,soundFile,sound);
+  soundPlayer.attach(&loadedSounds);
+  const int64_t started=esp_timer_get_time();
+  using Open=Loaded::Store::Open;
+  const auto opened=loadedEffects->begin(spiffsFlash);
+  Serial.printf("FX_STORE_BOOT state=%s installed=%u us=%lld\n",opened==Open::Ready?"ready":opened==Open::Unformatted?"unformatted":
+    opened==Open::Unsupported?"unsupported_layout":"failed",loadedEffects->store().installed(),(long long)(esp_timer_get_time()-started));
+}
+// The 9 ms guard of a loaded effect's pass, timed from effectGuardStart.
+static bool effectOverBudget(void *){return esp_timer_get_time()-effectGuardStart>9000;}
+// A celebration's frame: a loaded effect through the engine, held to 9 ms a
+// pass by the guard and given up for the clean recap after three stopped
+// frames in a play (FX_OVERRUN); a loaded effect that cannot play here draws
+// its stock fallback; a built-in through its renderer.
+LOOP_HELPER static void drawEffect(Appearance::Effect e,uint32_t elapsed,const BestEffectUI::Renderer::Anchor &anchor,const Palette::Colors &colors) {
+  const BestEffectUI::Surface surface{static_cast<uint16_t *>(screen.getBuffer()),screen.width(),screen.height()};
+  if(Appearance::loaded(unsigned(e))) {
+    LoadableFx::Guard guard;guard.expired=effectOverBudget;effectGuardStart=esp_timer_get_time();
+    if(loadedEffects && loadedEffects->draw(surface,unsigned(e),elapsed,colors.accent,anchor,colors.background,guard)) {
+      if(loadedEffects->overran())Serial.printf("FX_OVERRUN id=%u elapsed=%lu\n",unsigned(e),(unsigned long)elapsed);
+      return;
+    }
+    e=Appearance::stockFallback(e);
+  }
+  bestEffectRenderer.draw(surface,e,elapsed,colors.accent,anchor,colors.background);
+}
 // At most one sector erase (14-30 ms, the ADC rides it) a second while
 // nothing is being measured, so a save never has to erase.
 LOOP_HELPER static void tickHistoryLog(uint32_t now,const Snapshot &s) {
@@ -1506,37 +1574,80 @@ LOOP_HELPER static void powerKeyOff(uint32_t now,const Snapshot &s) {
 // USB backup: everything a player would miss, read from RAM so pulls not yet
 // flushed are included. Lines are BACKUP_DATA base64; the host checks the
 // checksum inside the container.
+// The installed loaded effects' files and sources, read into one PSRAM block
+// the backup points at (format 7); the block is the caller's to free.
+static uint8_t *readLoadedForBackup(DeviceBackup::Contents &c) {
+  c.loadedCount=0;
+  if(!loadedEffects || !loadedEffects->store().installed())return nullptr;
+  const auto &store=loadedEffects->store();size_t total=0;
+  for(unsigned slot=0;slot<Appearance::LOADED;++slot)if(loadedEffects->info(slot).playable)total+=store.entry(slot).fileBytes+store.entry(slot).sourceBytes;
+  auto *block=static_cast<uint8_t *>(heap_caps_malloc(std::max<size_t>(total,1),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
+  if(!block)return nullptr;
+  size_t at=0;
+  for(unsigned slot=0;slot<Appearance::LOADED;++slot) {
+    if(!loadedEffects->info(slot).playable)continue;  // a damaged file stays behind
+    const auto &e=store.entry(slot);size_t file=0,source=0;
+    if(!store.readFile(slot,block+at,e.fileBytes,file) || !store.readSource(slot,block+at+file,e.sourceBytes,source))continue;
+    c.loaded[c.loadedCount++]={uint8_t(slot),block+at,source?block+at+file:nullptr,uint16_t(file),uint16_t(source)};at+=file+source;
+  }
+  return block;
+}
 LOOP_HELPER static void exportBackup() {
   auto contents=std::unique_ptr<DeviceBackup::Contents>(new(std::nothrow) DeviceBackup::Contents);
-  auto buffer=std::unique_ptr<DeviceBackup::Buffer>(new(std::nothrow) DeviceBackup::Buffer);
-  if(!contents || !buffer){Serial.println("BACKUP_ERROR out_of_memory");return;}
+  if(!contents){Serial.println("BACKUP_ERROR out_of_memory");return;}
   contents->practice=practice;contents->look=appearance;contents->bests=personalBests;
   contents->hasMotion=referenceMotion.valid();if(contents->hasMotion)contents->motion=referenceMotion;
   contents->settings={inactivity.minutes(),brightnessPercent,rpmEstimator,sensorProfile,displayFlipped,mountMode};
   contents->hasThemes=!themeLibrary.empty();contents->themes=themeLibrary;
   contents->hasMilestones=!milestones.isDefault();contents->milestones=milestones;
   contents->hasEffectSet=!effectSet.isDefault();contents->effectSet=effectSet;
-  const size_t n=DeviceBackup::encode(*contents,VERSION,*buffer);
-  if(!n){Serial.println("BACKUP_ERROR out_of_memory");return;}
-  Serial.printf("BACKUP_BEGIN format=%lu bytes=%u records=%u sessions=%u motion=%d themes=%d milestones=%d effect_set=%d runtime=%s\n",
+  uint8_t *files=readLoadedForBackup(*contents);
+  const size_t capacity=DeviceBackup::encodedBound(*contents);
+  auto *buffer=static_cast<uint8_t *>(heap_caps_malloc(capacity,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
+  const size_t n=buffer?DeviceBackup::encode(*contents,VERSION,buffer,capacity):0;
+  if(!n){heap_caps_free(buffer);heap_caps_free(files);Serial.println("BACKUP_ERROR out_of_memory");return;}
+  Serial.printf("BACKUP_BEGIN format=%lu bytes=%u records=%u sessions=%u motion=%d themes=%d milestones=%d effect_set=%d effects=%u runtime=%s\n",
     (unsigned long)contents->format(),unsigned(n),practice.size(),practice.sessions(),contents->hasMotion,contents->hasThemes,contents->hasMilestones,
-    contents->hasEffectSet,VERSION);
-  DeviceBackup::base64Lines(buffer->data(),n,96,[](const char *line){Serial.print("BACKUP_DATA ");Serial.println(line);});
+    contents->hasEffectSet,contents->loadedCount,VERSION);
+  DeviceBackup::base64Lines(buffer,n,96,[](const char *line){Serial.print("BACKUP_DATA ");Serial.println(line);});
   Serial.println("BACKUP_END");
+  heap_caps_free(buffer);heap_caps_free(files);
+}
+LOOP_HELPER static void startRestore() {
+  if(!restoreText)restoreText=static_cast<char *>(heap_caps_malloc(DeviceBackup::LOADED_TEXT_BYTES,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
+  if(!restoreText){Serial.println("RESTORE_ERROR reason=out_of_memory written=0");return;}
+  restoreRx.start(restoreText,DeviceBackup::LOADED_TEXT_BYTES,millis());
+  Serial.printf("RESTORE_READY max_chars=%u\n",unsigned(DeviceBackup::LOADED_TEXT_BYTES));
+}
+// A backup's loaded effects replace the device's (inside the restore's
+// checkpoint): the region formatted if it never was, then each file into the
+// slot the backup had it in. A backup without them leaves the device's.
+static bool restoreLoaded(const DeviceBackup::Contents &c) {
+  if(!c.loadedCount)return true;
+  if(!loadedEffects)return false;
+  auto &store=loadedEffects->store();
+  if(!store.isOpen()){bool failed=false;while(!store.prepareStep(failed) && !failed){}if(failed)return false;}
+  using Result=LoadedEffects<SpiffsFlash>::Store::Result;
+  if(loadedEffects->clear()!=Result::Ok)return false;
+  for(unsigned i=0;i<c.loadedCount;++i) {
+    const auto &e=c.loaded[i];
+    if(loadedEffects->restore(e.slot,e.file,e.fileBytes,e.source,e.sourceBytes)!=Result::Ok)return false;
+  }
+  return true;
 }
 // Validate the whole backup first, write every record inside one ADC-owned
 // idle checkpoint with readback, then restart so each store loads normally.
 // Restored records supersede whatever generation the device holds.
 LOOP_HELPER static void finishRestore(const Snapshot &s) {
   auto contents=std::unique_ptr<DeviceBackup::Contents>(new(std::nothrow) DeviceBackup::Contents);
-  auto buffer=std::unique_ptr<DeviceBackup::Buffer>(new(std::nothrow) DeviceBackup::Buffer);
-  if(!contents || !buffer){Serial.println("RESTORE_ERROR reason=out_of_memory");return;}
-  size_t n=0;
-  if(!restoreRx.take(buffer->data(),buffer->size(),n) || !DeviceBackup::decode(buffer->data(),n,*contents)) {
+  if(!contents){Serial.println("RESTORE_ERROR reason=out_of_memory");return;}
+  // Decoded in place: base64's bytes never overtake its text.
+  size_t n=0;uint8_t *bytes=reinterpret_cast<uint8_t *>(restoreText);
+  if(!restoreRx.take(bytes,DeviceBackup::LOADED_TEXT_BYTES,n) || !DeviceBackup::decode(bytes,n,*contents)) {
     Serial.println("RESTORE_ERROR reason=invalid_backup written=0");return;
   }
-  Serial.printf("RESTORE_VALID records=%u sessions=%u motion=%d themes=%d milestones=%d effect_set=%d from=%s\n",contents->practice.size(),
-    contents->practice.sessions(),contents->hasMotion,contents->hasThemes,contents->hasMilestones,contents->hasEffectSet,contents->runtime);
+  Serial.printf("RESTORE_VALID records=%u sessions=%u motion=%d themes=%d milestones=%d effect_set=%d effects=%u from=%s\n",contents->practice.size(),
+    contents->practice.sessions(),contents->hasMotion,contents->hasThemes,contents->hasMilestones,contents->hasEffectSet,contents->loadedCount,contents->runtime);
   if(motionPending || s.phase==AnalogTachometer::Phase::Launch || !acquisition.request(Action::IdleCheckpointBegin,s.launches)) {
     Serial.println("RESTORE_ERROR reason=busy written=0");return;
   }
@@ -1545,14 +1656,15 @@ LOOP_HELPER static void finishRestore(const Snapshot &s) {
   contents->themes.revision=themeLibrary.revision+1;contents->milestones.revision=milestones.revision+1;
   contents->effectSet.revision=effectSet.revision+1;
   const auto &settings=contents->settings;
-  const bool saved=practiceStore.save(contents->practice) && appearanceStore.save(contents->look) &&
+  // The effects first: records may name their slots.
+  const bool saved=restoreLoaded(*contents) && practiceStore.save(contents->practice) && appearanceStore.saveViewed(contents->look) &&
     bestStore.save(contents->bests) && (!contents->hasMotion || motionStore.save(contents->motion)) &&
     prefs.putUChar("sleep_min",settings.sleepMinutes)==1 && prefs.putUChar(Brightness::KEY,settings.brightness)==1 &&
     RpmEstimatorSetting::save(prefs,settings.rpmMethod) && SensorProfileSetting::save(prefs,settings.sensorProfile) &&
     DisplayFlipSetting::save(prefs,settings.flipped) && MountOrientationSetting::save(prefs,settings.mount) &&
     (!contents->hasThemes || themeStore.save(contents->themes,true)) &&
     (!contents->hasMilestones || milestoneStore.save(contents->milestones)) &&
-    (!contents->hasEffectSet || effectSetStore.save(contents->effectSet));
+    (!contents->hasEffectSet || effectSetStore.saveViewed(contents->effectSet));
   // The log gets the restored records too, mirrored to what NVS now holds,
   // so the next boot loads them whichever copy it picks.
   if(saved && historyLog.isOpen() && !(historyLog.saveHistory(contents->practice,contents->practice.generation()) &&
@@ -1573,10 +1685,10 @@ LOOP_HELPER static void pollRestore(const Snapshot &s) {
   for(unsigned n=0;n<256 && restoreRx.active() && Serial.available();++n) {
     inactivity.touch(now);
     switch(restoreRx.feed(Serial.read(),now)) {
-      case DeviceBackup::Receiver::Event::Chunk:Serial.printf("RESTORE_CHUNK chars=%u\n",restoreRx.received());break;
-      case DeviceBackup::Receiver::Event::Complete:finishRestore(s);break;
-      case DeviceBackup::Receiver::Event::Error:usbCommands.refused(now);Serial.printf("RESTORE_ERROR reason=%s written=0\n",restoreRx.error());break;
-      case DeviceBackup::Receiver::Event::None:break;
+      case DeviceBackup::TransferEvent::Chunk:Serial.printf("RESTORE_CHUNK chars=%u\n",unsigned(restoreRx.received()));break;
+      case DeviceBackup::TransferEvent::Complete:finishRestore(s);break;
+      case DeviceBackup::TransferEvent::Error:usbCommands.refused(now);Serial.printf("RESTORE_ERROR reason=%s written=0\n",restoreRx.error());break;
+      case DeviceBackup::TransferEvent::None:break;
     }
   }
 }
@@ -1748,6 +1860,127 @@ LOOP_HELPER static void finishMilestoneRequest(const Snapshot &s) {
   Serial.printf("MILESTONE_OK op=%s revision=%lu mode=%s rows=%u\n",op,(unsigned long)milestones.revision,
     Milestones::name(milestones.mode()),milestones.count());milestoneReply();
 }
+// ---- USB loaded effects -----------------------------------------------------
+// `F` lists the store and every slot; `X` takes one framed, checksummed
+// request (fx_transfer.h: put, delete, clear, or source to read a slot's
+// packed source back), checked whole and carried out while nothing is
+// measured, or nothing changes. The first install formats
+// the effect region (docs/FIRMWARE_FLASH_LAYOUT.md), a sector at a time.
+static void effectReply(){UsbTx::drain(100);}
+static constexpr size_t EFFECT_REQUEST_BYTES=FxTransfer::Request::HEADER+LoadedEffects<SpiffsFlash>::Store::MAX_PAYLOAD+FxTransfer::Request::TRAILER;
+static constexpr unsigned EFFECT_REQUEST_CHARS=unsigned((EFFECT_REQUEST_BYTES+2)/3*4);
+static const char *effectStoreName() {
+  if(!loadedEffects)return "unavailable";
+  return loadedEffects->store().isOpen()?"ready":"unformatted";
+}
+// Which records name loaded effect `id`, as FX_SLOT and a delete's reply list them.
+static const char *effectReferences(unsigned id) {
+  static char text[32];text[0]=0;
+  bool rows=false;for(unsigned i=0;i<milestones.count();++i)rows=rows || milestones.row(i).has(Appearance::Effect(id));
+  snprintf(text,sizeof(text),"%s%s%s%s%s",appearance.effect==Appearance::Effect(id)?"best":"",
+    appearance.effect==Appearance::Effect(id) && (effectSet.mask().has(id) || rows)?",":"",effectSet.mask().has(id)?"set":"",
+    effectSet.mask().has(id) && rows?",":"",rows?"milestones":"");
+  return text[0]?text:"none";
+}
+static bool effectReferenced(unsigned slot){return strcmp(effectReferences(Appearance::FIRST_LOADED+slot),"none")!=0;}
+LOOP_HELPER static void listEffects() {
+  const auto *store=loadedEffects?&loadedEffects->store():nullptr;
+  Serial.printf("FX_LIST version=1 engine=%u code=1 store=%s limit=%u installed=%u free_slots=%u first_id=%u\n",unsigned(LoadableFx::ENGINE),
+    effectStoreName(),unsigned(Appearance::LOADED),store?store->installed():0u,store?store->freeSlots():0u,Appearance::FIRST_LOADED);
+  for(unsigned slot=0;loadedEffects && slot<Appearance::LOADED;++slot) {
+    const auto &i=loadedEffects->info(slot);const auto &e=store->entry(slot);const uint8_t fallback=store->fallback(slot);
+    if(!i.installed && fallback==LoadableFx::Program::NO_FALLBACK)continue;
+    const unsigned id=Appearance::FIRST_LOADED+slot;
+    const char *state=!i.installed?"deleted":i.playable?"ok":i.engine>LoadableFx::ENGINE?"needs_engine":"damaged";
+    // The name last: it may hold spaces.
+    Serial.printf("FX_SLOT slot=%u id=%u state=%s uid=%016llx revision=%u bytes=%u source_bytes=%u duration_ms=%lu fallback=%s references=%s name=%s\n",
+      slot,id,state,(unsigned long long)(i.installed?e.uid:0),unsigned(i.revision),unsigned(e.fileBytes),unsigned(e.sourceBytes),(unsigned long)i.duration,
+      fallback!=LoadableFx::Program::NO_FALLBACK?Appearance::label(Appearance::Effect(fallback)):"Orbit",effectReferences(id),i.installed?i.name:"");
+  }
+  Serial.println("FX_LIST_END");effectReply();
+}
+LOOP_HELPER static void startEffectRequest() {
+  if(!effectRxText)effectRxText=static_cast<char *>(heap_caps_malloc(EFFECT_REQUEST_CHARS,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
+  if(!effectRxBytes)effectRxBytes=static_cast<uint8_t *>(heap_caps_malloc(EFFECT_REQUEST_BYTES,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
+  if(!loadedEffects || !effectRxText || !effectRxBytes){Serial.println("FX_ERROR reason=storage_unavailable written=0");effectReply();return;}
+  effectRx.start(effectRxText,EFFECT_REQUEST_CHARS,millis());
+  Serial.printf("FX_READY max_chars=%u\n",EFFECT_REQUEST_CHARS);effectReply();
+}
+// After an install or a delete: Random, the editors and the milestone picks see the change.
+static void effectsChanged() {
+  if(!Appearance::celebrates(unsigned(upcomingEffect)))upcomingEffect=Appearance::Effect::Off;
+  milestonePicksReady=false;
+  if(controls.page==Controls::Page::Edit && controls.setting==unsigned(Controls::Setting::BestEffect))cancelSettingEdit();
+  syncNavigation();dirty=true;
+}
+LOOP_HELPER static void finishEffectRequest(const Snapshot &s) {
+  size_t n=0;FxTransfer::Request request;
+  if(!effectRx.take(effectRxBytes,EFFECT_REQUEST_BYTES,n) || !request.decode(effectRxBytes,n)){Serial.println("FX_ERROR reason=invalid_request written=0");effectReply();return;}
+  const char *op=FxTransfer::Request::name(request.op);
+  auto fail=[&](const char *reason){Serial.printf("FX_ERROR op=%s reason=%s written=0\n",op,reason);effectReply();};
+  if(motionPending || s.phase==AnalogTachometer::Phase::Launch)return fail("busy");
+  using Result=LoadedEffects<SpiffsFlash>::Store::Result;
+  auto &store=loadedEffects->store();
+  if(request.op==FxTransfer::Request::Op::Put) {
+    LoadableFx::Program p;const auto loaded=LoadableFx::load(request.file,request.fileBytes,p,false);
+    if(loaded==LoadableFx::Error::Engine)return fail("engine");
+    if(loaded!=LoadableFx::Error::None){Serial.printf("FX_ERROR op=put reason=invalid_file problem=%s written=0\n",LoadableFx::label(loaded));effectReply();return;}
+    if(LoadableFx::hotBytes(p)>LoadableFx::HOT_BYTES)return fail("too_large_for_ram");
+    if(!store.isOpen()) {
+      // Once per unit: erase the region a sector at a time (14-30 ms each, the ADC rides them).
+      const int64_t started=esp_timer_get_time();bool failed=false;
+      while(!store.prepareStep(failed) && !failed)vTaskDelay(1);
+      if(failed)return fail("storage_unavailable");
+      Serial.printf("FX_NOTICE store_formatted us=%lld\n",(long long)(esp_timer_get_time()-started));
+    }
+    unsigned slot=0;
+    const Result r=loadedEffects->install(request.file,request.fileBytes,request.source,request.sourceBytes,effectReferenced,slot);
+    if(r!=Result::Ok) {
+      if(r==Result::WriteFailed){Serial.println("FX_ERROR op=put reason=write_failed written=unknown");effectReply();effectsChanged();return;}
+      return fail(r==Result::Full?"slots_full":r==Result::TooLarge?"too_large":r==Result::Engine?"engine":r==Result::Invalid?"invalid_file":"storage_unavailable");
+    }
+    effectsChanged();
+    Serial.printf("FX_OK op=put slot=%u id=%u uid=%016llx revision=%u installed=%u free_slots=%u name=%s\n",slot,Appearance::FIRST_LOADED+slot,
+      (unsigned long long)p.uid,unsigned(p.revision),store.installed(),store.freeSlots(),p.name);
+    effectReply();return;
+  }
+  if(!store.isOpen())return fail("not_found");
+  if(request.op==FxTransfer::Request::Op::Source) {
+    // The request is decoded and holds no file: its buffer takes the source.
+    const unsigned slot=request.slot;const auto &e=store.entry(slot);size_t n=0;
+    if(!e.used)return fail("not_found");
+    if(!store.readSource(slot,effectRxBytes,EFFECT_REQUEST_BYTES,n))return fail("read_failed");
+    Serial.printf("FX_SOURCE slot=%u id=%u uid=%016llx bytes=%u\n",slot,Appearance::FIRST_LOADED+slot,(unsigned long long)e.uid,unsigned(n));
+    DeviceBackup::base64Lines(effectRxBytes,n,96,[](const char *line){Serial.println(line);effectReply();});
+    Serial.printf("FX_OK op=source slot=%u bytes=%u\n",slot,unsigned(n));effectReply();return;
+  }
+  if(request.op==FxTransfer::Request::Op::Delete) {
+    const unsigned id=Appearance::FIRST_LOADED+request.slot;const char *references=effectReferences(id);
+    static char kept[32];strncpy(kept,references,sizeof(kept)-1);kept[sizeof(kept)-1]=0;
+    const Result r=loadedEffects->remove(request.slot);
+    if(r==Result::NotFound)return fail("not_found");
+    if(r!=Result::Ok){Serial.println("FX_ERROR op=delete reason=write_failed written=unknown");effectReply();effectsChanged();return;}
+    effectsChanged();
+    Serial.printf("FX_OK op=delete slot=%u id=%u references=%s installed=%u\n",unsigned(request.slot),id,kept,store.installed());effectReply();return;
+  }
+  const Result r=loadedEffects->clear();effectsChanged();
+  if(r!=Result::Ok){Serial.println("FX_ERROR op=clear reason=write_failed written=unknown");effectReply();return;}
+  Serial.printf("FX_OK op=clear installed=%u\n",store.installed());effectReply();
+}
+LOOP_HELPER static void pollEffectRequest(const Snapshot &s) {
+  const uint32_t now=millis();
+  if(effectRx.timedOut(now)){effectRx.cancel();Serial.println("FX_ERROR reason=timeout written=0");effectReply();return;}
+  for(unsigned n=0;n<256 && effectRx.active() && Serial.available();++n) {
+    inactivity.touch(now);
+    switch(effectRx.feed(Serial.read(),now)) {
+      case FxTransfer::Event::Chunk:Serial.printf("FX_CHUNK chars=%u\n",effectRx.received());effectReply();break;
+      case FxTransfer::Event::Complete:finishEffectRequest(s);break;
+      case FxTransfer::Event::Error:usbCommands.refused(now);Serial.printf("FX_ERROR reason=%s written=0\n",effectRx.error());effectReply();break;
+      case FxTransfer::Event::None:break;
+    }
+  }
+}
+
 // ---- USB effect set -----------------------------------------------------------
 // The milestone protocol carries it: `M` adds effect_set=, effect_set_store=
 // and effect_set_default= to MILESTONE_LIST, and `U` op 3 (set_effects,
@@ -1763,9 +1996,11 @@ static unsigned effectSetNeededEntries() {
   return NvsBudget::optionalNeeded(own,effectSetStore.bothSlots()?0:own,NvsBudget::blobEntries(PracticeHistory::IMAGE_BYTES));
 }
 // MILESTONE_LIST's effect set fields, each after a space.
+// loaded= is the mask of added effects that play here (IDs 96-127): the ones a
+// table or the set may name; older sites ignore it.
 static const char *effectSetFields() {
-  static char text[96];char mask[33];effectSet.mask().hex(mask);
-  snprintf(text,sizeof(text)," effect_set=%s effect_set_store=%s effect_set_default=%d",mask,effectSetStoreName(),effectSet.isDefault());
+  static char text[136];char mask[33],loaded[33];effectSet.mask().hex(mask);(EffectSet::celebrating()&EffectSet::LOADED).hex(loaded);
+  snprintf(text,sizeof(text)," effect_set=%s effect_set_store=%s effect_set_default=%d loaded=%s",mask,effectSetStoreName(),effectSet.isDefault(),loaded);
   return text;
 }
 // A new set reaches the Best effect editor and Random's next pick at once.
@@ -1805,7 +2040,7 @@ LOOP_HELPER static bool finishEffectSetRequest(const Snapshot &s) {
     milestoneReply();return true;
   }
   if(motionPending || s.phase==AnalogTachometer::Phase::Launch || !acquisition.request(Action::IdleCheckpointBegin,s.launches))return fail("busy");
-  const bool ok=effectSetStore.save(next);
+  const bool ok=effectSetStore.saveViewed(next);
   if(!acquisition.request(Action::CheckpointEnd))Serial.println("MILESTONE_NOTICE adc_checkpoint_resume_failed");
   if(!ok){Serial.printf("MILESTONE_ERROR op=%s reason=write_failed written=unknown\n",op);milestoneReply();dirty=true;return true;}
   effectSet=next;effectSetChanged();
@@ -2095,6 +2330,7 @@ void setup() {
   constexpr uint32_t DMA_HEAP=MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL;
   const unsigned dmaFreeBeforeAdc=unsigned(heap_caps_get_free_size(DMA_HEAP)),dmaLargestBeforeAdc=unsigned(heap_caps_get_largest_free_block(DMA_HEAP));
   if(!acquisition.begin(pin,rpmEstimator,sensorProfile))Serial.println("ADC_ERROR acquisition_task_allocation");
+  openLoadedEffects();
   pollBattery(millis(),acquisition.snapshot());
   powerRecord(wakingFromStandby?PowerDiagnostics::Wake:PowerDiagnostics::Boot,loggedWake);
   powerLogTick=lastPowerSample=millis();
@@ -2109,7 +2345,7 @@ void setup() {
     StickS3SensorProfile::minMark(sensorProfile),StickS3SensorProfile::EDGE_SWING_FRACTION);
   Serial.printf("RPM_SETTING_BOOT selected=%s default=%s legacy_history=retained_metric_not_encoded\n",RpmEstimator::name(rpmEstimator),
     RpmEstimator::name(RpmEstimator::DEFAULT_MODE));
-  Serial.println("READY commands: p status, P power log, C CPU power profiling, a/c tap A, h tap B, o hold A, b hold B, d diagnostics, n new session, u history export, K backup export, R backup restore, L custom themes, T theme request, M milestones, U milestone request, e motion export, q synthetic recap, E<0-4,7> best effect preview, t synthetic history, y/z storage check, v screen, w recorder export, x ext5V, g<N> GPIO, s stress, j UI stall");
+  Serial.println("READY commands: p status, P power log, C CPU power profiling, a/c tap A, h tap B, o hold A, b hold B, d diagnostics, n new session, u history export, K backup export, R backup restore, L custom themes, T theme request, M milestones, U milestone request, F loaded effects, X loaded-effect request, e motion export, q synthetic recap, E<0-4,7> best effect preview, t synthetic history, y/z storage check, v screen, w recorder export, x ext5V, g<N> GPIO, s stress, j UI stall");
 #if LAUNCHLAB_HIL
   hilBoot();
 #endif
@@ -2158,6 +2394,9 @@ LOOP_HELPER static void tickSound(const Snapshot &s) {
 // device. Bests, history and settings are unchanged; max_effect_us and
 // max_draw_us restart so PERF reports this preview's slowest pass and frame.
 LOOP_HELPER static void previewBestEffect(Appearance::Effect effect) {
+#if LAUNCHLAB_HIL
+  HilFx::playing=-1;
+#endif
   if(tournamentMode || motionPending || !latestMotion.number){Serial.println("EFFECT_PREVIEW_ERROR no_recap");return;}
   if(controls.page==Controls::Page::Edit)cancelSettingEdit();
   controls.page=Controls::Page::Main;syncNavigation();
@@ -2216,10 +2455,10 @@ LOOP_HELPER static void runUsbCommand(const char *command,const Snapshot &s) {
     return;
   }
   if(c=='E') {
-    // E<id> previews that effect (its stored value, one or two digits); E
-    // alone the saved one.
+    // E<id> previews that effect (its stored value, one to three digits: a
+    // loaded effect is 96-127); E alone the saved one.
     const unsigned id=command[1]?unsigned(strtoul(command+1,nullptr,10)):255u;
-    previewBestEffect(Appearance::drawn(id)?Appearance::Effect(id):celebrationEffect());
+    previewBestEffect(Appearance::celebrates(id)?Appearance::Effect(id):celebrationEffect());
     return;
   }
   if(c=='p')status();
@@ -2266,10 +2505,12 @@ LOOP_HELPER static void runUsbCommand(const char *command,const Snapshot &s) {
   else if(c=='n')newSession();
   else if(c=='u')exportHistory();
   else if(c=='K')exportBackup();
-  else if(c=='R'){restoreRx.start(millis());Serial.printf("RESTORE_READY max_chars=%u\n",DeviceBackup::TEXT_BYTES);}
+  else if(c=='R')startRestore();
   else if(c=='L')listThemes();
   else if(c=='T'){themeRx.start(millis());Serial.printf("THEME_READY max_chars=%u\n",unsigned((Themes::Request::BYTES+2)/3*4));themeReply();}
   else if(c=='M')listMilestones();
+  else if(c=='F')listEffects();
+  else if(c=='X')startEffectRequest();
   else if(c=='U'){milestoneRx.start(millis());Serial.printf("MILESTONE_READY max_chars=%u\n",unsigned((Milestones::Request::BYTES+2)/3*4));milestoneReply();}
   else if(c=='t')previewHistory();
   else if(c=='y')checkStorage();
@@ -2294,17 +2535,18 @@ LOOP_HELPER static void pollCommands(const Snapshot &s) {
   // run state-changing letters: see usb_command_guard.h.
   auto &guard=usbCommands;char command[UsbCommandGuard::MAX+1];
   if(controls.page==Controls::Page::Wipe || wipeBlocked) {
-    restoreRx.cancel();themeRx.cancel();milestoneRx.cancel();guard.cancel();
+    restoreRx.cancel();themeRx.cancel();milestoneRx.cancel();effectRx.cancel();guard.cancel();
   } else {
     if(restoreRx.active())pollRestore(s);
     if(themeRx.active())pollThemeRequest(s);
     if(milestoneRx.active())pollMilestoneRequest(s);
+    if(effectRx.active())pollEffectRequest(s);
     // Quiet is the receive queue seen empty, not a slow pass.
     if(!Serial.available())guard.idle(millis());
     if(guard.due(millis(),command))runUsbCommand(command,s);
   }
   // Bound incoming work; an unending USB stream cannot starve button/draw work.
-  for(unsigned n=0;n<32 && !restoreRx.active() && !themeRx.active() && !milestoneRx.active() && Serial.available();++n) {
+  for(unsigned n=0;n<32 && !restoreRx.active() && !themeRx.active() && !milestoneRx.active() && !effectRx.active() && Serial.available();++n) {
     const char c=Serial.read();const uint32_t now=millis();
     // Wipe confirmations and the final hold belong to physical buttons.
     // Read-only status and cancellation cannot advance the confirmation.

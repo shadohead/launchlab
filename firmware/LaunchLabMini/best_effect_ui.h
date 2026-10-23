@@ -40,6 +40,8 @@
 // pixel loops are fixed point, trigonometry comes from a table, time-only
 // terms are computed once per frame and geometry stays in float, once per
 // primitive.
+// Loaded effects (fx_effect.h) draw with this renderer's primitives.
+namespace LoadableFx {class Engine;struct Math;}
 namespace BestEffectUI {
 namespace detail {
 constexpr double PI_D=3.14159265358979323846;
@@ -72,6 +74,7 @@ constexpr std::array<uint8_t,256> SMOOTH=smoothTable();
 struct Surface {uint16_t *pixels=nullptr;int width=0,height=0;};
 
 class Renderer {
+  friend class LoadableFx::Engine;friend struct LoadableFx::Math;
 public:
   static constexpr int MAX_W=192,MAX_H=240,HALO=2;
   // Header rows searched for the RPM readout; the label sits above, the

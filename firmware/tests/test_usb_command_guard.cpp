@@ -62,7 +62,7 @@ int main() {
   // of dangerous letters, bursts that start or end on one. No guarded command
   // may run. (A burst that is exactly "<letter>\n" after quiet is a command.)
   uint32_t state=2026101701u;auto next=[&]{state=state*1664525u+1013904223u;return uint8_t(state>>24);};
-  const std::string dangerous="OSxgiaodhceQEqbnutyzvwjsLTMU";
+  const std::string dangerous="OSxgiaodhceQEqbnutyzvwjsLTMUFX";
   unsigned leaked=0;
   for(unsigned trial=0;trial<64;++trial) {
     Loop loop;loop.slow=true;loop.idle(100);
@@ -122,10 +122,12 @@ int main() {
     run.idle(100);run.send("g5");run.idle(25);assert(run.ran.back()=="E3"); // a pin needs its newline
   }
   {
-    // Effect ids from 10 have two digits, sent together; a third is a burst.
+    // Effect ids from 10 have two digits and loaded effects (96-127) three,
+    // sent together; a fourth is a burst.
     Run run;run.idle(100);run.send("E12\nE17");run.idle(25);
     assert((run.ran==std::vector<std::string>{"E12","E17"}));
-    run.idle(100);run.send("E123\n");run.idle(25);assert(run.ran.size()==2);
+    run.idle(100);run.send("E123\n");run.idle(25);assert(run.ran.size()==3 && run.ran.back()=="E123");
+    run.idle(100);run.send("E1234\n");run.idle(25);assert(run.ran.size()==3);
     // Typed key by key, a second digit after QUIET_MS is a new burst: E1 runs alone.
     run.idle(100);run.send("E1");run.idle(25);assert(run.ran.back()=="E1");
   }

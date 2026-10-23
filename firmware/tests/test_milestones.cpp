@@ -142,7 +142,7 @@ int main() {
     {auto bad=image;bad[30]=bad[12];bad[31]=bad[13];reseal(bad);Config x;assert(!x.decode(bad.data(),bad.size()));}
     {auto bad=image;bad[9]=0;std::memset(bad.data()+12,0,54);reseal(bad);Config x;assert(!x.decode(bad.data(),bad.size()));}
     {auto bad=image;bad[14]=0;reseal(bad);Config x;assert(!x.decode(bad.data(),bad.size()));} // an empty pool
-    {auto bad=image;bad[48+2+15]=0x80;reseal(bad);Config x;assert(!x.decode(bad.data(),bad.size()));} // bit 127: no such effect
+    {auto bad=image;bad[48+2+11]=0x80;reseal(bad);Config x;assert(!x.decode(bad.data(),bad.size()));} // bit 95: no such effect (83-95 are reserved)
     Config x;assert(!x.decode(image.data(),image.size()-1));
     // 0.16's and 0.17's v2 record still decodes; a table within effects 0-63
     // writes it byte for byte as they did.
@@ -282,5 +282,41 @@ int main() {
       std::cerr<<"firmware/tests/fixtures/milestone_vectors.json is stale: regenerate it with milestone_fixture.cpp\n";return 1;
     }
   }
-  std::cout<<"PASS: milestone defaults, table rules with failing rows, effect pools and picks across 128 bits, v2 and v1 import and compatibility, shown-RPM thresholds, one-animation rule, record round trip and damage, damaged-record fallback, NVS budget, USB requests, shared web vectors\n";
+  // Loaded effects (slots 96-127) in pools: a new table names only slots that
+  // play; the "L4" record keeps them in the same 160 bytes; a slot deleted
+  // since still loads and its fallback plays; the other slot gets the view
+  // 0.18 reads, each slot replaced by its stock fallback.
+  {
+    auto &h=Appearance::loadedHooks();
+    h.playable=[](unsigned e){return e==96 || e==120;};
+    h.fallback=[](unsigned e)->unsigned{return e==96?unsigned(Effect::Tidal):e==120?unsigned(Effect::Blink):e==110?unsigned(Effect::Frost):~0u;};
+    using EffectSet::flag;
+    const Row rows[]={{9000,Effect::Orbit},{12000,flag(Effect::Slash)|flag(96)},{15000,flag(120)}};
+    Config c;assert(c.set(Mode::Both,rows,3)==Problem::None && c.namesLoaded() && !c.fitsV2() && c.fits());
+    const Row missing[]={{9000,flag(110)}};
+    {Config d;assert(d.set(Mode::Both,missing,1)==Problem::Effect);}  // slot 110 does not play
+    Config::PackedImage b;assert(c.encodePacked(b) && unsigned(b[0]|b[1]<<8)==Config::PACKED_LOADED_MAGIC && Appearance::get32(b.data()+8)==((1u<<0)|(1u<<24)));
+    Config back;assert(back.decodePacked(b.data(),b.size()) && back.same(c));
+    // The view for 0.18: Tidal for 96, Blink for 120, in the same rows.
+    const Config view=c.forOlder();
+    assert(view.revision==c.revision-1 && !view.namesLoaded() && view.row(1).pool==(flag(Effect::Slash)|flag(Effect::Tidal)) && view.row(2).pool==flag(Effect::Blink));
+    Config::PackedImage vb;assert(view.encodePacked(vb) && unsigned(vb[0]|vb[1]<<8)==Config::PACKED_MAGIC);
+    // Slot 120 deleted: the stored table still loads, and its row plays Blink.
+    h.playable=[](unsigned e){return e==96;};
+    Config later;assert(later.decodePacked(b.data(),b.size()) && later.same(c));
+    assert(playable(later.row(2).pool)==flag(Effect::Blink) && playable(later.row(1).pool)==(flag(Effect::Slash)|flag(96)));
+    assert(later.select(Mode::Milestones) && later.mode()==Mode::Milestones);  // the mode still changes
+    // A table naming every slot in every row does not fit its record.
+    h.playable=[](unsigned e){return Appearance::loaded(e);};
+    Row wide[MAX_ROWS];for(unsigned i=0;i<MAX_ROWS;++i)wide[i]={uint16_t(9000+i*500),EffectSet::ALL|EffectSet::LOADED};
+    Config w;assert(w.set(Mode::Both,wide,MAX_ROWS)==Problem::None && !w.fits() && !w.encodePacked(b));
+    // The store: the table in one slot, the view in the other, both read back.
+    Preferences::data.clear();
+    h.playable=[](unsigned e){return e==96 || e==120;};
+    MilestoneStore store;Config fresh;assert(!store.begin(fresh));
+    c.revision+=2;assert(store.save(c));
+    Config reread;MilestoneStore again;assert(again.begin(reread) && reread.same(c) && reread.revision==c.revision);
+    h=Appearance::LoadedHooks();
+  }
+  std::cout<<"PASS: milestone defaults, table rules with failing rows, effect pools and picks across 128 bits, v2 and v1 import and compatibility, shown-RPM thresholds, one-animation rule, record round trip and damage, damaged-record fallback, NVS budget, USB requests, shared web vectors, loaded slots and their 0.18 view\n";
 }

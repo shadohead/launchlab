@@ -26,7 +26,7 @@ public:
   static constexpr uint32_t QUIET_MS=20,TYPING_MS=2000;
   static constexpr unsigned MAX=7;
   static bool immediate(char c){return c=='p' || c=='P' || c=='C' || c=='K' || c=='R';}
-  static bool guarded(char c){return c && strchr("OSxgiaodhceQEqbnutyzvwjsLTMU",c);}
+  static bool guarded(char c){return c && strchr("OSxgiaodhceQEqbnutyzvwjsLTMUFX",c);}
   uint32_t rejected=0;
   // A byte for the command parser. True when `out` holds a command to run.
   bool feed(char c,uint32_t now,char *out) {
@@ -105,7 +105,7 @@ private:
   bool extends(char c)const {
     const bool digit=c>='0' && c<='9';
     if(pending_[0]=='g')return digit && used_<MAX;
-    if(pending_[0]=='E')return digit && used_<=2;
+    if(pending_[0]=='E')return digit && used_<=3;  // E<id>: up to three digits (loaded effects are 96-127)
     return false;
   }
   bool complete(bool newline)const {

@@ -385,6 +385,37 @@ int main() {
       assert(M5.Speaker.remaining<BestEffectSound::samples(effect));checkSync(bestEffect,effect);
     }
   }
+  // A loaded effect with a sound of its own renders it into its slot's
+  // buffer, a slice at a time, and plays it like a built-in's, skip
+  // included; a replaced file (another key) renders again; one without a
+  // sound of its own plays its stock fallback's.
+  {
+    using Appearance::Effect;
+    struct FakeLoaded:BestEffectSpeaker::LoadedSounds {
+      uint32_t key=1;size_t samples=4000,at=0;bool has=true;unsigned begins=0;
+      bool sound(unsigned e,uint32_t &k,size_t &n) override{if(e!=96 || !has)return false;k=key;n=samples;return true;}
+      bool begin(unsigned) override{++begins;at=0;return true;}
+      size_t run(int16_t *out,size_t n) override{for(size_t i=0;i<n;++i)out[i]=int16_t((at+i)*7+key);at+=n;return n;}
+      std::vector<int16_t> clip(size_t skip)const{std::vector<int16_t> c;for(size_t i=skip;i<samples;++i)c.push_back(int16_t(i*7+key));return c;}
+    } fake;
+    Appearance::loadedHooks().fallback=[](unsigned){return unsigned(Effect::Sparkles);};
+    const Effect mine=Effect(96);
+    reset(Effect::Orbit);soundPlayer.attach(&fake);
+    unsigned slices=0;while(!soundPlayer.prepare(mine,1000))++slices;
+    assert(slices==3 && fake.begins==1 && soundPlayer.prepared(mine) && !soundPlayer.prepared(Effect::Sparkles));
+    assert(soundPlayer.play(mine,Appearance::Sound::Low,100) && M5.Speaker.clip==fake.clip(100));
+    assert(!soundPlayer.play(mine,Appearance::Sound::Low,fake.samples));
+    // Replaced while playing: it renders again once the old sound ends.
+    fake.key=2;assert(!soundPlayer.prepared(mine) && !soundPlayer.prepare(mine) && fake.begins==1);
+    M5.Speaker.playing=false;assert(soundPlayer.prepare(mine) && fake.begins==2);
+    assert(soundPlayer.play(mine,Appearance::Sound::Low) && M5.Speaker.clip==fake.clip(0));
+    // No sound of its own (or no store): its fallback's.
+    fake.has=false;M5.Speaker.playing=false;assert(!soundPlayer.prepared(mine));
+    while(!soundPlayer.prepare(mine,4000)){}
+    assert(soundPlayer.prepared(Effect::Sparkles) && soundPlayer.play(mine,Appearance::Sound::Low));checkClip(Effect::Sparkles);
+    soundPlayer.attach(nullptr);fake.has=true;assert(soundPlayer.prepared(mine));
+    Appearance::loadedHooks()=Appearance::LoadedHooks();
+  }
   // These buffers live for the firmware lifetime; release fake allocations
   // here so the host harness can also use leak detection.
   for(auto p:allocations)if(p)std::free(p);

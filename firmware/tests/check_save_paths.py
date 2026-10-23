@@ -547,7 +547,7 @@ static void effectSetRequests() {
   using Appearance::Effect;using EffectSet::flag;
   boot();effectSet={};effectSetStore={};milestones={};milestoneStore={};freeEntries=158;upcomingEffect=Effect::Orbit;
   assert(effectSetStore.begin(effectSet,"ll-appearance","eset0","eset1",true));milestoneStore.begin(milestones);assert(milestoneStore.ready());
-  assert(!std::strcmp(effectSetFields()," effect_set=0000000000000000000000000003ff9f effect_set_store=ok effect_set_default=1"));
+  assert(!std::strcmp(effectSetFields()," effect_set=0000000000000000000000000003ff9f effect_set_store=ok effect_set_default=1 loaded=00000000000000000000000000000000"));
   const EffectSet::Mask mine=flag(Effect::Slash)|flag(Effect::Crimson)|flag(Effect::Ravage);
   // A Best effect editor open on the device closes: it cycles the old set.
   controls.page=Controls::Page::Edit;controls.setting=unsigned(Controls::Setting::BestEffect);
@@ -557,7 +557,7 @@ static void effectSetRequests() {
   // Random's next pick, Orbit, is not offered any more: the next one is drawn from the set.
   assert(upcomingEffect==Effect::Off);
   {EffectSet::Config stored;assert(storedSet(stored) && stored.mask()==mine && stored.revision==effectSet.revision);}
-  assert(!std::strcmp(effectSetFields()," effect_set=00000000000000000000040000040080 effect_set_store=ok effect_set_default=0"));
+  assert(!std::strcmp(effectSetFields()," effect_set=00000000000000000000040000040080 effect_set_store=ok effect_set_default=0 loaded=00000000000000000000000000000000"));
   // The same set again writes nothing.
   effectSetRequest(mine);assert(guardedWrites==1);
   // Busy (a pull, a vetoed IMU barrier) or short of NVS: refused, nothing written.
@@ -593,7 +593,7 @@ static void effectSetRequests() {
   // A damaged record offers the default set; a request replaces it, even with the default.
   Preferences::data["ll-appearanceeset0"][9]^=1;Preferences::data["ll-appearanceeset1"][9]^=1;
   effectSet={};effectSetStore={};assert(!effectSetStore.begin(effectSet,"ll-appearance","eset0","eset1",true) && effectSetStore.damaged());
-  assert(effectSet.isDefault() && !std::strcmp(effectSetFields()," effect_set=0000000000000000000000000003ff9f effect_set_store=damaged effect_set_default=1"));
+  assert(effectSet.isDefault() && !std::strcmp(effectSetFields()," effect_set=0000000000000000000000000003ff9f effect_set_store=damaged effect_set_default=1 loaded=00000000000000000000000000000000"));
   effectSetRequest(EffectSet::DEFAULT_MASK);
   assert(!effectSetStore.damaged() && guardedWrites==6 && !std::strcmp(effectSetStoreName(),"ok"));
   {EffectSet::Config stored;assert(storedSet(stored) && stored.isDefault());}

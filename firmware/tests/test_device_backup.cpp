@@ -3,6 +3,7 @@
 #include "../LaunchLabMini/motion_store.h"
 #include "../LaunchLabMini/practice_store.h"
 #include "../LaunchLabMini/theme_store.h"
+#include "../tools/fx/fx_compiler.h"
 #include <cassert>
 #include <iostream>
 #include <string>
@@ -210,7 +211,7 @@ int main() {
       }
     }
     // A checksummed record with an invalid set is rejected whole.
-    for(EffectSet::Mask mask:{EffectSet::Mask(),flag(5),flag(Appearance::EFFECTS),flag(127)}) {
+    for(EffectSet::Mask mask:{EffectSet::Mask(),flag(5),flag(Appearance::EFFECTS),flag(95)}) {  // 83-95: reserved, never a set member
       Buffer encoded;const size_t length=encode(only,"x",encoded);const size_t body=length-4-EffectSet::Config::IMAGE_BYTES;
       auto bad=encoded;EffectSet::putMask(bad.data()+body+8,mask);
       put32(bad.data()+body+24,Appearance::hash(bad.data()+body,24));put32(bad.data()+length-4,checksum(bad.data(),length-4));
@@ -261,9 +262,9 @@ int main() {
      Contents setOnly=original;setOnly.hasEffectSet=true;setOnly.effectSet=withSet.effectSet;Buffer five;const size_t k=encode(setOnly,"x",five);
      assert(get32(five.data()+4)==EFFECT_SET_FORMAT);put32(five.data()+4,FORMAT);put32(five.data()+k-4,checksum(five.data(),k-4));
      Contents ignored;assert(!decode(five.data(),k,ignored));}
-    // A checksummed v3 record with an invalid pool (an effect past the last) is rejected whole.
+    // A checksummed v3 record with an invalid pool (a reserved value, 83-95) is rejected whole.
     {Buffer encoded;const size_t length=encode(pools,"x",encoded);const size_t body=length-4-Milestones::Config::IMAGE_BYTES;
-     auto bad=encoded;bad[body+8+4+2+15]|=0x40; // row 0's pool, bit 126
+     auto bad=encoded;bad[body+8+4+2+11]|=0x40; // row 0's pool, bit 94
      put32(bad.data()+body+Milestones::Config::IMAGE_BYTES-4,Appearance::hash(bad.data()+body,Milestones::Config::IMAGE_BYTES-4));
      put32(bad.data()+length-4,checksum(bad.data(),length-4));Contents ignored;assert(!decode(bad.data(),length,ignored));}
     // The edge: Volley (63) alone still fits 0.16's record, Starfall (64) does not.
@@ -394,5 +395,39 @@ int main() {
   restore.practice.supersede(afterHistory.generation());assert(p2.save(restore.practice));
   PracticeHistory again;PracticeStore p3;assert(p3.begin(again) && again.size()==41);
 
-  std::cout<<"PASS: device backup round trip, base64 line transfer at any split, fresh device without motion, all-or-nothing validation, receiver bounds, and restored records outrank newer saved generations\n";
+  // Format 7: the installed loaded effects (each with its slot and packed
+  // source) and records naming loaded slots; refused whole for a damaged
+  // file, a repeated or impossible slot, or nothing loaded to carry.
+  {
+    using namespace DeviceBackup;
+    auto effect=[](unsigned uid){
+      char text[200];std::snprintf(text,sizeof(text),"effect \"E%u\"\nuid %u\nduration 2000\nfallback \"Tidal\"\nframe {\n  dot(acx, ay1 + 20, accent, 1 - t/2)\n}\n",uid,uid);
+      const auto r=FxCompiler::compile(text);assert(r.ok);return r.bytes;};
+    const auto a=effect(11),b=effect(12);const std::string src="packed";
+    Contents c;c.look.select(Appearance::Theme::Mint,Appearance::Effect(101));
+    c.loadedCount=2;c.loaded[0]={3,a.data(),reinterpret_cast<const uint8_t *>(src.data()),uint16_t(a.size()),uint16_t(src.size())};
+    c.loaded[1]={5,b.data(),nullptr,uint16_t(b.size()),0};
+    assert(c.format()==LOADED_FORMAT);
+    std::vector<uint8_t> out(encodedBound(c));const size_t n=encode(c,"0.19.0",out.data(),out.size());
+    assert(n && n<=out.size() && get32(out.data()+4)==LOADED_FORMAT);
+    {Buffer fixed;assert(!encode(c,"x",fixed));}  // effects never fit the fixed buffer
+    Contents back;assert(decode(out.data(),n,back) && back.loadedCount==2 && back.look.effect==Appearance::Effect(101));
+    assert(back.loaded[0].slot==3 && std::equal(a.begin(),a.end(),back.loaded[0].file) && back.loaded[0].sourceBytes==src.size() &&
+           std::equal(src.begin(),src.end(),back.loaded[0].source) && back.loaded[1].slot==5 && !back.loaded[1].source);
+    auto reseal=[&](std::vector<uint8_t> &x){put32(x.data()+n-4,checksum(x.data(),n-4));};
+    const size_t section=n-4-(8+4+6+a.size()+src.size()+6+b.size());
+    // A file damaged inside the section: the loader refuses it, so the backup.
+    {auto bad=out;bad[section+8+4+6+40]^=1;reseal(bad);Contents x;assert(!decode(bad.data(),n,x));}
+    // The same slot twice, or slot 32.
+    {auto bad=out;bad[section+8+4+6+a.size()+src.size()]=3;reseal(bad);Contents x;assert(!decode(bad.data(),n,x));}
+    {auto bad=out;bad[section+8+4]=32;reseal(bad);Contents x;assert(!decode(bad.data(),n,x));}
+    // A loaded Best effect alone is format 7 too; nothing loaded at all is not a format 7 backup.
+    Contents named;named.look.select(Appearance::Theme::Classic,Appearance::Effect(120));assert(named.format()==LOADED_FORMAT);
+    Buffer fixed;const size_t m=encode(named,"x",fixed);assert(m && get32(fixed.data()+4)==LOADED_FORMAT);
+    Contents y;assert(decode(fixed.data(),m,y) && y.look.effect==Appearance::Effect(120) && !y.loadedCount);
+    Contents plain;Buffer p;const size_t k=encode(plain,"x",p);assert(get32(p.data()+4)==LEGACY_FORMAT);
+    put32(p.data()+4,LOADED_FORMAT);put32(p.data()+k-4,checksum(p.data(),k-4));Contents z;assert(!decode(p.data(),k,z));
+  }
+
+  std::cout<<"PASS: device backup round trip, base64 line transfer at any split, fresh device without motion, all-or-nothing validation, format 7 with loaded effects, receiver bounds, and restored records outrank newer saved generations\n";
 }

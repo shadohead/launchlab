@@ -45,6 +45,17 @@ struct Row {
 };
 // Bit n set for every drawn effect of this firmware.
 inline Pool drawnMask(){return EffectSet::ALL;}
+// What of a pool can play here: its drawn effects and playable loaded slots,
+// or, when none can, its loaded members' stock fallbacks (Orbit at worst),
+// so a row whose loaded effects were deleted still celebrates.
+inline Pool playable(Pool pool) {
+  const Pool here=pool&EffectSet::celebrating();
+  if(here)return here;
+  Pool stand;
+  for(unsigned e=Appearance::FIRST_LOADED;e<Appearance::FIRST_LOADED+Appearance::LOADED;++e)
+    if(pool.has(e))stand|=EffectSet::flag(Appearance::stockFallback(Appearance::Effect(e)));
+  return stand;
+}
 // One effect of the pool, uniformly, never `previous` unless it is all the
 // pool holds (as Random never repeats its previous pick).
 inline Appearance::Effect pick(Pool pool,uint32_t bits,Appearance::Effect previous) {
@@ -104,8 +115,11 @@ public:
   const Row &row(unsigned i)const{return rows_[i<MAX_ROWS?i:0];}
 
   // 1..MAX_ROWS rows, MIN_RPM..MAX_RPM, strictly rising, each a non-empty
-  // pool of drawn effects; `at` gets the failing row.
-  static Problem check(Mode mode,const Row *rows,unsigned count,unsigned *at=nullptr) {
+  // pool of drawn effects and loaded slots; `at` gets the failing row. A new
+  // table may name a loaded slot only while it plays (`installed`); a stored
+  // one keeps slots deleted since (playable() stands in for them).
+  static Problem check(Mode mode,const Row *rows,unsigned count,unsigned *at=nullptr,bool installed=true) {
+    const Pool allowed=installed?EffectSet::celebrating():drawnMask()|EffectSet::LOADED;
     if(at)*at=0;
     if(unsigned(mode)>=MODES)return Problem::Mode;
     if(count<1 || count>MAX_ROWS)return Problem::Count;
@@ -113,7 +127,7 @@ public:
       if(at)*at=i;
       if(rows[i].rpm<MIN_RPM || rows[i].rpm>MAX_RPM)return Problem::Range;
       if(i && rows[i].rpm<=rows[i-1].rpm)return Problem::Order;
-      if(!rows[i].pool || (rows[i].pool&~drawnMask()))return Problem::Effect;
+      if(!rows[i].pool || (rows[i].pool&~allowed))return Problem::Effect;
     }
     if(at)*at=0;
     return Problem::None;
@@ -128,7 +142,8 @@ public:
     if(!next.same(*this)){*this=next;++revision;}
     return Problem::None;
   }
-  bool select(Mode mode){return set(mode,rows_,count_)==Problem::None;}
+  // The mode alone: a table whose loaded slots were deleted since still changes mode.
+  bool select(Mode mode){if(unsigned(mode)>=MODES)return false;if(mode!=mode_){mode_=mode;++revision;}return true;}
   // Default mode and table, as a fresh device has.
   void reset(){Config d;set(d.mode_,d.rows_,d.count_);}
   bool same(const Config &o)const {
@@ -171,6 +186,20 @@ public:
     }
     return c;
   }
+  // Whether a pool names a loaded slot, which firmware without loaded
+  // effects cannot read; and what it reads instead, one revision older:
+  // each loaded member replaced by its stock fallback.
+  bool namesLoaded()const{for(unsigned i=0;i<count_;++i)if(rows_[i].pool&EffectSet::LOADED)return true;return false;}
+  Config forOlder()const {
+    Config c=*this;c.revision=revision-1;
+    for(unsigned i=0;i<count_;++i) {
+      Row &r=c.rows_[i];const Pool loaded=r.pool&EffectSet::LOADED;
+      r.pool&=~EffectSet::LOADED;
+      for(unsigned e=Appearance::FIRST_LOADED;e<Appearance::FIRST_LOADED+Appearance::LOADED;++e)
+        if(loaded.has(e))r.pool|=EffectSet::flag(Appearance::stockFallback(Appearance::Effect(e)));
+    }
+    return c;
+  }
   // The index of the highest threshold the shown RPM reaches, or -1.
   int reachedIndex(float rpm)const {
     const long value=shown(rpm);int hit=-1;
@@ -190,8 +219,9 @@ public:
       else EffectSet::putMask(r+2,rows_[i].pool);
     }
   }
-  // A body that passes check() and has its reserved and unused bytes zero.
-  static Problem decodeBody(const uint8_t *b,Mode &mode,Row *rows,unsigned &count,unsigned *at=nullptr,unsigned version=3) {
+  // A body that passes check() and has its reserved and unused bytes zero
+  // (`installed`: a request must name only loaded slots that play now).
+  static Problem decodeBody(const uint8_t *b,Mode &mode,Row *rows,unsigned &count,unsigned *at=nullptr,unsigned version=3,bool installed=true) {
     if(at)*at=0;
     if(b[2] || b[3])return Problem::Unused;
     mode=Mode(b[0]);count=b[1];
@@ -203,7 +233,7 @@ public:
       rows[i].rpm=uint16_t(r[0]|r[1]<<8);
       rows[i].pool=version==1?EffectSet::flag(r[2]):version==2?Pool(EffectSet::get64(r+2)):EffectSet::getMask(r+2);
     }
-    return check(mode,rows,count,at);
+    return check(mode,rows,count,at,installed);
   }
   void encode(Image &b)const {
     b.fill(0);Appearance::put32(b.data(),MAGIC);Appearance::put32(b.data()+4,revision);encodeBody(b.data()+8);
@@ -216,7 +246,7 @@ public:
     const unsigned version=versionOf(n);
     if(!version || Appearance::get32(b)!=magic(version) || Appearance::get32(b+n-4)!=Appearance::hash(b,n-4))return false;
     Mode mode;Row rows[MAX_ROWS];unsigned count=0;
-    if(decodeBody(b+8,mode,rows,count,nullptr,version)!=Problem::None)return false;
+    if(decodeBody(b+8,mode,rows,count,nullptr,version,false)!=Problem::None)return false;
     Config next;next.mode_=mode;next.count_=uint8_t(count);std::fill(next.rows_,next.rows_+MAX_ROWS,Row());
     std::copy(rows,rows+count,next.rows_);
     next.revision=Appearance::get32(b+4);*this=next;return true;
@@ -233,7 +263,7 @@ public:
   // then each row as 15 bits of RPM and w bits of pool, LSB first, unused
   // bits zero, and FNV-1a over the rest. 160 bytes take the 8 NVS entries a
   // 136-byte v2 slot does, so the record replaces a v2 slot without growing.
-  static constexpr uint16_t PACKED_MAGIC=0x334c;  // "L3"
+  static constexpr uint16_t PACKED_MAGIC=0x334c,PACKED_LOADED_MAGIC=0x344c;  // "L3", "L4"
   static constexpr unsigned PACKED_IMAGE_BYTES=160,PACKED_ROW_BITS=8*(PACKED_IMAGE_BYTES-12),RPM_BITS=15;
   static_assert(MAX_RPM<(1u<<RPM_BITS),"an RPM fits its bits");
   // Every table of this firmware packs: twelve rows of every effect.
@@ -244,35 +274,64 @@ public:
     for(unsigned i=0;i<count_;++i)for(unsigned e=w;e<Pool::BITS;++e)if(rows_[i].pool.has(e))w=e+1;
     return w;
   }
-  // False when the table does not fit (a later firmware with more effects).
+  // The pools' drawn effects' width (values below the loaded slots), and the loaded slots any pool names.
+  unsigned builtInWidth()const {
+    unsigned w=0;
+    for(unsigned i=0;i<count_;++i)for(unsigned e=w;e<Appearance::FIRST_LOADED;++e)if(rows_[i].pool.has(e))w=e+1;
+    return w;
+  }
+  uint32_t loadedColumns()const {
+    uint32_t u=0;
+    for(unsigned i=0;i<count_;++i)for(unsigned s=0;s<Appearance::LOADED;++s)if(rows_[i].pool.has(Appearance::FIRST_LOADED+s))u|=1u<<s;
+    return u;
+  }
+  static unsigned popcount(uint32_t v){unsigned n=0;for(;v;v&=v-1)++n;return n;}
+  // A table naming loaded slots is the "L4" record instead (firmware
+  // without loaded effects cannot read it and uses the other slot's
+  // forOlder()): after w, a 32-bit mask U of the loaded slots any pool names,
+  // then each row as 15 bits of RPM, w bits of drawn effects (w below 96) and
+  // one bit per slot in U. Same size, so it fits the same 8 NVS entries;
+  // false when the table does not fit (fits() says so before a save).
   bool encodePacked(PackedImage &b)const {
-    const unsigned w=packedWidth();
-    b.fill(0);if(count_*(RPM_BITS+w)>PACKED_ROW_BITS)return false;
-    b[0]=uint8_t(PACKED_MAGIC);b[1]=uint8_t(PACKED_MAGIC>>8);Appearance::put32(b.data()+2,revision);
+    const unsigned w=builtInWidth();const uint32_t used=loadedColumns();const unsigned extra=popcount(used);
+    const bool loaded=used!=0;const unsigned header=loaded?4:0;
+    b.fill(0);if(count_*(RPM_BITS+w+extra)>PACKED_ROW_BITS-8*header)return false;
+    const uint16_t magic=loaded?PACKED_LOADED_MAGIC:PACKED_MAGIC;
+    b[0]=uint8_t(magic);b[1]=uint8_t(magic>>8);Appearance::put32(b.data()+2,revision);
     b[6]=uint8_t(unsigned(mode_)|count_<<2);b[7]=uint8_t(w);
-    unsigned at=0;auto put=[&](unsigned bit){if(bit)b[8+at/8]|=uint8_t(1u<<(at%8));++at;};
+    if(loaded)Appearance::put32(b.data()+8,used);
+    unsigned at=0;auto put=[&](unsigned bit){if(bit)b[8+header+at/8]|=uint8_t(1u<<(at%8));++at;};
     for(unsigned i=0;i<count_;++i) {
       for(unsigned k=0;k<RPM_BITS;++k)put((rows_[i].rpm>>k)&1);
       for(unsigned e=0;e<w;++e)put(rows_[i].pool.has(e));
+      for(unsigned s=0;s<Appearance::LOADED;++s)if((used>>s)&1)put(rows_[i].pool.has(Appearance::FIRST_LOADED+s));
     }
     Appearance::put32(b.data()+PACKED_IMAGE_BYTES-4,Appearance::hash(b.data(),PACKED_IMAGE_BYTES-4));
     return true;
   }
-  // A packed record that passes check(), with every unused bit zero.
+  // Whether the table fits its stored record (a pool naming many loaded
+  // slots in every row may not).
+  bool fits()const{PackedImage b;return fitsV2() || encodePacked(b);}
+  // A packed record ("L3", or "L4" with loaded slots) that passes check(),
+  // with every unused bit zero.
   bool decodePacked(const uint8_t *b,size_t n) {
-    if(n!=PACKED_IMAGE_BYTES || unsigned(b[0]|b[1]<<8)!=PACKED_MAGIC ||
-       Appearance::get32(b+n-4)!=Appearance::hash(b,n-4))return false;
-    const unsigned mode=b[6]&3,count=b[6]>>2,w=b[7];
-    if(w>Pool::BITS || count>MAX_ROWS || count*(RPM_BITS+w)>PACKED_ROW_BITS)return false;
-    unsigned at=0;auto get=[&]{const bool bit=(b[8+at/8]>>(at%8))&1;++at;return bit;};
+    if(n!=PACKED_IMAGE_BYTES || Appearance::get32(b+n-4)!=Appearance::hash(b,n-4))return false;
+    const unsigned magic=unsigned(b[0]|b[1]<<8);
+    if(magic!=PACKED_MAGIC && magic!=PACKED_LOADED_MAGIC)return false;
+    const bool loaded=magic==PACKED_LOADED_MAGIC;const unsigned header=loaded?4:0;
+    const uint32_t used=loaded?Appearance::get32(b+8):0;
+    const unsigned mode=b[6]&3,count=b[6]>>2,w=b[7],extra=popcount(used),bits=PACKED_ROW_BITS-8*header;
+    if(w>(loaded?Appearance::FIRST_LOADED:Pool::BITS) || (loaded && !used) || count>MAX_ROWS || count*(RPM_BITS+w+extra)>bits)return false;
+    unsigned at=0;auto get=[&]{const bool bit=(b[8+header+at/8]>>(at%8))&1;++at;return bit;};
     Row rows[MAX_ROWS];
     for(unsigned i=0;i<count;++i) {
       unsigned rpm=0;for(unsigned k=0;k<RPM_BITS;++k)rpm|=unsigned(get())<<k;
       rows[i].rpm=uint16_t(rpm);
       for(unsigned e=0;e<w;++e)if(get())rows[i].pool|=EffectSet::flag(e);
+      for(unsigned s=0;s<Appearance::LOADED;++s)if((used>>s)&1 && get())rows[i].pool|=EffectSet::flag(Appearance::FIRST_LOADED+s);
     }
-    for(;at<PACKED_ROW_BITS;)if(get())return false;
-    if(check(Mode(mode),rows,count)!=Problem::None)return false;
+    for(;at<bits;)if(get())return false;
+    if(check(Mode(mode),rows,count,nullptr,false)!=Problem::None)return false;
     Config next;next.mode_=Mode(mode);next.count_=uint8_t(count);std::fill(next.rows_,next.rows_+MAX_ROWS,Row());
     std::copy(rows,rows+count,next.rows_);
     next.revision=Appearance::get32(b+2);*this=next;return true;
