@@ -127,7 +127,9 @@ public:
     // The speaker ran dry while blocks are still to come: an underrun, once
     // playing has begun (the first feed can precede the first render).
     if(fed_ && !out.queued() && fed_==filled && !done)++underruns_;
-    if(done && fed_==filled && !out.queued()){active_=false;out.stop();}
+    // The end: the channel holds nothing, so everything fed has played (its
+    // last block may have finished since `held` was read above).
+    if(done && fed_==filled && !out.queued()){played_=fed_;active_=false;out.stop();}
   }
   // Core 1: lowers the volume to silence over FADE_MS, then stops.
   void fade(uint32_t nowMs){if(active_ && !fading_){fading_=true;fadeStart_=nowMs;}}

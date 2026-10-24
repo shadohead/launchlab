@@ -16,6 +16,9 @@ static int failures=0;
 static void level(D &d,unsigned us,int value){for(unsigned i=0;i<us/20;++i)d.feed(uint16_t(value));}
 // One revolution: a mark half (AO pulled up by `amplitude`) and a base half.
 static void turn(D &d,unsigned period,int amplitude=100){level(d,period/2,140+amplitude);level(d,period-period/2,140);}
+// The period turn() generates: each half in whole 20 us samples (4,500 is
+// 4,480). From 0.20.1 the detector reads it, not the nearest 100 us step.
+static float generated(unsigned period){return float(period/2/20*20+(period-period/2)/20*20);}
 static void turns(D &d,unsigned period,unsigned count,int amplitude=100){for(unsigned i=0;i<count;++i)turn(d,period,amplitude);}
 static void turns(D &d,std::initializer_list<unsigned> periods,int amplitude=100){for(unsigned p:periods)turn(d,p,amplitude);}
 static D ready(StickS3SensorProfile::Mode mode=StickS3SensorProfile::Mode::Standard){
@@ -119,7 +122,7 @@ int main() {
     turns(d,{69700,29700,29400,23300,20500,18800,17500,17600,34400,36300,80100},1200);
     level(d,1020000,140);
     turns(d,{30400,16000,11000,9400,9300,9500,10300,11300,12500,15100,19500});settle(d);
-    CHECK(d.launches==2 && near(three(d),first) && near(first,60000000.0f/((9400+9300+9500)/3.0f),1));
+    CHECK(d.launches==2 && near(three(d),first) && near(first,60000000.0f/((generated(9400)+generated(9300)+generated(9500))/3.0f),1));
   }
   std::puts("PASS: rewinds inside REARM never launch; next pull after a seen rewind and after a quiet second measured");
 
@@ -135,7 +138,7 @@ int main() {
     for(float p=4500*1.08f;p<20000;p*=1.08f)turn(d,unsigned(p/100)*100);
     settle(d);
     if(d.launches!=1)std::printf("sharp pull %.2f/turn: launches=%u\n",factor,d.launches);
-    CHECK(d.launches==1 && near(single(d),60000000.0f/4500));
+    CHECK(d.launches==1 && near(single(d),60000000.0f/generated(4500)));
     const unsigned n=unsigned(periods.size());
     const float window=180000000.0f/(periods[n-1]+periods[n-2]+periods[n-3]);
     CHECK(three(d)>=window-3 && three(d)<=60000000.0f/4500+3);

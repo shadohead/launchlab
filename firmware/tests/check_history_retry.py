@@ -116,7 +116,7 @@ struct SleepReceipt{uint32_t magic;int64_t atUs;};static SleepReceipt sleepRecei
 struct {bool arm(){return true;}bool restore(){return true;}
   bool sleep(){assert(!practiceStore.pending(practice));reachedSleep=true;return false;}} shakeWake;
 static unsigned restoreFailureNotes=0;static void noteMotionRestoreFailure(){++restoreFailureNotes;}
-static void logLaunchMetrics(const Snapshot&){}
+static void logLaunchMetrics(const Snapshot&){}static void noteStartMark(const Snapshot&){}static void saveStartMarks(){}
 // Settings persistence has its own production harness (check_save_paths.py).
 static void writeSettings(){}
 static unsigned writeDurationMs=178;static std::vector<uint32_t> writeAt;

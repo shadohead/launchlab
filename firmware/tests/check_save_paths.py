@@ -73,6 +73,7 @@ prefix = r'''
 #include "display_flip_setting.h"
 #include "display_orientation.h"
 #include "sensor_profile_setting.h"
+#include "start_mark_reference.h"
 #include "mount_orientation_setting.h"
 #include "level_indicator.h"
 #include "power_status.h"
@@ -195,7 +196,7 @@ static void boot() {
   mountMode=liveMount=MountOrientation::Mode::Top;level={};drawnLevel={};lastLevelSampleUs=0;
   Preferences::data.clear();Preferences::zeroLengthKeys.clear();Preferences::failWrite=Preferences::shortRead=false;
   Preferences::beforeWrite=writeGuard;guardedWrites=0;directWrites=false;
-  practiceStore=PracticeStore{};appearanceStore={};bestStore={};
+  practiceStore=PracticeStore{};appearanceStore={};bestStore={};startMarks={};startMarksDirty=false;
   assert(prefs.begin("launchlab-mini",false) && practiceStore.begin(practice));
   assert(appearanceStore.begin(appearance,"ll-appearance","cfg0","cfg1") && bestStore.begin(personalBests,"ll-bests","best0","best1"));
   optical(1200000);assert(snap().phase==D::Phase::Ready && snap().opticalIdle);
@@ -291,6 +292,30 @@ static void shutdownFlush() {
   Preferences::failWrite=false;assert(acquisition.request(Action::CheckpointEnd));
   passes(SettingsSave::FAILED_RETRY_MS+10);assert(!settingsSave.pending() && stored("bright_pct")==70);
   std::cout<<"PASS: shutdown writes pending settings in its own checkpoint; a settings write failure never blocks power-off\n";
+}
+
+static void startMarkSaves() {
+  // The start-mark reference (0.20.1) is written in the shutdown checkpoint,
+  // its first save keeping the optional-record reserve, and a sensor profile
+  // change removes it in the same checkpoint as the setting: the fake
+  // Preferences fails any write outside one.
+  auto pulls=[](std::initializer_list<float> marks){
+    for(float m:marks){Snapshot e;e.valid=true;e.startMark=m;e.sensorProfile=sensorProfile;noteStartMark(e);}};
+  boot();pulls({1000,1010,990});assert(startMarksDirty);
+  assert(flushForShutdown(millis(),snap())==ShutdownFlush::Ready && !startMarksDirty && prefs.isKey("start_marks"));
+  StartMarkReference::Image image;assert(prefs.getBytes("start_marks",image,sizeof(image))==sizeof(image));
+  StartMarkReference::Reference back;assert(back.decode(image,sizeof(image)) && back.count==3 && back.floor(80)==400);
+  assert(acquisition.request(Action::CheckpointEnd));
+  // A sensor profile change removes it, with the setting.
+  apply(unsigned(Controls::Setting::Sensor),uint8_t(StickS3SensorProfile::Mode::Tcrt));
+  assert(flushForShutdown(millis(),snap())==ShutdownFlush::Ready && !prefs.isKey("start_marks"));
+  assert(startMarks.count==0 && startMarks.profile==uint8_t(StickS3SensorProfile::Mode::Tcrt));
+  assert(acquisition.request(Action::CheckpointEnd));
+  // Without the reserve a first save is refused and kept for the next power-off; power-off goes ahead.
+  boot();pulls({1000,1010,990});freeEntries=NvsBudget::blobEntries(PracticeHistory::IMAGE_BYTES)+NvsBudget::RESERVE_ENTRIES;
+  assert(flushForShutdown(millis(),snap())==ShutdownFlush::Ready && startMarksDirty && !prefs.isKey("start_marks"));
+  freeEntries=158;assert(acquisition.request(Action::CheckpointEnd));
+  std::cout<<"PASS: the start-mark reference saves in the shutdown checkpoint within the NVS reserve, and a profile change removes it\n";
 }
 
 // One framed request through the receiver, as the USB loop feeds it.
@@ -697,11 +722,14 @@ static void sensorFaultHistory() {
 
 main = r'''
 int main() {
-  freshEdgeAtApply();imuVeto();applyDuringPull();lostReplies();usbDeviceSettings();shutdownFlush();themeRequests();milestoneRequests();milestoneImport();effectSetRequests();nvsReserve();historyLogSaves();sensorFaultHistory();
+  freshEdgeAtApply();imuVeto();applyDuringPull();lostReplies();usbDeviceSettings();shutdownFlush();startMarkSaves();themeRequests();milestoneRequests();milestoneImport();effectSetRequests();nvsReserve();historyLogSaves();sensorFaultHistory();
 }
 '''
 
 functions = '\n'.join([
+    # The start-mark reference: real, so its NVS writes meet the same checkpoint rule.
+    statement('static StartMarkReference::Reference startMarks;'), statement('static bool startMarksDirty=false;'),
+    statement('static constexpr const char *START_MARKS_KEY='), function('noteStartMark'), function('saveStartMarks'),
     function('quietImuForFlash', 'bool'), function('previewSetting'), function('writeSettings'),
     function('saveSettings'), function('commitSetting'), function('saveHistory'),
     function('releaseOrphanCheckpoint'), shutdown_flush(),

@@ -220,13 +220,45 @@ int main() {
   }
   {
     // The example songs, pinned: a later engine must play them unchanged.
-    const uint64_t pinned[]={0x4f7022400aa1ec39ull,0x95ae5b94fa9c3c37ull,0xaf217fcf31c0fe1cull};
+    // Victory Lap (5.1 s) and Night Spin (6.0 s) were rewritten to a
+    // celebration's length in 0.20.1; Ripcord (2.0 s) is 0.20.0's.
+    const uint64_t pinned[]={0x125b090b56adf199ull,0x77fdde5426be23e0ull,0xaf217fcf31c0fe1cull};
     for(size_t k=0;k<3;++k) {
       const auto s=render(compileText(readFile(songs[k])));
       int peak=0;for(int16_t v:s)peak=std::max(peak,std::abs(int(v)));
       std::printf("%s: %zu samples (%.1f s), peak %d, hash %016llx\n",songs[k],s.size(),double(s.size())/SOUND_RATE,peak,(unsigned long long)fnv64(s));
       assert(fnv64(s)==pinned[k]);
     }
+  }
+
+  // ---- a song plays as long as a celebration at most (0.20.1) ----
+  {
+    // The compiler takes a song of exactly SONG_PLAY_MS (6 s: six 1 s rows)
+    // and refuses a longer one in plain words.
+    const auto six=effect("voice a = tone(gain: .3, decay: 9)\n",0)+
+      "song(tempo: 60, rows: 1) {\n pattern p {\n  a: \"a4 . . . . .\"\n }\n order p\n}\n";
+    const auto seven=effect("voice a = tone(gain: .3, decay: 9)\n",0)+
+      "song(tempo: 60, rows: 1) {\n pattern p {\n  a: \"a4 . . . . . .\"\n }\n order p\n}\n";
+    assert(render(compileText(six)).size()==SONG_PLAY_MS*SOUND_RATE/1000);
+    const auto refused=compileResult(seven);
+    assert(!refused.ok && refused.error.find("a song plays at most 6 s, as long as a celebration; this one runs 7.0 s")!=std::string::npos);
+  }
+  {
+    // 0.20.0 took songs of up to 120 s, and a unit keeps them: the loader
+    // still accepts one, and it plays its first 6 s, fading out over the
+    // last 300 ms. Made here by doubling a 4 s song's row length to 8 s.
+    auto f=compileText(effect("voice a = tone(gain: .3, decay: .1)\n",0)+
+      "song(tempo: 120, rows: 1) {\n pattern p {\n  a: \"a4 a4 a4 a4 a4 a4 a4 a4\"\n }\n order p\n}\n");
+    const size_t body=sectionAt(f,SONG)+4;
+    assert(get16(f.data()+body+4)==8000);
+    put16(f.data()+body+4,16000);reseal(f);
+    Program p;assert(load(f.data(),f.size(),p)==Error::None && p.songTotal==8*16000 && p.songCut());
+    const auto s=render(f);
+    assert(s.size()==SONG_PLAY_MS*SOUND_RATE/1000);
+    auto rms=[&](double a,double b){double e=0;size_t n=0;for(size_t i=size_t(a*SOUND_RATE);i<size_t(b*SOUND_RATE);++i,++n)e+=double(s[i])*s[i];return std::sqrt(e/double(n));};
+    // Full level until the fade (row 11 at 5.5 s), then falling to silence by 6 s.
+    const double held=rms(5.5,5.7),fading=rms(5.8,5.85),last=rms(5.95,6.0);
+    assert(held>1000 && fading<held*.75 && last<held*.2 && std::abs(int(s.back()))<=held*.02);
   }
 
   // ---- the loader refuses malformed songs ----
@@ -265,11 +297,11 @@ int main() {
     mutate([&](auto &f){f[sectionAt(f,SOUND)]=0x7f;},Error::Section);
   }
   {
-    // A song longer than 120 s is refused.
+    // A song far past a celebration (150 s, 0.20.0's limit was 120) is refused too.
     // At 60 bpm and a row a beat, a row is a second: 150 rows are 150 s.
     std::string rows;for(int k=0;k<149;++k)rows+=". ";
     const auto r=compileResult(effect("voice a = pulse()\nsong(tempo: 60, rows: 1) {\n pattern p {\n  a: \"c4 "+rows+"\"\n }\n order p\n}\n",0));
-    assert(!r.ok && r.error.find("at most 120 s")!=std::string::npos);
+    assert(!r.ok && r.error.find("this one runs 150.0 s")!=std::string::npos);
   }
 
   // ---- fuzzing songs ----

@@ -26,9 +26,16 @@ struct Trace {
   }
  }
 };
-static bool generatedRpm(float rpm,unsigned period){
- return std::isfinite(rpm) && rpm>=60000000.0f/(period+100)-.01f && rpm<=60000000.0f/(period-100)+.01f;
+static bool generatedRpm(float rpm,unsigned period,float late=100){
+ return std::isfinite(rpm) && rpm>=60000000.0f/(period+late)-.01f && rpm<=60000000.0f/(period-100)+.01f;
 }
+// After idle there is no swing history, so a burst's first rise is judged
+// against the noise band, near the start of the rolling mean's 500 us ramp;
+// later rises wait for 70% of the swing. Its first period reads up to
+// 0.7 x 500 us (+ a sample) long, and the first window's three-turn reading
+// (the one kept on these short bursts) includes it; the 100 us grid rounded
+// it to 300 us until 0.20.1.
+constexpr float FIRST_TURN_LATE=(.7f*500+20)/3;
 struct Result {bool pass=false;unsigned launches=0;uint64_t confirmed=0,fourth=0,first=0,last=0;float three=0,single=0;};
 static Result burst(Trace &t,unsigned period,unsigned turns,float duty,bool highFirst){
  const unsigned before=t.d.launches;
@@ -48,7 +55,7 @@ static Result burst(Trace &t,unsigned period,unsigned turns,float duty,bool high
   const bool boundaries=int64_t(t.d.burstStartUs)>=int64_t(r.first)-300 && t.d.burstStartUs<=r.first+600 &&
     int64_t(t.d.burstEndUs)>=int64_t(r.last)-300 && t.d.burstEndUs<=r.last+600;
   r.pass=count && ready && t.d.resultValid && t.d.ended==AnalogTachometer::End::Gap && latency && boundaries &&
-   generatedRpm(RpmEstimator::select(RpmEstimator::Mode::ThreeTurn,r.three,r.single),period) &&
+   generatedRpm(RpmEstimator::select(RpmEstimator::Mode::ThreeTurn,r.three,r.single),period,FIRST_TURN_LATE) &&
    generatedRpm(RpmEstimator::select(RpmEstimator::Mode::SingleTurn,r.three,r.single),period);
  }
  return r;

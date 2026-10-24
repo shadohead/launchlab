@@ -1,8 +1,9 @@
 # Night Spin: an original, calmer groove (LaunchLab, 0.20). FM bells over a
-# drawn wavetable pad and a soft beat at 100 bpm, in A minor.
+# drawn wavetable pad and a soft beat at 100 bpm, in A minor. Both phrases
+# once and a cadence home to A minor: 6.0 s, as long as its celebration (0.20.1).
 effect "Night Spin"
 uid 0x4c4c4d5500000002
-revision 1
+revision 2
 duration 6000
 readout 1000
 
@@ -37,5 +38,11 @@ song(tempo: 100, rows: 4) {
     bass: "f1 . . . . . f2 . e1 . . . e2 . . ."
     beat: "kick . hat . rim . hat . kick . hat . rim . v10+hat hat"
   }
-  order one two one two
+  pattern end {
+    bell: "e6 . c6 . a5 . . off"
+    pad: "a3 . . . . . . off"
+    bass: "a1 . . . a2 . . off"
+    beat: "kick . hat . kick . . ."
+  }
+  order one two end
 }

@@ -6,6 +6,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include <atomic>
+#include <cstring>
 #include "sensor_profile.h"
 #include "rpm_estimator.h"
 #include "sample_ring.h"
@@ -50,6 +52,9 @@ public:
     RpmEstimator::Mode estimator=RpmEstimator::DEFAULT_MODE;
     StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;
     float candidateRpm=0,noise=0,amplitude=0,startNoise=0,contrast=0,hysteresis=0;
+    // The start floor in force and the last launch's weakest start mark
+    // (StartMarkReference), and the windows the floor held back.
+    float startFloor=0,startMark=0;uint32_t soundHeld=0;
     const char *stateName() const {
       if(suspended)return resting?"RESTING":"EXPORT";
       if(!ready)return "ADC ERROR";
@@ -83,6 +88,9 @@ public:
   // enqueued and no completion follows) and after its reply or failure.
   using RequestHook=bool(*)(Action action,bool done,bool ok);
   void setRequestHook(RequestHook hook){hook_=hook;}
+  // From the UI loop: the marks a launch must start on while a sound plays
+  // (0: the profile's own floor). The optical task applies it before each batch.
+  void setStartFloor(float floor){uint32_t bits;std::memcpy(&bits,&floor,4);startFloor_.store(bits,std::memory_order_relaxed);}
   bool request(Action action,uint32_t value=0) {
     if(hook_ && !hook_(action,false,false))return false;
     const bool ok=send(action,value);
@@ -118,6 +126,7 @@ private:
   uint16_t *storage_=nullptr;
   SampleRing ring_{nullptr,0};
   AnalogTachometer detector_;
+  std::atomic<uint32_t> startFloor_{0};
   RpmEstimator::Mode estimator_=RpmEstimator::DEFAULT_MODE;
   StickS3SensorProfile::Mode sensorProfile_=StickS3SensorProfile::DEFAULT_MODE;
   adc_continuous_handle_t adc_=nullptr;
@@ -235,6 +244,7 @@ private:
     const bool ok=initAdc();retryAt_=esp_timer_get_time()+1000000;return ok;
   }
   void process(const uint8_t *buffer,uint32_t bytes) {
+    {const uint32_t bits=startFloor_.load(std::memory_order_relaxed);std::memcpy(&detector_.startFloor,&bits,4);}
     // Reject malformed/foreign frames as sample loss, rather than silently
     // compressing timestamps by skipping samples and inventing faster RPM.
     if(!bytes || bytes%SOC_ADC_DIGI_RESULT_BYTES){++invalidFrames_;discontinuity(true);return;}
@@ -384,6 +394,7 @@ private:
     s.candidateRpm=detector_.candidateRpm;
     s.sustainedPeakRpm=detector_.sustainedPeakRpm;s.singlePeakRpm=detector_.singlePeakRpm;s.singlePeakUpdates=detector_.singlePeakUpdates;s.singlePeakRejected=detector_.singlePeakRejected;
     s.noise=detector_.noiseBand;s.amplitude=RpmEstimator::select(estimator_,detector_.sustainedPeakAmplitude,detector_.singlePeakAmplitude);s.startNoise=detector_.startNoiseBand;
+    s.startFloor=detector_.startFloor;s.startMark=detector_.startMark;s.soundHeld=detector_.soundHeldWindows;
     s.contrast=detector_.signalContrast;s.hysteresis=detector_.hysteresis;
     portENTER_CRITICAL(&snapshotMux_);snapshot_=s;portEXIT_CRITICAL(&snapshotMux_);
     // A change the queue cannot take is held and sent in order on the next

@@ -31,6 +31,7 @@ prefix=r'''
 #include "display_flip_setting.h"
 #include "display_orientation.h"
 #include "sensor_profile_setting.h"
+#include "start_mark_reference.h"
 #include "mount_orientation_setting.h"
 #include "level_indicator.h"
 #include "power_status.h"
@@ -60,6 +61,8 @@ static WipeConfirmation wipeConfirmation;
 static bool wipeFailed=false,wipeBlocked=false;
 static struct {void cancel(){}}restoreRx;
 static void beginWipe();static void cancelWipe();
+// The start-mark reference (its saves are checked by check_save_paths).
+static StartMarkReference::Reference startMarks;static bool startMarksDirty=false;static void loadStartMarks(){}static void saveStartMarks(){}
 static bool tournamentMode=false,historyPage=false,dirty=false,diagnostics=false,demo=false,motionDemo=false,motionPending=false,settingsSaveError=false,restorePreview=false,displayFlipped=false;
 static uint8_t brightnessPercent=Brightness::DEFAULT_PERCENT;
 static uint32_t historyOffset=0,newSessionAt=0,tournamentHintUntil=0;

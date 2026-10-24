@@ -445,5 +445,16 @@ int main() {
     const auto r=FxValidate::check(compileText(heavy),{FxValidate::fixture()});
     assert(!r.ok && r.problem.find("song too heavy")!=std::string::npos && r.songLoad>LoadableFx::SONG_BUDGET);
   }
+  {
+    // A 0.20.0 song longer than a celebration (6 s) is refused for new
+    // files; the device still plays one already installed (test_fx_music).
+    auto f=compileText(std::string("effect \"Long\"\nuid 0x4c4c4d5400000777\nduration 3000\nreadout 900\nframe { x = W }\n")+
+      "voice a = tone(gain: .3, decay: 9)\nsong(tempo: 120, rows: 1) {\n pattern p {\n  a: \"a4 a4 a4 a4 a4 a4 a4 a4\"\n }\n order p\n}\n");
+    size_t at=LoadableFx::HEADER_BYTES;while(f[at]!=LoadableFx::SONG)at+=4+LoadableFx::get16(f.data()+at+2);
+    LoadableFx::put16(f.data()+at+8,16000);
+    LoadableFx::put32(f.data()+24,uint32_t(f.size()));LoadableFx::put32(f.data()+28,0);LoadableFx::put32(f.data()+28,LoadableFx::crc32(f.data(),f.size()));
+    const auto r=FxValidate::check(f,{FxValidate::fixture()});
+    assert(!r.ok && r.problem=="song too long: 8.0 s (at most 6 s, as long as a celebration)");
+  }
   std::puts("test_fx_effects: ok");
 }
