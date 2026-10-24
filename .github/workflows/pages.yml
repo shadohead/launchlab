@@ -12,6 +12,9 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      CCACHE_MAXSIZE: 300M
+      CCACHE_COMPILERCHECK: content
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,11 +22,36 @@ jobs:
           node-version: 24
       - run: npm test
         working-directory: site
+      - name: Prepare optional compiler cache
+        run: |
+          # Keep objects isolated from changes to the runner's system headers
+          # and sanitizer libraries. ccache also checks source, flags and compiler.
+          echo "HOST_CACHE_IMAGE=${ImageOS}-${ImageVersion}" >> "$GITHUB_ENV"
+          echo "CCACHE_DIR=$RUNNER_TEMP/launchlab-host-ccache" >> "$GITHUB_ENV"
+          if command -v ccache >/dev/null || (
+            timeout 90 sudo apt-get update -q &&
+            timeout 90 sudo apt-get install -y --no-install-recommends ccache
+          ); then
+            echo "LAUNCHLAB_CCACHE=1" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Compiler cache unavailable; running the full suite without it."
+            echo "LAUNCHLAB_CCACHE=0" >> "$GITHUB_ENV"
+          fi
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        if: env.LAUNCHLAB_CCACHE == '1'
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: public-host-cc-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.HOST_CACHE_IMAGE }}-${{ github.sha }}
+          restore-keys: public-host-cc-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.HOST_CACHE_IMAGE }}-
       - run: bash scripts/test-firmware.sh
+      - name: Compiler cache statistics
+        if: always() && env.LAUNCHLAB_CCACHE == '1'
+        run: ccache --show-stats
       - run: python3 scripts/verify-artifacts.py
       - run: npm run build
         working-directory: site
       - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request'
         with:
           path: site/dist
   deploy:
