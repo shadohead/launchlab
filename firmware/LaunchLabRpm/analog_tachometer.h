@@ -105,11 +105,19 @@ public:
     // estimating the background jitter of the 0.5 ms rolling mean.
     diffs[diffIndex]=fabsf(value-previous);diffIndex=(diffIndex+1)%128;
     if(diffCount<128)diffCount++;
+    const float before=previous;
     previous=value;
     if(diffCount==128 && diffIndex%32==0) {
       float sorted[128];std::copy(diffs,diffs+128,sorted);
       std::nth_element(sorted,sorted+64,sorted+128);
       noiseBand=fmaxf(3.0f,20.0f*sorted[64]);
+      // Fast marks keep the mean on a transition at half the grid points or
+      // more (from about 25,000 rpm with a 30% mark), and the median became a
+      // transition's slope: the band then exceeded the whole swing, no edge
+      // registered and the burst ended before its peak (0.20.1). A pull
+      // starts slowly, so during one the band stays within twice the band it
+      // started with; outside a pull it still guards against phantom edges.
+      if(phase==Phase::Launch)noiseBand=fminf(noiseBand,fmaxf(3.0f,2.0f*startNoiseBand));
     }
     const bool blanked=nowUs>=blankFrom && nowUs<blankUntil;
     if(!blanked)trackSwing(value);
@@ -137,16 +145,17 @@ public:
         extreme=fmaxf(extreme,value);
         if(extreme-value>=hysteresis) {
           signalHigh=extreme;
-          high=false;extreme=value;fall=nowUs-260;
+          fall=crossing(before,value,extreme-hysteresis)-260;
+          high=false;extreme=value;
           if(minMark>0 && signalHigh-signalLow>=minMark)lastStrongEdge=nowUs;
         }
       } else {
         extreme=fminf(extreme,value);
         if(value-extreme>=hysteresis) {
           signalLow=extreme;signalContrast=fmaxf(0,signalHigh-signalLow);
+          const uint64_t stamp=crossing(before,value,extreme+hysteresis)-260;
           high=true;extreme=value;
           if(minMark>0 && signalContrast>=minMark)lastStrongEdge=nowUs;
-          const uint64_t stamp=nowUs-260;
           if(rise && fall>rise)cycle(stamp,uint32_t(fall-rise),riseSettled);
           rise=stamp;riseSettled=!edgeWarmup || pulseSwing()>0;
           if(pulseSwing()>0)edgeWarmup=false;
@@ -166,6 +175,16 @@ public:
       case End::DataLoss:return "data_loss";case End::Cancel:return "cancelled";default:return "none";}
   }
 private:
+  // An edge is where the rolling mean crossed its threshold, placed between
+  // the two grid values (100 us apart) that straddle it. Stamping the grid
+  // point after the crossing made every period a whole number of 100 us
+  // steps: 2.6% of a turn at 15,500 rpm, 4.8% at 29,000 (0.20.1). Stamps then
+  // subtract 260 us, the rolling window's centre, as before.
+  static constexpr float GRID_US=100;
+  uint64_t crossing(float before,float value,float threshold)const {
+    const float f=value==before?1.0f:std::min(1.0f,std::max(0.0f,(threshold-before)/(value-before)));
+    return nowUs-uint64_t(lroundf(GRID_US*(1-f)));
+  }
   uint16_t smooth[25]={};uint32_t sum=0;unsigned count=0,index=0,group=0;
   float diffs[128]={},previous=0,extreme=0;
   unsigned diffCount=0,diffIndex=0;

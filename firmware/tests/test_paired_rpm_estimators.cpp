@@ -12,6 +12,15 @@ namespace Original {
 namespace BeforeGuard {
 #include "../releases/0.11.2-sticks3-qre1113-scorepreview/source/analog_tachometer.h"
 }
+// 0.20.1 places each edge between the 100 us evaluation grid points, where
+// the frozen detectors stamp the grid point after it: a stamp moves by less
+// than one grid step, and a reading by less than one step of its period.
+// Launches, validity, phases, revisions and rearm stay exactly equal.
+static bool sameStamp(uint64_t a,uint64_t b){return (a>b?a-b:b-a)<100;}
+static bool sameRpm(float a,float b) {
+  if(a<=0 || b<=0)return a==b;
+  return std::fabs(60000000.0f/a-60000000.0f/b)<100;
+}
 template<class T>static void feed(T &d,unsigned us,int v){for(unsigned n=0;n<us/20;++n)d.feed(v);}
 template<class T>static void square(T &d,unsigned period,unsigned count,int amp=100) {
   for(unsigned n=0;n<count;++n){feed(d,period/2,140+amp);feed(d,period-period/2,140);}
@@ -49,7 +58,7 @@ struct OpticalTrace {
     if(current.phase==AnalogTachometer::Phase::Hold && current.rewindPending) {
       assert(before.phase!=BeforeGuard::AnalogTachometer::Phase::Launch);
       assert(current.launches==before.launches && current.resultRevision==before.resultRevision);
-      assert(current.resultRpm==before.resultRpm && current.burstEndUs==before.burstEndUs);
+      assert(sameRpm(current.resultRpm,before.resultRpm) && sameStamp(current.burstEndUs,before.burstEndUs));
       if(before.phase==BeforeGuard::AnalogTachometer::Phase::Hold)assert(current.rearmMs()>=before.rearmMs());
       return;
     }
@@ -74,13 +83,13 @@ struct OpticalTrace {
       if(current.sustainedPeakRpm>0)assert(generatedRpm(current.sustainedPeakRpm));
       if(current.singlePeakRpm>0)assert(generatedRpm(current.singlePeakRpm));
     } else {
-      assert(current.peakRpm==before.peakRpm && current.resultRpm==before.resultRpm);
-      assert(current.sustainedPeakRpm==before.sustainedPeakRpm);
+      assert(sameRpm(current.peakRpm,before.peakRpm) && sameRpm(current.resultRpm,before.resultRpm));
+      assert(sameRpm(current.sustainedPeakRpm,before.sustainedPeakRpm));
     }
-    if(recoveryOracleRpm>0)assert(current.burstStartUs>=before.burstStartUs &&
+    if(recoveryOracleRpm>0)assert(current.burstStartUs+100>before.burstStartUs &&
       current.burstStartUs<=before.burstStartUs+uint64_t(2*60000000.0f/recoveryOracleRpm)+1000);
-    else assert(current.burstStartUs==before.burstStartUs);
-    assert(current.burstEndUs==before.burstEndUs);
+    else assert(sameStamp(current.burstStartUs,before.burstStartUs));
+    assert(sameStamp(current.burstEndUs,before.burstEndUs));
     assert(current.rearmExtensions>=before.rearmExtensions);
     if(current.phase==AnalogTachometer::Phase::Hold)assert(current.rearmMs()>=before.rearmMs());
     else assert(current.rearmMs()==before.rearmMs());
@@ -101,12 +110,12 @@ int main() {
     auto d=ready();auto old=oldReady();square(d,10000,12);square(old,10000,12);
     square(d,4000,tail);square(old,4000,tail);feed(d,1700000,240);feed(old,1700000,240);
     assert(d.launches==1 && d.resultValid && old.launches==1);
-    assert(d.resultRpm==old.resultRpm && d.burstEndUs==old.burstEndUs);
+    assert(sameRpm(d.resultRpm,old.resultRpm) && sameStamp(d.burstEndUs,old.burstEndUs));
     assert(std::fabs(d.resultRpm-(tail<3?6000:15000))<3 && std::fabs(d.singlePeakRpm-15000)<3);
     assert(RpmEstimator::select(RpmEstimator::Mode::ThreeTurn,d.sustainedPeakRpm,d.singlePeakRpm)==d.resultRpm);
     assert(RpmEstimator::select(RpmEstimator::Mode::SingleTurn,d.sustainedPeakRpm,d.singlePeakRpm)==d.singlePeakRpm);
     const auto copy=HistoryCheckpoint(d);d.dataLoss();copy.restore(d);
-    assert(d.resultValid && d.sustainedPeakRpm==old.resultRpm && std::fabs(d.singlePeakRpm-15000)<3);
+    assert(d.resultValid && sameRpm(d.sustainedPeakRpm,old.resultRpm) && std::fabs(d.singlePeakRpm-15000)<3);
   }
   auto separated=ready();square(separated,10000,12);
   for(unsigned i=0;i<3;++i){square(separated,4000,1);square(separated,10000,8);}
@@ -119,7 +128,7 @@ int main() {
   }
   feed(ramp,1700000,240);feed(old,1700000,240);
   const float elapsedThree=180000000.f/(6800+6400+6000);
-  assert(std::fabs(ramp.resultRpm-elapsedThree)<3 && ramp.resultRpm==old.resultRpm);
+  assert(std::fabs(ramp.resultRpm-elapsedThree)<3 && sameRpm(ramp.resultRpm,old.resultRpm));
   assert(std::fabs(ramp.singlePeakRpm-10000)<3);
   const float arithmeticMean=(60000000.f/6800+60000000.f/6400+60000000.f/6000)/3;
   assert(std::fabs(ramp.resultRpm-arithmeticMean)>20); // Time average, not mean of RPMs.
@@ -129,7 +138,7 @@ int main() {
     square(d,4000,1,amplitude);square(baseline,4000,1,amplitude);
     square(d,10000,8);square(baseline,10000,8);
     feed(d,1600000,140);feed(baseline,1600000,140);
-    assert(d.launches==1 && d.sustainedPeakRpm==baseline.resultRpm && d.burstEndUs==baseline.burstEndUs);
+    assert(d.launches==1 && sameRpm(d.sustainedPeakRpm,baseline.resultRpm) && sameStamp(d.burstEndUs,baseline.burstEndUs));
     assert(std::fabs(d.singlePeakRpm-6000)<3); // Bad single mark rejected; retain frozen three-turn behavior.
   }
   // A known regular optical turn is subdivided by an extra low notch. Both

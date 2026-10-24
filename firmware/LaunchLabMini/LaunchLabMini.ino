@@ -64,11 +64,11 @@ namespace Hil{inline bool nvsWrite(const char *key,size_t bytes);}
 #define LOOP_HELPER __attribute__((noinline))
 #if LAUNCHLAB_HIL
 // Test-only hardware-in-the-loop build; never a release. See tools/hil.
-static constexpr char VERSION[] = "0.20.0-sticks3-songs-hil-pm";
+static constexpr char VERSION[] = "0.20.1-sticks3-songs-hil-pm";
 #elif LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = "0.20.0-sticks3-songs-pm";
+static constexpr char VERSION[] = "0.20.1-sticks3-songs-pm";
 #else
-static constexpr char VERSION[] = "0.20.0-sticks3-songs";
+static constexpr char VERSION[] = "0.20.1-sticks3-songs";
 #endif
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ
