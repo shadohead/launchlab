@@ -5,9 +5,21 @@
 #include <cassert>
 #include <cstdlib>
 #include <iostream>
+#include <new>
 #include <vector>
 
 #include "nor_flash.h"
+
+// Counts default-heap allocations while `counting` is set.
+static bool counting=false;static unsigned allocations=0;
+void *operator new(std::size_t n){if(counting)++allocations;if(void *p=std::malloc(n?n:1))return p;throw std::bad_alloc();}
+void *operator new[](std::size_t n){return operator new(n);}
+void *operator new(std::size_t n,const std::nothrow_t &)noexcept{if(counting)++allocations;return std::malloc(n?n:1);}
+void *operator new[](std::size_t n,const std::nothrow_t &t)noexcept{return operator new(n,t);}
+void operator delete(void *p)noexcept{std::free(p);}
+void operator delete[](void *p)noexcept{std::free(p);}
+void operator delete(void *p,std::size_t)noexcept{std::free(p);}
+void operator delete[](void *p,std::size_t)noexcept{std::free(p);}
 
 namespace {
 using Nor=NorFlash;
@@ -155,6 +167,22 @@ int main() {
     LogStore reboot;assert(reboot.open(f)==Log::Open::Ready && reboot.loadHistory(back,m));
     assert(pick(true,m,true,older.generation())==Source::Nvs);
   }
+  // Saves take nothing from the default heap: on the device that is internal
+  // RAM for buffers this size, and a history save while a song streamed took
+  // 5.4 KB of it, below the 32 KB DMA floor (0.20 HIL songs, 2026-10-23).
+  // Their buffers come from PSRAM there. (Loads run at boot and restore.)
+  {
+    Nor f;LogStore s;assert(s.open(f)==Log::Open::Formatted);
+    const auto h=pulls(40);Appearance::Bests b;PowerDiagnostics::Image power;PowerDiagnostics::fresh(power);
+    counting=true;allocations=0;
+    const bool ok=s.saveHistory(h,1) && s.saveBests(b,2) && s.savePower(power,3);
+    counting=false;
+    if(allocations)std::cerr<<allocations<<" default-heap allocations in the saves\n";
+    assert(ok && allocations==0);
+    PracticeHistory h2;PowerDiagnostics::Image p2;uint32_t m=0;
+    assert(s.loadHistory(h2,m) && m==1 && same(h,h2) && s.loadPower(p2,m) && m==3 && p2.count==power.count);
+  }
   std::cout<<"PASS: the history log formats a blank or foreign partition touching only its own sectors, leaves a newer layout alone, "
-             "wraps evenly with program-only saves, survives a power loss anywhere in a save or erase, and newest wins against the NVS mirror\n";
+             "wraps evenly with program-only saves, survives a power loss anywhere in a save or erase, newest wins against the NVS mirror, "
+             "and saves take no default (internal) heap\n";
 }
