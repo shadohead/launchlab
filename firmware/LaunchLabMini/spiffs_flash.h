@@ -1,5 +1,7 @@
 #pragma once
+#include "esp_memory_utils.h"
 #include "esp_partition.h"
+#include "flash_chunks.h"
 #include "flash_log.h"
 
 // The spiffs partition (0x670000, 1.5 MB in the 8 MB layout every LaunchLab
@@ -18,13 +20,18 @@ struct SpiffsFlash {
   long cutAfter=-1;
   bool write(uint32_t at,const void *data,size_t n){
     if(cutAfter>=0) {
-      if(long(n)>cutAfter){if(cutAfter)esp_partition_write(partition,at,data,size_t(cutAfter));esp_restart();}
+      if(long(n)>cutAfter){if(cutAfter)program(at,data,size_t(cutAfter));esp_restart();}
       cutAfter-=long(n);
     }
-    return partition && esp_partition_write(partition,at,data,n)==ESP_OK;
+    return program(at,data,n);
   }
 #else
-  bool write(uint32_t at,const void *data,size_t n){return partition && esp_partition_write(partition,at,data,n)==ESP_OK;}
+  bool write(uint32_t at,const void *data,size_t n){return program(at,data,n);}
 #endif
   bool erase(uint32_t at,size_t n){return partition && esp_partition_erase_range(partition,at,n)==ESP_OK;}
+private:
+  bool program(uint32_t at,const void *data,size_t n) {
+    return partition && FlashChunks::write(at,data,n,esp_ptr_in_dram(data),
+      [this](uint32_t a,const void *p,size_t len){return esp_partition_write(partition,a,p,len)==ESP_OK;});
+  }
 };
