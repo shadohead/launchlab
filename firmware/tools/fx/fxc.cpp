@@ -85,6 +85,8 @@ int main(int argc,char **argv) {
       const auto r=FxValidate::check(read(argv[i]),{FxValidate::fixture(),FxValidate::fixture(0x0841)});
       std::printf("%s: %s, worst frame %.0f us modelled at %u ms, %u instructions at most (bound %u), %u frames\n",argv[i],
                   r.ok?"ok":r.problem.c_str(),r.worstUs,r.worstMs,r.worstOps,r.maxOps,r.frames);
+      if(r.songLoad)std::printf("  song: %s of core 0 at its busiest, at %u ms (budget %s)\n",FxValidate::percent(r.songLoad).c_str(),r.songWorstMs,
+                                FxValidate::percent(LoadableFx::SONG_BUDGET).c_str());
       failed+=!r.ok;
     }
     return failed?1:0;

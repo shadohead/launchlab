@@ -92,10 +92,13 @@ inline void Renderer::alchemyTransmute(float t) {
   const Ink line=inkOf(mixed(chalk,WHITE,flash*.8f)),pen=inkOf(spark);
   const int kq=q8(fade*(.75f*breathe+.4f*flash));
   auto progress=[&](float at,float len){return clamp01((t-at)/len);};
+  sorcMark(1);
   // The pen's trail: the last stretch of a stroke burns brighter.
   auto trail=[&](float x,float y){twinkle(x,y,WHITE,1.1f,1);};
+  sorcMark(2);
   // Rings.
   const float p1=progress(.08f,.42f),p2=progress(.3f,.35f);
+  sorcMark(3);
   // The outer ring is a bold three-pixel band (a glow row each side of its
   // core), the inner one two pixels, so they read through the replay's halo.
   const Ink glowRow=inkOf(mixed(mixed(blue,chalk,.4f),WHITE,flash*.6f));const int kg=(kq*120)>>8;
@@ -105,6 +108,7 @@ inline void Renderer::alchemyTransmute(float t) {
   alchemyArc(cx,cy,R2-1,HALF_TURN/2,-2*HALF_TURN*p2,glowRow,kg);
   if(p1>0 && p1<1){const float a=-HALF_TURN/2+2*HALF_TURN*p1;alchemyArc(cx,cy,R,a-.4f,.4f,pen,q8(.5f));trail(cx+R*cosine(a),cy+R*sine(a));}
   if(p2>0 && p2<1){const float a=HALF_TURN/2-2*HALF_TURN*p2;alchemyArc(cx,cy,R2,a+.4f,-.4f,pen,q8(.5f));trail(cx+R2*cosine(a),cy+R2*sine(a));}
+  sorcMark(4);
   // The triangle, inscribed in the inner ring from its top.
   {
     float xs[4],ys[4],hx,hy;
@@ -113,6 +117,7 @@ inline void Renderer::alchemyTransmute(float t) {
     for(int i=0;i<4;++i){xs[i]=cx+R2*cosine(TRI[i]*HALF_TURN);ys[i]=cy+R2*sine(TRI[i]*HALF_TURN);}
     if(p3>0){alchemyPath(xs,ys,4,p3,line,kq,hx,hy);if(p3<1)trail(hx,hy);}
   }
+  sorcMark(5);
   // The runes: small upright marks between the rings, written in turn, woken
   // by the pulse in the sustain, winking out in turn at the end.
   static constexpr uint16_t SHAPES[]={0x0ba,0x1d2,0x155,0x0aa,0x1e7,0x133};
@@ -130,6 +135,7 @@ inline void Renderer::alchemyTransmute(float t) {
     for(int q=0;q<9;++q)if((bits>>q)&1)addw(rx+q%3-1,ry+q/3-1,c,kr);
   }
   glint(t,ACT+.02f,.45f);
+  sorcMark(6);
   // Charging: as the circle closes, stray sparks run along it.
   const Ink core=inkOf(mixed(spark,WHITE,.4f)),glow=inkOf(mixed(blue,accent_,.25f));
   if(t>.85f && t<ACT)for(int j=0;j<2;++j) {
@@ -137,6 +143,7 @@ inline void Renderer::alchemyTransmute(float t) {
     alchemyCrackle(cx,cy,j?R2:R,2*HALF_TURN*rnd(seed,483),.35f+.3f*rnd(seed,484),0,seed,core,glow,q8(.6f));
   }
   if(u<0)return;
+  sorcMark(7);
   // Reaction sparks: many at the activation, crawling and leaping, re-struck
   // every frame, then a stray one now and then through the sustain.
   if(u<.75f) {
@@ -152,6 +159,7 @@ inline void Renderer::alchemyTransmute(float t) {
       alchemyCrackle(cx,cy,j?R2:R,2*HALF_TURN*rnd(seed,489),.3f+.35f*rnd(seed,490),j?0:4*rnd(seed,491),seed,core,glow,q8(.75f*fade));
     }
   }
+  sorcMark(8);
   // The pulse: a bright head chases round the outer ring, another the
   // other way round the inner ring.
   if(chase>0 && fade>0) {
@@ -160,6 +168,7 @@ inline void Renderer::alchemyTransmute(float t) {
     const float back=HALF_TURN/2-chase*1.6f;
     for(int s=0;s<3;++s)alchemyArc(cx,cy,R2,back+s*.14f,.14f,c,q8(k*.6f*(1-s*.28f)));
   }
+  sorcMark(9);
   // Motes rise off the rings.
   for(unsigned i=0;i<18;++i) {
     const float age=t-ACT-.2f-2.7f*rnd(i,492),life=1.1f+.6f*rnd(i,493);if(age<0 || age>=life)continue;
@@ -167,6 +176,7 @@ inline void Renderer::alchemyTransmute(float t) {
     const float x=cx+r*cosine(a)+2.5f*sine(age*4+i),y=cy+r*sine(a)-(12+10*rnd(i,495))*age;
     dot(x,y,i%2?spark:mixed(blue,accent_,.4f),1.1f*sine(HALF_TURN*v)*(1-smooth((t-END+.4f)/.4f)));
   }
+  sorcMark(10);
 }
 
 // A ball of fire of radius r round (fx,fy), in 2x2 cells like Flames: each

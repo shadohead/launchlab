@@ -608,15 +608,20 @@ inline void Renderer::grimoireMeadow(float t) {
   const Rgb blue=rgb8(110,170,255),white=rgb8(236,246,255),lilac=mixed(rgb8(176,160,255),accent_,.35f),heart=rgb8(255,222,96),leaf=rgb8(86,190,110),wave=rgb8(214,255,236);
   const Rgb petals[3]={blue,white,lilac};
   glint(t,FULL-.05f,.45f);
+  sorcMark(1);
   // The wave front: an ellipse in the floor's perspective growing out from the seed.
   // Quadratic ease-out, so each flower's moment is one square root.
   constexpr float reach=118;const float su=clamp01((t-SEED)/SPREAD),front=t<SEED?0:reach*(1-(1-su)*(1-su));
+  sorcMark(2);
   // The settle: the field fades from the edges inward.
   const float closing=t>3.9f?reach*(1-smooth((t-3.9f)/(END-.1f-3.9f))):1e9f;
+  sorcMark(3);
   // The breeze: a band of light travelling across the field, left to right.
   const float breeze=-30+(t-1.6f)*70;
+  sorcMark(4);
   // The seed: a point of light that gathers and twinkles before the wave.
   if(t<SEED+.2f){const float k=smooth(t/.12f)*(t<SEED?1:1-(t-SEED)/.2f);grimoireTwinkle(ox,oy,mixed(white,wave,.5f),k*(1+.3f*sine(t*50)),2);}
+  sorcMark(5);
   // Per frame: the shimmer as the wave completes, the colours as inks, and
   // whether any flower can still be popping (after that no flower needs its
   // distance from the seed until the settle).
@@ -624,6 +629,7 @@ inline void Renderer::grimoireMeadow(float t) {
   const bool spreading=t<FULL+.2f,settling=t>3.9f;
   const float front2=front*front,closing2=settling?closing*closing:0,petalFade=t>4.3f?1-smooth((t-4.3f)*(1/.4f)):1;
   const Ink petalInk[3]={inkOf(blue),inkOf(white),inkOf(lilac)},heartInk=inkOf(heart),leafInk=inkOf(leaf);
+  sorcMark(6);
   // Per row: its height and size class.
   float rowY[ROWS],rowSize[ROWS];
   for(int j=0;j<ROWS;++j){const float v=j*(1.0f/(ROWS-1));rowY[j]=top+(bottom-top)*v*(.55f+.45f*v);rowSize[j]=v;}
@@ -677,6 +683,7 @@ inline void Renderer::grimoireMeadow(float t) {
     // A spark as each one pops.
     if(age<.12f && (fl.flags&8))plot(x,y-2-6*age,white,1-age*(1/.12f));
   }
+  sorcMark(7);
   // The wave of light itself: the front's arc on the floor, with sparkle.
   if(t>=SEED && t<FULL+.1f) {
     const float u=(t-SEED)/SPREAD,k=(t<FULL?1:1-(t-FULL)/.1f)*(1-.4f*u);
@@ -698,5 +705,6 @@ inline void Renderer::grimoireMeadow(float t) {
       }
     }
   }
+  sorcMark(8);
 }
 }

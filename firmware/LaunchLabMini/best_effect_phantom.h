@@ -595,6 +595,7 @@ inline void Renderer::phantomZipper(float t) {
   const Box &b=number_;const float cy=b.cy();
   const int ym=roundi(cy),xl=b.x0-3,xr=b.x1+3,rest=b.y1+4;
   const bool paper=phantomPaper();
+  sorcMark(1);
   // Where the pull is, and how far it has stitched or unzipped.
   float xs=xl;
   if(t<STITCH1)xs=xl+(xr-xl)*easeOut(clamp01((t-STITCH0)/(STITCH1-STITCH0)));
@@ -603,6 +604,7 @@ inline void Renderer::phantomZipper(float t) {
   else if(t<SHUT0)xs=xl;
   else if(t<SHUT1)xs=xl+(xr-xl)*smooth((t-SHUT0)/(SHUT1-SHUT0));
   else xs=xr;
+  sorcMark(2);
   // The mouth: open between the pull and the right-hand stop.
   const bool open=t>=OPEN0 && t<SHUT1;
   const float span=xr-xs,amp=open?A*std::min(1.0f,span/60)*(t>=OPEN1 && t<SHUT0?1+.12f*sine((t-OPEN1)*14):1):0;
@@ -653,6 +655,7 @@ inline void Renderer::phantomZipper(float t) {
     if(t>=STITCH0)phantomPull(t<SHUT1?xs:xr-2,t<SHUT1?ym:zy,swing,fadeIn,true);
   }
   glint(t,SHUT1-.05f,.3f);
+  sorcMark(3);
   // Under the readout: the closed zipper rests, its tab swinging slowly, a
   // shine running along the teeth; at the end the pull runs off to the left
   // and the teeth go with it.
@@ -666,6 +669,7 @@ inline void Renderer::phantomZipper(float t) {
     const float cyc=(a+.2f)/.9f,head=xl+(xr-xl)*(cyc-floori(cyc))*1.3f;
     for(int x=int(head)-6;x<=int(head);++x)if(x<px-4)phantomAdd(x,rest+((x&3)<2?0:1),WHITE_INK,k*(7-(int(head)-x))/10);
   }
+  sorcMark(4);
   // Stars that slipped out of the gap sift down and wink out.
   if(t>=1.0f && t<4.6f)for(unsigned i=0;i<10;++i) {
     const float birth=1.0f+2.6f*rnd(i,556),life=1.0f+.6f*rnd(i,557),age=t-birth;
@@ -673,6 +677,7 @@ inline void Renderer::phantomZipper(float t) {
     const float u=age/life,x=b.x0+8+(b.x1-b.x0-16)*rnd(i,558)+4*sine(age*3+i),y=rest+5+30*age+8*age*age;
     phantomDot(x,y,i%3?WHITE_INK:inkOf(accent_),q8(sine(HALF_TURN*u)*(1.0f+.4f*sine(t*13+i*1.9f))));
   }
+  sorcMark(5);
 }
 
 // ---- Rush: two fists draw back at the screen's edges, trembling, then a

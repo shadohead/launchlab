@@ -77,8 +77,8 @@ int main() {
         assert(got==again);
         if(us>worstUs){worstUs=us;worstMs=ms;}
         // Pixel work: the cost model's pixel, probe and mask-scan terms, without loop steps and roots.
-        worstPixelUs=std::max(worstPixelUs,s.renderUs-.36*s.touches-2.3*s.roots);
-        worstNativeUs=std::max(worstNativeUs,native.modelledUs()-.36*native.touches()-2.3*native.roots());
+        worstPixelUs=std::max(worstPixelUs,FxValidate::pixelUs(s.plots,s.probes,s.scans,s.fills,s.spans));
+        worstNativeUs=std::max(worstNativeUs,FxValidate::pixelUs(native.plots(),native.probes(),native.scans(),native.fills(),native.spans()));
         worstOps=std::max(worstOps,s.ops);
         assert(s.ops<=p.maxOps && s.draws<=p.maxDraws && !s.stopped);
         unsigned d=0,c=0;
@@ -422,6 +422,28 @@ int main() {
     big+=" plot(v0, v1, white, 1)\n}\n";
     const auto r2=FxValidate::check(compileText(big),{FxValidate::fixture()});
     assert(!r2.ok && r2.problem.find("too large for internal RAM")!=std::string::npos);
+  }
+  {
+    // A song's render budget (docs/FIRMWARE_SOUND_0_20.md, "Render budget"):
+    // the validator renders the song and holds its busiest block, by the
+    // device-calibrated cost per sounding voice, to 20% of core 0. The example
+    // songs fit (their loads pinned); eight wavetable voices at once do not.
+    const struct {const char *name;uint32_t load;} music[]={{"victory_lap",1591},{"night_spin",1725},{"ripcord",1566}};
+    for(const auto &[name,load]:music) {
+      const auto file=compileFile(std::string("firmware/tools/fx/effects/music/")+name+".fx");
+      const auto r=FxValidate::check(file,{FxValidate::fixture()});
+      std::printf("song load %s: %u (hundredths of a percent) at %u ms\n",name,r.songLoad,r.songWorstMs);
+      assert(r.ok && r.songLoad==load && r.songLoad<=LoadableFx::SONG_BUDGET);
+    }
+    assert(FxValidate::check(compileText("effect \"Quiet\"\nuid 0x1\nduration 3000\nreadout 900\nframe { x = W }\n"),{FxValidate::fixture()}).songLoad==0);
+    std::string heavy="effect \"Heavy\"\nuid 0x2\nduration 3000\nreadout 900\nframe { x = W }\n";
+    const char *notes[]={"c4","e4","g4","b4","d5","f5","a5","c6"};
+    for(int i=0;i<8;++i)heavy+="voice w"+std::to_string(i)+" = wave(points: [0, 1, 0, -1], decay: 8, gain: .05)\n";
+    heavy+="song(tempo: 120, rows: 4) {\n pattern p {\n";
+    for(int i=0;i<8;++i)heavy+="  w"+std::to_string(i)+": \""+notes[i]+" . . . . . . .\"\n";
+    heavy+=" }\n order p p\n}\n";
+    const auto r=FxValidate::check(compileText(heavy),{FxValidate::fixture()});
+    assert(!r.ok && r.problem.find("song too heavy")!=std::string::npos && r.songLoad>LoadableFx::SONG_BUDGET);
   }
   std::puts("test_fx_effects: ok");
 }

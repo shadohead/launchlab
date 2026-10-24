@@ -64,10 +64,16 @@ inline bool idle0Hook() {
   else if(idle0LastUs && now-idle0LastUs>idle0MaxGapUs)idle0MaxGapUs=now-idle0LastUs;
   idle0LastUs=now;return true;
 }
+// Buffers only the command loop touches, in PSRAM from their first use and
+// kept: a HIL image's internal (DMA-capable) heap then stays close to
+// production's, so heap checks on the rig mean what they would on a unit.
+// Anything the ADC or IMU path or a flash write reads stays internal.
+template<class T> T *psram(size_t count){return static_cast<T *>(heap_caps_calloc(count,sizeof(T),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));}
 // Every task's CPU time (run-time stats clock: esp_timer us) and core, for
 // measuring a core's load as the difference between two reports.
 inline void tasks() {
-  constexpr UBaseType_t MAX=40;static TaskStatus_t list[MAX];
+  constexpr UBaseType_t MAX=40;static TaskStatus_t *const list=psram<TaskStatus_t>(MAX);
+  if(!list){replyLine("HIL_ERR tasks memory");return;}
   uint32_t total=0;const UBaseType_t count=uxTaskGetSystemState(list,MAX,&total);
   for(UBaseType_t i=0;i<count;++i) {
 #if configTASKLIST_INCLUDE_COREID
@@ -185,6 +191,8 @@ esp_err_t __wrap_nvs_set_u32(nvs_handle_t handle,const char *key,uint32_t value)
   return Hil::nvsWrite(key,4)?ESP_ERR_NVS_NOT_ENOUGH_SPACE:__real_nvs_set_u32(handle,key,value);
 }
 }
+
+#include "hil_sound_bench.h"
 
 // Holds the shared IMU/I2C gate from another task, as a long FIFO catch-up
 // read or PM1 transfer would. Exercises the checkpoint veto and FIFO overflow.
@@ -349,6 +357,7 @@ LOOP_HELPER static void hilCommand(char *line) {
     return;
   }
   if(!strcmp(cmd,"tasks")){Hil::tasks();return;}
+  if(!strncmp(cmd,"snd",3)){const char *a1=arg();hilSoundCommand(cmd,a1,a1?arg():nullptr);return;}
   if(!strcmp(cmd,"gate")) {
     const uint32_t ms=uint32_t(num(300));
     const bool ok=xTaskCreatePinnedToCore(hilGateTask,"hil_gate",3072,reinterpret_cast<void *>(uintptr_t(ms)),2,nullptr,1)==pdPASS;
@@ -372,11 +381,14 @@ LOOP_HELPER static void hilCommand(char *line) {
     Hil::replyLine(line);return;
   }
   if(!strcmp(cmd,"effectbench")) {
-    // !effectbench [calls] [step_ms], on the recap: the cycles per call of
-    // each primitive the cost model may count, then every drawn effect drawn
-    // over the recap as it stands every step_ms (default 100), each frame
-    // timed (us) and hashed, so builds can be compared frame for frame.
+    // !effectbench [calls] [step_ms] [fixed], on the recap: the cycles per
+    // call of each primitive the cost model may count, then every drawn
+    // effect drawn over the recap as it stands every step_ms (default 100),
+    // each frame timed (us) and hashed. `fixed` draws over
+    // Renderer::benchCanvas() instead, whose hashes equal the host's
+    // (ui_render --bench-hashes) and any other build's.
     const uint32_t calls=uint32_t(std::max(100.0,num(2000))),step=uint32_t(std::max(20.0,num(100)));
+    const char *mode=arg();const bool fixed=mode && !strcmp(mode,"fixed");
     if(!screenReady || !launchFeedback.shown()){Hil::replyLine("HIL_ERR effectbench needs the recap");return;}
     const BestEffectUI::Surface surface{static_cast<uint16_t *>(screen.getBuffer()),screen.width(),screen.height()};
     const size_t bytes=size_t(surface.width)*surface.height*2;
@@ -384,7 +396,12 @@ LOOP_HELPER static void hilCommand(char *line) {
     constexpr size_t LINE=1024;char *line=Hil::scratch<LINE>();
     if(!recap || !line){heap_caps_free(recap);Hil::replyLine("HIL_ERR effectbench no buffer");return;}
     std::memcpy(recap,surface.pixels,bytes);
-    const Palette::Colors colors=ui();
+    Palette::Colors colors=ui();
+    if(fixed) {
+      if(!BestEffectUI::Renderer::benchCanvas({recap,surface.width,surface.height})){heap_caps_free(recap);Hil::replyLine("HIL_ERR effectbench fixed needs 135x240");return;}
+      colors.accent=BestEffectUI::Renderer::BENCH_ACCENT;colors.background=BestEffectUI::Renderer::BENCH_BACKGROUND;
+      std::memcpy(surface.pixels,recap,bytes);
+    }
     uint32_t cycles[BestEffectUI::Renderer::BENCH_OPS]={};
     const int64_t benchStart=esp_timer_get_time();const uint32_t cycleStart=esp_cpu_get_cycle_count();
     const bool benched=bestEffectRenderer.bench(surface,colors.accent,colors.background,calls,[]{return uint32_t(esp_cpu_get_cycle_count());},cycles);
@@ -401,22 +418,40 @@ LOOP_HELPER static void hilCommand(char *line) {
     unsigned frames=0;
     for(unsigned e=0;e<Appearance::DRAWN;++e) {
       const Appearance::Effect effect=Appearance::drawnEffect(e);
-      // Frames hashed a 32-bit word at a time (a byte-wise 64-bit hash costs
-      // about 16 ms a frame here).
       uint32_t hash=2166136261u;size_t used=snprintf(line,LINE,"HIL_EFFECT_BENCH effect=%s frames=%08lx",Appearance::label(effect),0ul);
       const size_t hashAt=used-8;
+      if(fixed)used+=snprintf(line+used,LINE-used," fixed=1");
       for(uint32_t ms=step/2;ms<Appearance::duration(effect);ms+=step) {
         std::memcpy(surface.pixels,recap,bytes);
         const int64_t started=esp_timer_get_time();
         bestEffectRenderer.draw(surface,effect,ms,colors.accent,BestEffectUI::Renderer::Anchor(),colors.background);
         const uint32_t us=uint32_t(esp_timer_get_time()-started);
-        const uint32_t *p=reinterpret_cast<const uint32_t *>(surface.pixels);
-        for(size_t i=0;i<bytes/4;++i)hash=(hash^p[i])*16777619u;
+        hash=BestEffectUI::Renderer::benchHash(surface,hash);
         if(used<LINE-16)used+=snprintf(line+used,LINE-used," %lu:%lu",(unsigned long)ms,(unsigned long)us);
         ++frames;
       }
       char hex[9];snprintf(hex,sizeof(hex),"%08lx",(unsigned long)hash);std::memcpy(line+hashAt,hex,8);
       Hil::replyLine(line);delay(2); // also lets IDLE1 run
+#ifdef BEST_EFFECT_PROFILE
+      // A profiling build: each frame's cycles per stage, for the effects
+      // that mark stages (sorcMark), drawn once more each so the timed pass
+      // above stays the same as any other build's.
+      // In PSRAM while the bench runs: static RAM has no room for it.
+      constexpr size_t STAGE_LINE=6144;
+      char *stages=static_cast<char *>(heap_caps_malloc(STAGE_LINE,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
+      size_t at=stages?snprintf(stages,STAGE_LINE,"HIL_EFFECT_BENCH_STAGES effect=%s",Appearance::label(effect)):STAGE_LINE;bool marked=false;
+      for(uint32_t ms=step/2;ms<Appearance::duration(effect) && at<STAGE_LINE-160;ms+=step) {
+        std::memcpy(surface.pixels,recap,bytes);
+        bestEffectRenderer.draw(surface,effect,ms,colors.accent,BestEffectUI::Renderer::Anchor(),colors.background);
+        at+=snprintf(stages+at,STAGE_LINE-at," %lu:",(unsigned long)ms);
+        for(int s=0;s<BestEffectUI::Renderer::STAGES;++s) {
+          marked|=s>0 && bestEffectRenderer.stage[s]>0;
+          at+=snprintf(stages+at,STAGE_LINE-at,s?",%lu":"%lu",(unsigned long)bestEffectRenderer.stage[s]);
+        }
+      }
+      if(marked){Hil::replyLine(stages);delay(4);}
+      heap_caps_free(stages);
+#endif
     }
     std::memcpy(surface.pixels,recap,bytes);heap_caps_free(recap);dirty=true;
     Hil::reply("HIL_EFFECT_BENCH_DONE effects=%u frames=%u ms=%lu\n",Appearance::DRAWN,frames,(unsigned long)((esp_timer_get_time()-benchStart)/1000));
@@ -534,15 +569,17 @@ LOOP_HELPER static void hilCommand(char *line) {
     const unsigned want=unsigned(num(0));
     const auto s=acquisition.snapshot();bool ok=false;unsigned taken=0,keys=0;
     if(acquisition.request(Action::IdleCheckpointBegin,s.launches)) {
-      Preferences store;ok=store.begin("ll-hil-fill",false) && store.clear();
-      constexpr size_t CHUNK=(40-3)*32;uint8_t *chunk=reinterpret_cast<uint8_t *>(Hil::scratch<CHUNK>());
-      ok=chunk!=nullptr && ok;if(chunk)std::memset(chunk,0xa5,CHUNK);
+      // The filler is internal RAM, as a real save's data is, but only while this runs.
+      constexpr size_t CHUNK=(40-3)*32;
+      uint8_t *chunk=static_cast<uint8_t *>(heap_caps_malloc(CHUNK,MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
+      Preferences store;ok=chunk && store.begin("ll-hil-fill",false) && store.clear();
+      if(chunk)std::memset(chunk,0xa5,CHUNK);
       while(ok && taken+4<=want) {
         const unsigned entries=std::min(40u,want-taken);char key[8];snprintf(key,sizeof(key),"f%u",keys++);
         const size_t bytes=size_t(entries-3)*32;
         ok=store.putBytes(key,chunk,bytes)==bytes;taken+=entries;
       }
-      store.end();acquisition.request(Action::CheckpointEnd);
+      store.end();heap_caps_free(chunk);acquisition.request(Action::CheckpointEnd);
     }
     Hil::reply("HIL_OK nvsfill ok=%d entries=%u keys=%u\n",ok,taken,keys);return;
   }

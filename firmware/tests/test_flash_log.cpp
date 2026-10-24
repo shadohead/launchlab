@@ -1,13 +1,26 @@
 // The history log in the spiffs partition (flash_log.h, history_log.h) on a
 // NOR flash model: program only clears bits, erase sets whole sectors to
 // 0xFF, and a power loss can stop any write after any byte.
+#include "../LaunchLabMini/flash_chunks.h"
 #include "../LaunchLabMini/history_log.h"
 #include <cassert>
 #include <cstdlib>
 #include <iostream>
+#include <new>
 #include <vector>
 
 #include "nor_flash.h"
+
+// Counts default-heap allocations while `counting` is set.
+static bool counting=false;static unsigned allocations=0;
+void *operator new(std::size_t n){if(counting)++allocations;if(void *p=std::malloc(n?n:1))return p;throw std::bad_alloc();}
+void *operator new[](std::size_t n){return operator new(n);}
+void *operator new(std::size_t n,const std::nothrow_t &)noexcept{if(counting)++allocations;return std::malloc(n?n:1);}
+void *operator new[](std::size_t n,const std::nothrow_t &t)noexcept{return operator new(n,t);}
+void operator delete(void *p)noexcept{std::free(p);}
+void operator delete[](void *p)noexcept{std::free(p);}
+void operator delete(void *p,std::size_t)noexcept{std::free(p);}
+void operator delete[](void *p,std::size_t)noexcept{std::free(p);}
 
 namespace {
 using Nor=NorFlash;
@@ -155,6 +168,47 @@ int main() {
     LogStore reboot;assert(reboot.open(f)==Log::Open::Ready && reboot.loadHistory(back,m));
     assert(pick(true,m,true,older.generation())==Source::Nvs);
   }
+  // Saves take nothing from the default heap: on the device that is internal
+  // RAM for buffers this size, and a history save while a song streamed took
+  // 5.4 KB of it, below the 32 KB DMA floor (0.20 HIL songs, 2026-10-23).
+  // Their buffers come from PSRAM there. (Loads run at boot and restore.)
+  {
+    Nor f;LogStore s;assert(s.open(f)==Log::Open::Formatted);
+    const auto h=pulls(40);Appearance::Bests b;PowerDiagnostics::Image power;PowerDiagnostics::fresh(power);
+    counting=true;allocations=0;
+    const bool ok=s.saveHistory(h,1) && s.saveBests(b,2) && s.savePower(power,3);
+    counting=false;
+    if(allocations)std::cerr<<allocations<<" default-heap allocations in the saves\n";
+    assert(ok && allocations==0);
+    PracticeHistory h2;PowerDiagnostics::Image p2;uint32_t m=0;
+    assert(s.loadHistory(h2,m) && m==1 && same(h,h2) && s.loadPower(p2,m) && m==3 && p2.count==power.count);
+  }
+  // A write from outside internal RAM goes through the internal chunk, in
+  // pieces that end on 256-byte pages (so ESP-IDF writes each directly with
+  // whole programs, not 32 bytes at a time with the cache off for each: a
+  // history save from PSRAM took 30 ms instead of 13, 0.20 gate 2026-10-23);
+  // one from internal RAM is written as it is.
+  {
+    std::vector<uint8_t> src(2672),flash(8192,0xff);
+    for(size_t i=0;i<src.size();++i)src[i]=uint8_t(i*37+11);
+    struct Call {uint32_t at;const void *p;size_t n;};std::vector<Call> calls;
+    auto write=[&](uint32_t at,const void *p,size_t n){calls.push_back({at,p,n});std::memcpy(flash.data()+at,p,n);return true;};
+    const uint32_t at=4096+48;  // a record's payload: 16-byte aligned, not page aligned
+    assert(FlashChunks::write(at,src.data(),src.size(),false,write));
+    assert(std::equal(src.begin(),src.end(),flash.begin()+at));
+    size_t covered=0;
+    for(const auto &c:calls) {
+      assert(c.p!=src.data()+(c.at-at) && c.n<=FlashChunks::BYTES && c.at/256==(c.at+c.n-1)/256 && c.at==at+covered);
+      covered+=c.n;
+    }
+    assert(covered==src.size() && calls.size()==11);
+    calls.clear();
+    assert(FlashChunks::write(at,src.data(),src.size(),true,write) && calls.size()==1 && calls[0].p==src.data() && calls[0].n==src.size());
+    // A failed piece stops the write and is reported.
+    unsigned pieces=0;
+    assert(!FlashChunks::write(at,src.data(),src.size(),false,[&](uint32_t,const void *,size_t){return ++pieces<3;}) && pieces==3);
+  }
   std::cout<<"PASS: the history log formats a blank or foreign partition touching only its own sectors, leaves a newer layout alone, "
-             "wraps evenly with program-only saves, survives a power loss anywhere in a save or erase, and newest wins against the NVS mirror\n";
+             "wraps evenly with program-only saves, survives a power loss anywhere in a save or erase, newest wins against the NVS mirror, "
+             "saves take no default (internal) heap, and writes from PSRAM go through page-aligned internal chunks\n";
 }

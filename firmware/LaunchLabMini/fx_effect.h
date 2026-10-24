@@ -19,6 +19,7 @@
 #endif
 #include "best_effect_ui.h"
 #include "best_effect_sound.h"  // the synth's sine table, which the sound's tones read
+#include "fx_drums.h"           // the built-in percussion bank of drum voices (level 2)
 
 // Loaded celebration effects (docs/FIRMWARE_LOADABLE_EFFECTS.md): an effect
 // is data, an "LLFX" file, played by this engine with the built-in effects'
@@ -58,7 +59,10 @@
 namespace LoadableFx {
 constexpr uint32_t MAGIC=0x58464c4c;  // "LLFX"
 constexpr uint8_t FORMAT=1;           // container layout
-constexpr uint8_t ENGINE=1;           // opcodes and primitives this engine plays
+// Engine level 2 (0.20) adds music: pulse, wavetable, FM and drum voices,
+// stepped noise and the SONG section (docs/FIRMWARE_SOUND_0_20.md). A file
+// says the level it needs; it plays at that level or any later one.
+constexpr uint8_t ENGINE=2;           // opcodes, primitives and voices this engine plays
 constexpr size_t HEADER_BYTES=32,MAX_FILE=16384;
 // Constants: the first MAX_CONSTS of the pool are registers FIRST_CONST..255,
 // the rest are read with LDK.
@@ -77,7 +81,15 @@ constexpr unsigned MAX_VOICES=16,MAX_SOUND_EVENTS=512,SOUND_HEAD=12,VOICE_BYTES=
 // Voice types this engine plays. A later engine adds types (and their own
 // data) and a file that uses one needs that engine's level; this one refuses
 // any type, waveform, filter, flag or event kind it does not know (Error::Engine).
-enum VoiceType:uint8_t {TONE_VOICE=1,NOISE_VOICE=2,VOICE_TYPES};
+// Level 2: a band-limited pulse (duty in the cubic slot), a wavetable (the
+// datum names a TABLES table), two-operator FM (octave: the modulator's
+// frequency ratio, cubic: the modulation index) and a drum (the datum names a
+// bank entry, hz is its playback rate).
+enum VoiceType:uint8_t {TONE_VOICE=1,NOISE_VOICE=2,PULSE_VOICE=3,WAVETABLE_VOICE=4,FM_VOICE=5,DRUM_VOICE=6,VOICE_TYPES};
+constexpr uint8_t LEVEL1_VOICE_TYPES=NOISE_VOICE+1;
+// A noise voice's waveform: white (every sample), or stepped (level 2): a new
+// value at hz, held, as a chip's noise channel.
+enum NoiseWave:uint8_t {NOISE_WHITE,NOISE_STEPPED,NOISE_WAVES};
 enum Wave:uint8_t {WAVE_SINE,WAVE_SQUARE,WAVE_TRIANGLE,WAVE_SAW,WAVES};
 enum Filter:uint8_t {NO_FILTER,LOWPASS,BANDPASS,HIGHPASS,FILTERS};
 // ENVELOPE: silent until a note or trigger, then decaying; else the gain alone.
@@ -182,7 +194,23 @@ inline uint32_t crc32(const uint8_t *p,size_t n,uint32_t crc=0) {
 // Sections follow the header as type, flags, 16-bit length, then the body.
 // An unknown section is skipped unless flagged required (bit 0), which a
 // newer format uses for anything an older engine must not ignore.
-enum Section:uint8_t {NAME=1,CONSTS=2,CODE=3,ARGS=4,BLOCKS=5,SOUND=6,META=7,SPRITES=8,TABLES=9};
+// 10 is the compiler's optional padding (aligning CODE), which engines skip.
+enum Section:uint8_t {NAME=1,CONSTS=2,CODE=3,ARGS=4,BLOCKS=5,SOUND=6,META=7,SPRITES=8,TABLES=9,SONG=11};
+// A song (SONG section, level 2, required): tracker patterns played on the
+// SOUND section's voices, a channel at a time. Version, channels, patterns,
+// a zero byte, the row length in samples (16 bits) and the order's length
+// (16 bits); a voice index per channel; the order (pattern indices); then per
+// pattern its rows and per channel a 16-bit length and an event stream:
+//   0x00-0x7F  a note (MIDI number) on the channel's voice at its volume
+//   0x80|n     wait n rows (1-63)
+//   0xC0|v     the channel plays voice v from now on
+//   0xD0|q     the channel's volume, (q+1)/16
+//   0xE0       note off: the voice releases over about 10 ms
+// Anything else is a later engine's (Error::Engine). Every stream is decoded
+// once when loading, so a pattern's events fit its rows.
+constexpr uint8_t SONG_VERSION=1;constexpr unsigned SONG_HEAD=8,MAX_CHANNELS=8,MAX_PATTERNS=64,MAX_ORDER=256,
+  MIN_ROW_SAMPLES=400,MAX_ROW_SAMPLES=16000,MAX_SONG_SECONDS=120;
+enum SongEvent:uint8_t {SONG_WAIT=0x80,SONG_VOICE=0xC0,SONG_VOLUME=0xD0,SONG_OFF=0xE0};
 // Tables: a count, then per table its first pool index and its length (16 bits each).
 constexpr unsigned MAX_TABLES=64;
 // Sprites: a count, then per sprite width and height (1-64 each) and its
@@ -207,17 +235,71 @@ struct Program {
   // records and the notes, read from the file by Sound::begin.
   bool hasSound=false;uint16_t soundStart=0,soundLength=0,soundEvents=0;uint8_t soundVoices=0;
   const uint8_t *soundVoice=nullptr,*soundEvent=nullptr;
+  uint8_t level=1;  // the engine level the file needs (header byte 5)
+  // The song (SONG section), checked when loading; Sound plays it and finds
+  // its patterns (kept out of Program, which callers hold on their stacks).
+  bool hasSong=false;uint8_t songChannels=0,songPatterns=0;uint16_t songRowSamples=0,songOrderLength=0;
+  const uint8_t *song=nullptr;uint16_t songBytes=0;uint32_t songTotal=0;
   struct Sprite {uint8_t w=0,h=0;const uint8_t *bits=nullptr;};
   struct Table {uint16_t base=0,length=0;};
   Table tables[MAX_TABLES];unsigned tableCount=0;
   Sprite sprites[MAX_SPRITES];unsigned spriteCount=0;
-  uint32_t soundSamples()const{return hasSound?uint32_t(soundMs)*SOUND_RATE/1000:0;}
+  // The sound's length in samples: its own, or its song's if longer.
+  uint32_t soundSamples()const{return hasSound?std::max(uint32_t(soundMs)*SOUND_RATE/1000,songTotal):0;}
   uint32_t maxOps=0,maxDraws=0;                       // static bounds per frame
   // META: the built-in effect that plays when this one cannot (missing,
   // damaged, needs a newer engine); NO_FALLBACK means Orbit.
   static constexpr uint8_t NO_FALLBACK=0xff;
   uint8_t fallback=NO_FALLBACK;
 };
+
+// Checks a SONG section against the sound's voices and fills the song's
+// fields: every pattern's streams decoded, every event known, every voice
+// and pattern index in range, and no stream running past its pattern's rows.
+inline Error checkSong(Program &out) {
+  const uint8_t *b=out.song;const size_t n=out.songBytes;
+  if(n<SONG_HEAD)return Error::Section;
+  if(b[0]>SONG_VERSION)return Error::Engine;
+  if(b[0]!=SONG_VERSION || b[3])return Error::Section;
+  out.songChannels=b[1];out.songPatterns=b[2];out.songRowSamples=get16(b+4);out.songOrderLength=get16(b+6);
+  if(!out.songChannels || out.songChannels>MAX_CHANNELS || !out.songPatterns || out.songPatterns>MAX_PATTERNS ||
+     out.songRowSamples<MIN_ROW_SAMPLES || out.songRowSamples>MAX_ROW_SAMPLES || !out.songOrderLength || out.songOrderLength>MAX_ORDER)return Error::Section;
+  size_t at=SONG_HEAD;
+  if(n-at<size_t(out.songChannels)+out.songOrderLength)return Error::Section;
+  for(unsigned c=0;c<out.songChannels;++c)if(b[at+c]>=out.soundVoices)return Error::Section;
+  at+=out.songChannels;
+  const uint8_t *order=b+at;at+=out.songOrderLength;
+  uint8_t rows[MAX_PATTERNS]={};
+  for(unsigned k=0;k<out.songPatterns;++k) {
+    if(at>=n)return Error::Section;
+    rows[k]=b[at++];
+    if(!rows[k])return Error::Section;
+    for(unsigned c=0;c<out.songChannels;++c) {
+      if(n-at<2)return Error::Section;
+      const size_t length=get16(b+at);at+=2;
+      if(length>n-at)return Error::Section;
+      unsigned row=0;
+      for(size_t i=0;i<length;++i) {
+        const uint8_t e=b[at+i];
+        // A note, voice, volume or off needs a row to land on; a wait moves on.
+        if(e<SONG_WAIT || (e&0xF0)==SONG_VOICE || (e&0xF0)==SONG_VOLUME || e==SONG_OFF) {
+          if(row>=rows[k])return Error::Section;
+          if((e&0xF0)==SONG_VOICE && (e&15)>=out.soundVoices)return Error::Section;
+        } else if(e<SONG_VOICE) {
+          if(e==SONG_WAIT)return Error::Section;
+          row+=e&63;if(row>rows[k])return Error::Section;
+        } else return Error::Engine;  // a later engine's event
+      }
+      at+=length;
+    }
+  }
+  if(at!=n)return Error::Section;
+  uint64_t total=0;
+  for(unsigned i=0;i<out.songOrderLength;++i){if(order[i]>=out.songPatterns)return Error::Section;total+=uint64_t(rows[order[i]])*out.songRowSamples;}
+  if(total>uint64_t(MAX_SONG_SECONDS)*SOUND_RATE)return Error::Section;
+  out.songTotal=uint32_t(total);out.hasSong=true;
+  return Error::None;
+}
 
 // Header: magic, format, engine, flags (16), uid (64), revision, duration,
 // readout end, sound length (16 each, ms), file bytes (32), CRC-32 of the
@@ -231,6 +313,7 @@ inline Error load(const uint8_t *p,size_t n,Program &out,bool toPlay=true) {
   if(get32(p)!=MAGIC)return Error::Magic;
   if(p[4]!=FORMAT)return Error::Format;
   if(p[5]==0 || p[5]>ENGINE)return Error::Engine;
+  out.level=p[5];
   if(get32(p+24)!=n)return Error::Size;
   {
     uint8_t zero[4]={};
@@ -315,6 +398,11 @@ inline Error load(const uint8_t *p,size_t n,Program &out,bool toPlay=true) {
         if(!out.soundVoices || out.soundVoices>MAX_VOICES || out.soundEvents>MAX_SOUND_EVENTS ||
            length!=SOUND_HEAD+size_t(out.soundVoices)*VOICE_BYTES+size_t(out.soundEvents)*EVENT_BYTES)return Error::Section;
         out.hasSound=true;out.soundVoice=body+SOUND_HEAD;out.soundEvent=out.soundVoice+size_t(out.soundVoices)*VOICE_BYTES;break;
+      // The song: checked once the sound's voices are known.
+      case SONG:
+        if(!(flags&1))return Error::Section;  // a 0.19 engine must refuse it, so it is always required
+        if(out.level<2)return Error::Engine;
+        out.song=body;out.songBytes=uint16_t(length);break;
       default:if(flags&1)return Error::Section;  // required but unknown
     }
   }
@@ -363,7 +451,7 @@ inline Error load(const uint8_t *p,size_t n,Program &out,bool toPlay=true) {
   }
   if(out.hasSound) {
     // The control block (it may be empty): no draws, writes only temps.
-    if(!out.soundMs || out.soundLength>MAX_SOUND_CODE || (out.soundLength && (out.soundStart>=out.codeLength ||
+    if((!out.soundMs && !out.song) || out.soundLength>MAX_SOUND_CODE || (out.soundLength && (out.soundStart>=out.codeLength ||
        out.soundLength>out.codeLength-out.soundStart)))return Error::Section;
     for(unsigned pc=out.soundStart;pc<out.soundStart+out.soundLength;++pc){const Error e=check(pc,false);if(e!=Error::None)return e;}
     // Voices: type, waveform, filter, flags, a 32-bit datum (a noise seed),
@@ -371,9 +459,15 @@ inline Error load(const uint8_t *p,size_t n,Program &out,bool toPlay=true) {
     for(unsigned v=0;v<out.soundVoices;++v) {
       const uint8_t *r=out.soundVoice+size_t(v)*VOICE_BYTES;
       const uint8_t type=r[0],wave=r[1],filter=r[2],flags=r[3];
-      if(!type || type>=VOICE_TYPES || (type==TONE_VOICE?wave>=WAVES:wave!=0) || filter>=FILTERS || (flags&~VOICE_FLAGS) ||
-         (type==NOISE_VOICE && (flags&NOTE_PITCH)) || get16(r+18))return Error::Engine;
-      if(type==NOISE_VOICE?!get32(r+4):get32(r+4)!=0)return Error::Section;  // xorshift needs a seed; a tone has none
+      if(!type || type>=VOICE_TYPES || (type==TONE_VOICE?wave>=WAVES:type==NOISE_VOICE?wave>=NOISE_WAVES:wave!=0) || filter>=FILTERS ||
+         (flags&~VOICE_FLAGS) || ((type==NOISE_VOICE || type==DRUM_VOICE) && (flags&NOTE_PITCH)) || get16(r+18))return Error::Engine;
+      // Level 2's voices and stepped noise need a level-2 file.
+      if((type>=LEVEL1_VOICE_TYPES || (type==NOISE_VOICE && wave!=NOISE_WHITE)) && out.level<2)return Error::Engine;
+      const uint32_t datum=get32(r+4);
+      if(type==NOISE_VOICE && !datum)return Error::Section;  // xorshift needs a seed
+      if((type==TONE_VOICE || type==PULSE_VOICE || type==FM_VOICE) && datum)return Error::Section;
+      if(type==WAVETABLE_VOICE && (datum>=out.tableCount || out.tables[datum].length<2))return Error::Section;
+      if(type==DRUM_VOICE && datum>=Drums::COUNT)return Error::Engine;  // a later bank's drum
       for(unsigned k=0;k<VOICE_PARAMS;++k)if(!readable(r[8+k]))return Error::Register;
     }
     // Notes: sample (at the sound's 16 kHz, in order, within the sound),
@@ -386,7 +480,8 @@ inline Error load(const uint8_t *p,size_t n,Program &out,bool toPlay=true) {
       if(at<last || at>=samples || r[4]>=out.soundVoices || !std::isfinite(level) || !std::isfinite(hz))return Error::Section;
       last=at;
     }
-  }
+    if(out.song){const Error e=checkSong(out);if(e!=Error::None)return e;}
+  } else if(out.song)return Error::Section;  // a song plays on the sound's voices
   if(out.maxOps>MAX_FRAME_OPS || out.maxDraws>MAX_FRAME_DRAWS)return Error::Budget;
   return Error::None;
 }
@@ -408,6 +503,7 @@ inline bool place(Program &p,uint8_t *hot,size_t capacity) {
   uint8_t *at=hot;const unsigned code=drawCode(p);
   std::memcpy(at,p.code,size_t(code)*4);p.code=at;p.codeLength=code;at+=size_t(code)*4;
   p.hasSound=false;p.soundStart=p.soundLength=p.soundEvents=0;p.soundVoices=0;p.soundVoice=p.soundEvent=nullptr;
+  p.hasSong=false;p.song=nullptr;p.songBytes=0;p.songTotal=0;
   if(p.constCount)std::memcpy(at,p.pool,size_t(p.constCount)*4);p.pool=at;at+=size_t(p.constCount)*4;
   if(p.argsLength)std::memcpy(at,p.args,p.argsLength);p.args=at;
   return true;
@@ -611,10 +707,34 @@ done:
 // Parameters are clamped, so any file renders finite, bounded samples, and
 // the cost is bounded by the file: at most MAX_SOUND_CODE instructions a
 // step and MAX_VOICES voices a sample.
+// ---- A song's render cost (engine level 2; docs/FIRMWARE_SOUND_0_20.md,
+// "Render budget"): the music task's share of core 0 at 80 MHz while a song
+// plays, measured on the device (HIL, 7C:E8, 2026-10-23, the sound renderer
+// at -O2): a base for the player and the task, and each sounding voice by its
+// kind, in hundredths of a percent; a filter adds its own. A voice costs
+// while it sounds: from its trigger until its envelope falls below 2^-16 or
+// its drum sample ends. The validator renders a song and holds its busiest
+// block of SONG_COST_BLOCK samples to SONG_BUDGET, so with the optical owner
+// (about 30%) and the IMU (about 17%) core 0 keeps IDLE0 clear; the music
+// task's duty cap (music_stream.h) is the guard behind it.
+enum SongVoiceKind:uint8_t {KIND_TONE,KIND_NOISE,KIND_STEPPED,KIND_PULSE,KIND_WAVE,KIND_FM,KIND_DRUM,SONG_KINDS};
+// Tone is its dearest wave (triangle 1.60; sine 1.49, square 1.56, saw 1.42).
+constexpr uint16_t SONG_KIND_COST[SONG_KINDS]={160,110,135,232,425,207,311};
+constexpr uint16_t SONG_FILTER_COST=25,SONG_BASE_COST=345,SONG_BUDGET=2000,SONG_COST_BLOCK=512;
+constexpr SongVoiceKind songVoiceKind(uint8_t type,uint8_t wave) {
+  return type==PULSE_VOICE?KIND_PULSE:type==WAVETABLE_VOICE?KIND_WAVE:type==FM_VOICE?KIND_FM:type==DRUM_VOICE?KIND_DRUM:
+         type==NOISE_VOICE?(wave==NOISE_STEPPED?KIND_STEPPED:KIND_NOISE):KIND_TONE;
+}
+
+#if !defined(__clang__) && defined(__GNUC__)
+#pragma GCC push_options
+#pragma GCC optimize("O2","fp-contract=off")
+#endif
 class Sound {
 public:
   // What a render did, for the device cost model (docs/FIRMWARE_LOADABLE_EFFECTS.md, "Sound").
-  struct Work {uint32_t steps=0,ops=0,events=0,voiceSamples=0,toneSamples=0,noiseSamples=0,filterSamples=0,partialSamples=0,attackSamples=0,idleNoise=0;};
+  struct Work {uint32_t steps=0,ops=0,events=0,voiceSamples=0,toneSamples=0,noiseSamples=0,filterSamples=0,partialSamples=0,attackSamples=0,idleNoise=0;
+    uint32_t kindSamples[SONG_KINDS]={};};  // a song's render cost (SONG_KIND_COST)
   void begin(const Program &p) {
     p_=&p;index_=step_=event_=filled_=0;work_=Work();
     if(!p.hasSound)return;
@@ -623,14 +743,22 @@ public:
     reg_[DUR]=p.duration*.001f;reg_[N]=float(p.soundVoices);
     for(unsigned v=0;v<p.soundVoices;++v) {
       const uint8_t *r=p.soundVoice+size_t(v)*VOICE_BYTES;Voice &x=voice_[v];x=Voice();
-      x.type=r[0];x.wave=r[1];x.filter=r[2];x.flags=r[3];x.noise=get32(r+4);
+      x.type=r[0];x.wave=r[1];x.filter=r[2];x.flags=r[3];x.noise=get32(r+4);x.datum=x.noise;
       for(unsigned k=0;k<VOICE_PARAMS;++k)x.reg[k]=r[8+k];
       x.on=!(x.flags&ENVELOPE);
       // Noise voices with one seed always hold the same state: a silent one
       // takes it from the first of them instead of advancing its own.
       x.leader=uint8_t(v);
-      if(x.type==NOISE_VOICE)for(unsigned u=0;u<v;++u)if(voice_[u].type==NOISE_VOICE && get32(p.soundVoice+size_t(u)*VOICE_BYTES+4)==x.noise){x.leader=uint8_t(u);break;}
+      if(x.type==NOISE_VOICE && x.wave==NOISE_WHITE)
+        for(unsigned u=0;u<v;++u)if(voice_[u].type==NOISE_VOICE && voice_[u].wave==NOISE_WHITE && get32(p.soundVoice+size_t(u)*VOICE_BYTES+4)==x.noise){x.leader=uint8_t(u);break;}
     }
+    songNext_=p.hasSong?0:UINT32_MAX;songOrder_=0;songRow_=0;
+    if(p.hasSong) {
+      // Where each pattern starts: after the head, the channels' voices and the order.
+      uint32_t at=SONG_HEAD+p.songChannels+p.songOrderLength;
+      for(unsigned k=0;k<p.songPatterns;++k){pattern_[k]=uint16_t(at);++at;for(unsigned c=0;c<p.songChannels;++c)at+=2+get16(p.song+at);}
+    }
+    for(unsigned c=0;c<MAX_CHANNELS;++c){channel_[c]=Channel();if(c<p.songChannels)channel_[c].voice=p.song[SONG_HEAD+c];}
     control(0);
     for(unsigned v=0;v<p.soundVoices;++v)read(voice_[v],voice_[v].now);
   }
@@ -677,6 +805,12 @@ private:
     bool on=false;                     // sounding: no envelope, or one running
     float level=0,k=1,rate=0;          // envelope level, its per-sample factor and the rate that is for
     uint32_t age=0,attack=0,length=0;  // samples since the trigger, attack and length in samples
+    // Level 2: the datum (a table or bank entry), FM's modulator phase or
+    // stepped noise's clock, stepped noise's held value, a drum's decoder
+    // (next nibble, predictor, step index, the two samples it is between and
+    // the position between them, Q16), and a note off's release.
+    uint32_t datum=0,phase2=0;float hold=0;
+    uint32_t nibble=0,frac=0;int32_t predictor=0;uint8_t stepIndex=0;int16_t s0=0,s1=0;bool ended=false,release=false;
   };
   static float clampf(float v,float lo,float hi){return v==v?(v<lo?lo:v>hi?hi:v):0.0f;}
   void read(const Voice &v,Params &q)const {
@@ -701,6 +835,31 @@ private:
   void trigger(Voice &v,float level) {
     v.on=level>0 || !(v.flags&ENVELOPE);v.level=level;v.age=0;v.phase=0;
     v.attack=samplesOf(v.now.attack);v.length=samplesOf(v.now.length);
+    v.phase2=0;
+    if(v.type==DRUM_VOICE){v.nibble=0;v.frac=0;v.predictor=0;v.stepIndex=0;v.ended=false;v.s0=drumNext(v);v.s1=drumNext(v);}
+    if(v.release){v.release=false;v.rate=-1;decayFor(v);}
+  }
+  // A note off: the envelope falls by e every 160 samples (10 ms) from the
+  // next step on, instead of at its decay rate.
+  static void release(Voice &v){if(v.on && (v.flags&ENVELOPE))v.release=true;}
+  static constexpr float RELEASE_K=.993769f;  // e^(-1/160)
+  // A drum's next 16-bit sample: IMA ADPCM, low nibble first; 0 past the end.
+  static int16_t drumNext(Voice &v) {
+    static constexpr int16_t STEP[89]={7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,73,80,88,97,107,118,130,143,
+      157,173,190,209,230,253,279,307,337,371,408,449,494,544,598,658,724,796,876,963,1060,1166,1282,1411,1552,1707,1878,2066,2272,2499,
+      2749,3024,3327,3660,4026,4428,4871,5358,5894,6484,7132,7845,8630,9493,10442,11487,12635,13899,15289,16818,18500,20350,22385,24623,
+      27086,29794,32767};
+    static constexpr int8_t INDEX[16]={-1,-1,-1,-1,2,4,6,8,-1,-1,-1,-1,2,4,6,8};
+    const Drums::Entry &e=Drums::BANK[v.datum];
+    if(v.nibble>=e.samples){v.ended=true;return 0;}
+    const uint8_t byte=e.data[v.nibble>>1],nib=uint8_t(v.nibble&1?byte>>4:byte&15);++v.nibble;
+    const int32_t step=STEP[v.stepIndex];int32_t diff=step>>3;
+    if(nib&1)diff+=step>>2;
+    if(nib&2)diff+=step>>1;
+    if(nib&4)diff+=step;
+    int32_t pred=v.predictor+(nib&8?-diff:diff);pred=pred<-32768?-32768:pred>32767?32767:pred;v.predictor=pred;
+    const int idx=int(v.stepIndex)+INDEX[nib];v.stepIndex=uint8_t(idx<0?0:idx>88?88:idx);
+    return int16_t(pred);
   }
   // The per-sample factor of a decay rate, e^(-rate/16000), when the rate
   // changes: a Taylor series in double (|x| <= 1.25, 24 terms), so the
@@ -711,6 +870,7 @@ private:
 #if defined(__clang__)
 #pragma clang fp contract(off)
 #endif
+    if(v.release){v.k=RELEASE_K;return;}
     if(v.now.decay==v.rate)return;
     v.rate=v.now.decay;
     const double x=-double(v.rate)/SOUND_RATE;double term=1,sum=1;
@@ -738,7 +898,10 @@ private:
         if(hz>0)x.note=clampf(hz,0,7999);
         trigger(x,clampf(level,0,8));++event_;++work_.events;
       }
-      const uint32_t end=event_<p.soundEvents?std::min(len,get32(p.soundEvent+size_t(event_)*EVENT_BYTES)-base):len;
+      // A song row on this sample: after the file's own notes there.
+      if(songNext_==base+at)songRow();
+      uint32_t end=event_<p.soundEvents?std::min(len,get32(p.soundEvent+size_t(event_)*EVENT_BYTES)-base):len;
+      if(songNext_>base+at && songNext_-base<end)end=songNext_-base;
       for(unsigned v=0;v<p.soundVoices;++v)voice(voice_[v],next[v],at,end);
       at=end;
     }
@@ -749,6 +912,42 @@ private:
     }
     filled_=base+len;++step_;
   }
+  // A note's frequency on the equal-tempered scale, A4 (69) at 440 Hz,
+  // without libm: the octave from 12 constants, scaled by powers of two.
+  static float noteHz(uint8_t note) {
+    static constexpr float C4_OCTAVE[12]={261.625565f,277.182631f,293.664768f,311.126984f,329.627557f,349.228231f,
+      369.994423f,391.995436f,415.304698f,440.0f,466.163762f,493.883301f};
+    const int octave=int(note/12)-5;float hz=C4_OCTAVE[note%12];
+    for(int k=0;k<octave;++k)hz*=2;
+    for(int k=0;k>octave;--k)hz*=.5f;
+    return hz;
+  }
+  // The song's row on its first sample: each channel waits out its rows or
+  // plays its events up to its next wait; then the next row (and pattern).
+  void songRow() {
+    const Program &p=*p_;
+    const uint8_t *order=p.song+SONG_HEAD+p.songChannels;
+    if(songRow_==0) {
+      // A pattern begins: its channels' streams, in order after its row count.
+      uint32_t at=pattern_[order[songOrder_]]+1u;
+      for(unsigned c=0;c<p.songChannels;++c){Channel &ch=channel_[c];const uint32_t n=get16(p.song+at);ch.at=at+2;ch.end=at+2+n;ch.wait=0;at+=2+n;}
+    }
+    for(unsigned c=0;c<p.songChannels;++c) {
+      Channel &ch=channel_[c];
+      if(ch.wait){--ch.wait;continue;}
+      while(ch.at<ch.end) {
+        const uint8_t e=p.song[ch.at++];
+        if(e<SONG_WAIT){Voice &x=voice_[ch.voice];x.note=noteHz(e);trigger(x,ch.volume);++work_.events;}
+        else if(e<SONG_VOICE){ch.wait=uint16_t((e&63)-1);break;}
+        else if((e&0xF0)==SONG_VOICE)ch.voice=uint8_t(e&15);
+        else if((e&0xF0)==SONG_VOLUME)ch.volume=float((e&15)+1)*(1.0f/16);
+        else release(voice_[ch.voice]);
+      }
+    }
+    const uint8_t rows=p.song[pattern_[order[songOrder_]]];
+    if(++songRow_>=rows){songRow_=0;++songOrder_;}
+    songNext_=songOrder_<p.songOrderLength?songNext_+p.songRowSamples:UINT32_MAX;
+  }
   // Samples [from, to) of the step for one voice: its parameters move in a
   // straight line from x.now (the step's first sample) toward next (the
   // next step's first).
@@ -758,6 +957,8 @@ private:
 #endif
     const uint32_t count=to-from;
     if(!count)return;
+    // Level 2's voices and stepped noise have their own loops; level 1's below are unchanged.
+    if(x.type>=PULSE_VOICE || (x.type==NOISE_VOICE && x.wave!=NOISE_WHITE)){voice2(x,next,from,to);return;}
     const bool noise=x.type==NOISE_VOICE,envelope=(x.flags&ENVELOPE)!=0;
     if(!x.on || (!envelope && x.now.gain==0 && next.gain==0)) {
       // The noise keeps running (the first voice of its seed has run this span already).
@@ -783,7 +984,7 @@ private:
       &Sound::span<true,2,false>,&Sound::span<true,2,true>,&Sound::span<true,3,false>,&Sound::span<true,3,true>};
     const uint32_t j=LOOPS[(noise?8:0)+x.filter*2+(envelope?1:0)](x,s);
     if(noise && j<count)noiseFor(x,count-j);
-    work_.voiceSamples+=j;(noise?work_.noiseSamples:work_.toneSamples)+=j;
+    work_.voiceSamples+=j;(noise?work_.noiseSamples:work_.toneSamples)+=j;work_.kindSamples[songVoiceKind(x.type,x.wave)]+=j;
     if(x.filter)work_.filterSamples+=j;
     if(!noise && x.wave==WAVE_SINE && (s.octave!=0 || s.cubic!=0))work_.partialSamples+=j;
     if(envelope && age0<x.attack)work_.attackSamples+=std::min(j,x.attack-age0);
@@ -827,12 +1028,131 @@ private:
     }
     return j;
   }
+  // Level 2's voices over samples [from, to) of the step, as voice() does
+  // for level 1's: the same straight-line parameters, filters and envelope.
+  LLFX_EXACT void voice2(Voice &x,const Params &next,uint32_t from,uint32_t to) {
+#if defined(__clang__)
+#pragma clang fp contract(off)
+#endif
+    const uint32_t count=to-from;const bool envelope=(x.flags&ENVELOPE)!=0;
+    if(!x.on || (!envelope && x.now.gain==0 && next.gain==0))return;  // silent: holds its phases and filters
+    constexpr float STEP_INV=1.0f/SOUND_STEP;
+    Span2 s;s.count=count;s.mix=mix_+from;
+    s.dg=(next.gain-x.now.gain)*STEP_INV;s.dk1=(next.k1-x.now.k1)*STEP_INV;s.dk2=(next.k2-x.now.k2)*STEP_INV;
+    s.g=x.now.gain+s.dg*float(from);s.k1=x.now.k1+s.dk1*float(from);s.k2=x.now.k2+s.dk2*float(from);
+    const bool pitched=(x.flags&NOTE_PITCH)!=0;
+    const uint32_t i0=increment(pitched?clampf(x.note*x.now.hz,0,7999):x.now.hz),i1=increment(pitched?clampf(x.note*next.hz,0,7999):next.hz);
+    s.dinc=uint32_t(int32_t(int64_t(i1)-int64_t(i0))/int32_t(SOUND_STEP));s.inc=i0+s.dinc*from;
+    s.ainv=x.attack?1.0f/float(x.attack):0.0f;
+    // Per span: the pulse's duty and edge width, FM's ratio and index, a drum's rate.
+    s.duty=clampf(x.now.cubic,.05f,.95f);s.dt=float(s.inc)*(1.0f/4294967296.0f);s.idt=s.dt>0?1.0f/s.dt:0.0f;
+    s.ratio=clampf(x.now.octave,0,16);s.index=clampf(x.now.cubic,0,8);
+    {
+      // The modulator's increment, wrapped to a turn (a frequency past the
+      // sample rate aliases, as a phase accumulator does).
+      const float turns=float(s.inc)*(1.0f/4294967296.0f)*s.ratio;const float fr=turns-Math::floor(turns);
+      s.inc2=uint32_t(fr*16777216.0f)<<8;
+    }
+    s.rate=uint32_t((x.now.hz>0?clampf(x.now.hz,.25f,4):1.0f)*65536);
+    if(x.type==WAVETABLE_VOICE){const Program::Table &tb=p_->tables[x.datum];s.table=p_->pool+4u*tb.base;s.tableLength=tb.length;}
+    const uint32_t age0=x.age;
+    using Loop=uint32_t (*)(Voice &,Span2 &);
+    static constexpr Loop LOOPS[5][4][2]={
+#define LLFX_KIND(k) {{&Sound::span2<k,0,false>,&Sound::span2<k,0,true>},{&Sound::span2<k,1,false>,&Sound::span2<k,1,true>},\
+                      {&Sound::span2<k,2,false>,&Sound::span2<k,2,true>},{&Sound::span2<k,3,false>,&Sound::span2<k,3,true>}}
+      LLFX_KIND(0),LLFX_KIND(1),LLFX_KIND(2),LLFX_KIND(3),LLFX_KIND(4)
+#undef LLFX_KIND
+    };
+    const unsigned kind=x.type==NOISE_VOICE?K_STEPPED:x.type==PULSE_VOICE?K_PULSE:x.type==WAVETABLE_VOICE?K_TABLE:x.type==FM_VOICE?K_FM:K_DRUM;
+    const uint32_t j=LOOPS[kind][x.filter][envelope?1:0](x,s);
+    work_.voiceSamples+=j;work_.toneSamples+=j;work_.kindSamples[songVoiceKind(x.type,x.wave)]+=j;
+    if(x.filter)work_.filterSamples+=j;
+    if(envelope && age0<x.attack)work_.attackSamples+=std::min(j,x.attack-age0);
+  }
+  enum Kind2:uint8_t {K_STEPPED,K_PULSE,K_TABLE,K_FM,K_DRUM};
+  struct Span2 {
+    float g=0,dg=0,k1=0,dk1=0,k2=0,dk2=0,ainv=0,duty=.5f,dt=0,idt=0,ratio=0,index=0;
+    uint32_t inc=0,dinc=0,inc2=0,count=0,rate=65536;float *mix=nullptr;const uint8_t *table=nullptr;unsigned tableLength=0;
+  };
+  // PolyBLEP: the correction near a step of the naive pulse, t in turns, dt a sample's turns.
+  LLFX_EXACT static float blep(float t,float dt,float idt) {
+#if defined(__clang__)
+#pragma clang fp contract(off)
+#endif
+    if(t<dt){const float x=t*idt;return x+x-x*x-1;}
+    if(t>1-dt){const float x=(t-1)*idt;return x*x+x+x+1;}
+    return 0.0f;
+  }
+  static float tableAt(const uint8_t *table,unsigned i) {
+    const uint32_t bits=get32(table+4u*i);float v;std::memcpy(&v,&bits,4);
+    return v<-1?-1.0f:v>1?1.0f:v;
+  }
+  template<uint8_t KIND,uint8_t FILTER,bool ENV> LLFX_EXACT static uint32_t span2(Voice &x,Span2 &s) {
+#if defined(__clang__)
+#pragma clang fp contract(off)
+#endif
+    const auto &SINE=BestEffectSound::detail::SINE;
+    const uint32_t count=s.count;float g=s.g,k1=s.k1,k2=s.k2;uint32_t inc=s.inc,j=0;
+    for(;j<count;++j) {
+      float v=0;
+      if(KIND==K_STEPPED) {
+        // A new value each time the clock wraps, held in between.
+        const uint32_t ph=x.phase;x.phase=ph+inc;inc+=s.dinc;
+        if(x.phase<ph){x.noise^=x.noise<<13;x.noise^=x.noise>>17;x.noise^=x.noise<<5;x.hold=float(int32_t(x.noise))*(1.0f/2147483648.0f);}
+        v=x.hold;
+      } else if(KIND==K_PULSE) {
+        const uint32_t ph=x.phase;x.phase=ph+inc;inc+=s.dinc;
+        const float u=float(ph)*(1.0f/4294967296.0f);
+        float w=u<s.duty?1.0f:-1.0f;
+        if(s.dt>0){w=w+blep(u,s.dt,s.idt);float d=u-s.duty;if(d<0)d=d+1;w=w-blep(d,s.dt,s.idt);}
+        v=w;
+      } else if(KIND==K_TABLE) {
+        // The phase as a position in the table, linearly interpolated, wrapping.
+        const uint64_t at=uint64_t(x.phase)*s.tableLength;x.phase+=inc;inc+=s.dinc;
+        const unsigned i=unsigned(at>>32),i1=i+1<s.tableLength?i+1:0;const float f=float(uint32_t(at)>>8)*(1.0f/16777216.0f);
+        const float a=tableAt(s.table,i),b=tableAt(s.table,i1);v=a+(b-a)*f;
+      } else if(KIND==K_FM) {
+        // A modulator at ratio times the carrier's frequency bends the carrier's phase by index radians.
+        const uint32_t c=x.phase,m=x.phase2;x.phase=c+inc;
+        x.phase2=m+s.inc2;inc+=s.dinc;
+        const float turns=SINE[m>>22]*s.index*(1.0f/6.28318531f);
+        const float fr=turns-Math::floor(turns);
+        v=SINE[(c+(uint32_t(fr*16777216.0f)<<8))>>22];
+      } else {
+        // A drum: between two decoded samples, stepping at its rate; done at its end.
+        if(x.ended){x.on=false;return j;}
+        v=(float(x.s0)+float(x.s1-x.s0)*float(x.frac)*(1.0f/65536))*(1.0f/32768);
+        x.frac+=s.rate;
+        while(x.frac>=65536){x.frac-=65536;x.s0=x.s1;x.s1=drumNext(x);}
+      }
+      if(FILTER==LOWPASS){x.y1+=(v-x.y1)*k1;v=x.y1;k1+=s.dk1;}
+      else if(FILTER==BANDPASS){x.y1+=(v-x.y1)*k1;x.y2+=(v-x.y2)*k2;v=x.y1-x.y2;k1+=s.dk1;k2+=s.dk2;}
+      else if(FILTER==HIGHPASS){x.y1+=(v-x.y1)*k1;v=v-x.y1;k1+=s.dk1;}
+      float e=1;
+      if(ENV) {
+        e=x.level;x.level*=x.k;
+        if(x.age<x.attack){const float u=float(x.age)*s.ainv;e=e*(u*u*(3-2*u));}
+        ++x.age;
+      }
+      s.mix[j]+=g*e*v;g+=s.dg;
+      if(ENV && x.length && x.age>=x.length){x.on=false;return j+1;}
+    }
+    return j;
+  }
+  // The song: the sample of the next row (UINT32_MAX when none), the order
+  // entry and row playing, and per channel its stream, its rows to wait,
+  // its voice and its volume.
+  struct Channel {uint32_t at=0,end=0;uint16_t wait=0;uint8_t voice=0;float volume=1;};
+  uint32_t songNext_=UINT32_MAX,songOrder_=0,songRow_=0;Channel channel_[MAX_CHANNELS];uint16_t pattern_[MAX_PATTERNS]={};
   const Program *p_=nullptr;
   uint32_t index_=0,step_=0,event_=0,filled_=0;Work work_;
   float reg_[REGS];
   Voice voice_[MAX_VOICES];
   float mix_[SOUND_STEP];
 };
+#if !defined(__clang__) && defined(__GNUC__)
+#pragma GCC pop_options
+#endif
 
 // Stops a frame between draw calls: a deterministic cap on instructions and
 // an optional clock (the device's: time since the frame began).
@@ -853,7 +1173,7 @@ public:
   // A frame's counts: the renderer's (plots, probes, scans, touches, roots:
   // Renderer::modelledUs(), as renderUs, which the engine's primitives feed
   // too), the bytecode's (ops, draws) and the primitives' work by kind.
-  struct Stats {uint32_t ops=0,draws=0,plots=0,probes=0,scans=0,touches=0,roots=0,particles=0,columns=0,points=0,pixels=0;double renderUs=0;bool stopped=false;};
+  struct Stats {uint32_t ops=0,draws=0,plots=0,probes=0,scans=0,fills=0,spans=0,touches=0,roots=0,particles=0,columns=0,points=0,pixels=0;double renderUs=0;bool stopped=false;};
   // Draws `p` `elapsed` ms in, after the UI, like Renderer::draw. Nothing
   // once elapsed reaches the duration; no readout primitive from the
   // readout end on, so the UI is exact from then.
@@ -891,7 +1211,7 @@ public:
         if(stats_.stopped)break;
       }
     }
-    stats_.plots=r.plots_;stats_.probes=r.probes_;stats_.scans=r.scans_;stats_.touches=r.touches_;stats_.roots=r.roots_;stats_.renderUs=r.modelledUs();
+    stats_.plots=r.plots_;stats_.probes=r.probes_;stats_.scans=r.scans_;stats_.fills=r.fills_;stats_.spans=r.spans_;stats_.touches=r.touches_;stats_.roots=r.roots_;stats_.renderUs=r.modelledUs();
     return true;
   }
   const Stats &stats()const{return stats_;}

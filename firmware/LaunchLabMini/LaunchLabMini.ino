@@ -64,11 +64,11 @@ namespace Hil{inline bool nvsWrite(const char *key,size_t bytes);}
 #define LOOP_HELPER __attribute__((noinline))
 #if LAUNCHLAB_HIL
 // Test-only hardware-in-the-loop build; never a release. See tools/hil.
-static constexpr char VERSION[] = "0.19.0-sticks3-loadable-hil-pm";
+static constexpr char VERSION[] = "0.20.0-sticks3-songs-hil-pm";
 #elif LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = "0.19.0-sticks3-loadable-pm";
+static constexpr char VERSION[] = "0.20.0-sticks3-songs-pm";
 #else
-static constexpr char VERSION[] = "0.19.0-sticks3-loadable";
+static constexpr char VERSION[] = "0.20.0-sticks3-songs";
 #endif
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ
@@ -1327,8 +1327,39 @@ struct LoadedSoundSource:BestEffectSpeaker::LoadedSounds {
   bool sound(unsigned effect,uint32_t &key,size_t &samples) override{return loadedEffects && loadedEffects->soundOf(effect,key,samples);}
   bool begin(unsigned effect) override{return loadedEffects && loadedEffects->beginSound(effect);}
   size_t run(int16_t *out,size_t count) override{return loadedEffects?loadedEffects->renderSound(out,count):0;}
+  bool song(unsigned effect) override{return loadedEffects && loadedEffects->songOf(effect);}
+  bool readSong(unsigned effect,const uint8_t *&file,size_t &bytes) override{return loadedEffects && loadedEffects->readSong(effect,file,bytes);}
 };
 static LoadedSoundSource loadedSounds;
+// Songs (engine level 2) stream from a task on core 0 at priority 1, below
+// the optical ADC owner and the IMU, so it renders only in core 0's idle
+// time; it sleeps until a song starts. Its file copy, renderer and ring
+// are in PSRAM.
+static Music *music=nullptr;
+static constexpr uint32_t MUSIC_STACK=3584;
+static void musicTask(void *) {
+  // A block a step, then the sleep step() asks for (at least 1 ms, keeping
+  // the task under Music::DUTY_PERCENT of core 0); with nothing to render it
+  // waits for play() to wake it.
+  for(;;) {
+    const uint32_t ms=music->step([]{return uint32_t(esp_timer_get_time());});
+    if(ms)vTaskDelay(pdMS_TO_TICKS(ms));
+    else ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(250));
+  }
+}
+LOOP_HELPER static void startMusic() {
+  void *space=heap_caps_malloc(sizeof(Music::Space),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+  void *memory=heap_caps_malloc(sizeof(Music),MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+  TaskHandle_t task=nullptr;
+  if(space && memory) {
+    music=new(memory) Music(new(space) Music::Space());
+    // Internal RAM: 2,016 bytes at its deepest over the three example songs
+    // (every voice type; HIL songs run, 2026-10-23), plus a 1.5 KB margin.
+    if(xTaskCreatePinnedToCore(musicTask,"music",MUSIC_STACK,nullptr,1,&task,0)==pdPASS){soundPlayer.attachMusic(music,task);return;}
+  }
+  heap_caps_free(space);heap_caps_free(memory);music=nullptr;
+  Serial.println("MUSIC_BOOT state=no_memory");
+}
 // After the ADC has its DMA memory: the runtime, the file buffers and the
 // sound renderer from PSRAM; the playing file's hot 4 KB from the internal
 // heap on the first added-effect play, so a unit without added effects keeps
@@ -1349,6 +1380,7 @@ static void openLoadedEffects() {
   const Loaded::HotMemory hot=[]{return static_cast<uint8_t *>(heap_caps_malloc(LoadableFx::HOT_BYTES,MALLOC_CAP_INTERNAL|MALLOC_CAP_32BIT));};
   loadedEffects=new(memory) Loaded(bestEffectRenderer,file,Loaded::Store::MAX_PAYLOAD,hot,soundFile,sound);
   soundPlayer.attach(&loadedSounds);
+  startMusic();
   const int64_t started=esp_timer_get_time();
   using Open=Loaded::Store::Open;
   const auto opened=loadedEffects->begin(spiffsFlash);
@@ -2359,7 +2391,10 @@ LOOP_HELPER static void tickSound(const Snapshot &s) {
   const bool effectEditor=controls.page==Controls::Page::Edit && controls.setting==unsigned(S::BestEffect);
   const bool celebrating=bestEffect.badge(),editing=effectEditor || (controls.page==Controls::Page::Edit && controls.setting==unsigned(S::Sound));
   if(editorEffect.badge() && !effectEditor){editorEffect.clear();dirty=true;}
-  if(measuring || (celebrationSound && !celebrating) || (soundPreview && !editing)) {
+  // A pull fades a song out within 20 ms and stops other sounds at once; a
+  // song plays on past its effect's frames.
+  if(measuring){soundPlayer.fadeOut();celebrationSound=soundPreview=false;}
+  else if((celebrationSound && !celebrating && !soundPlayer.streaming()) || (soundPreview && !editing)) {
     soundPlayer.stop();celebrationSound=soundPreview=false;
   }
   if(soundRequest.active && (measuring || (soundRequest.celebration?!celebrating || bestEffect.elapsed(millis())>SOUND_LATE_MS:!editing)))

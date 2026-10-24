@@ -122,10 +122,12 @@ inline void Renderer::armorySwordland(float t) {
   const float yh=std::min(float(bottom_-44),b.y1+25.0f),gy=yh+14;
   const Rgb steelC=rgb8(205,216,232),rust=rgb8(170,66,28),brass=rgb8(204,118,52),ember=rgb8(255,176,64),hotC=rgb8(255,232,180);
   glint(t,.6f,.45f);
+  sorcMark(1);
   // The fire front: its radius on the ground, an ellipse squashed to 0.3.
   const float sweep=t<IGNITE?0:easeOut((t-IGNITE)/SWEEP),R=3+80*sweep;
   const float ringK=smooth((t-IGNITE+.06f)/.08f)*(1-smooth((t-IGNITE-SWEEP+.3f)/.32f));
   const int frame=floori(t*20+.001f);
+  sorcMark(2);
   // Gears: they come out of the dark in the fire's light, kick round and
   // keep turning slowly; the angle is a closed form, so it is continuous.
   const float gearK=smooth((t-1.06f)/.5f)*(1-smooth((t-SETTLE-.15f)/.8f));
@@ -136,6 +138,7 @@ inline void Renderer::armorySwordland(float t) {
     armoryGear(cx+10,b.y1-9,27,15,-.42f*turn,rim,hub,q8(.55f*gearK),true);
     armoryGear(w_+1,yh-6,19,11,-turn*1.0f,rim,hub,k,true);
   }
+  sorcMark(3);
   // The horizon, lit from the centre out as the front passes, then a
   // shimmering line of heat haze that dies with the fire.
   // It goes out with the fire.
@@ -153,11 +156,13 @@ inline void Renderer::armorySwordland(float t) {
       armoryPlot(x,y,inkOf(mixed(rust,ember,front)),q8(horizonK*(.42f*haze+.6f*front)));
     }
   }
+  sorcMark(4);
   // The field: each sword rises out of the ground as the front reaches it,
   // flashes hot and cools to steel; far ones are smaller, higher and hazier.
   const int glintSlot=floori((t-1.35f)/.32f);
   const float glintAge=t-1.35f-glintSlot*.32f;
   const int glintSword=t>=1.35f && t<3.65f?int(hash(uint32_t(glintSlot)*7+3)%SWORDS):-1;
+  sorcMark(5);
   // Placed by hand across the field: x as a fraction of the width, the
   // planting depth (0 at the horizon, 1 nearest) and the lean in radians.
   // The nearest, largest ones stand at the screen's edges, clear of the replay.
@@ -182,6 +187,7 @@ inline void Renderer::armorySwordland(float t) {
       twinkle(x+ux*along,g+uy*along,WHITE,.9f*sine(HALF_TURN*u),1);
     }
   }
+  sorcMark(6);
   // The spark that catches, and the ring of fire with flame tongues.
   if(t<IGNITE+.05f) {
     const float s=clamp01(t/IGNITE);
@@ -203,6 +209,7 @@ inline void Renderer::armorySwordland(float t) {
       for(int d=1;d<=h;++d)armoryPlot(ix,iy-d,fire(heat0-d*dh),k0-d*dk);
     }
   }
+  sorcMark(7);
   // Embers rise off the field and wink out under the readout.
   const float emberK=smooth((t-.6f)/.4f)*(1-smooth((t-4.3f)/.6f));
   if(emberK>0)for(unsigned i=0;i<18;++i) {
@@ -214,6 +221,7 @@ inline void Renderer::armorySwordland(float t) {
     const Ink c=inkOf(mixed(ember,rgb8(210,52,12),u));
     armoryPlot(roundi(x),roundi(y),c,q8(k*1.1f));armoryPlot(roundi(x),roundi(y)+1,c,q8(k*.4f));
   }
+  sorcMark(8);
 }
 
 // A closed ellipse as a single-pixel path.
@@ -272,8 +280,10 @@ inline void Renderer::armoryTreasury(float t) {
   const Box &b=number_;const float cx=b.cx();
   const Rgb gold=rgb8(255,192,58),pale=rgb8(255,238,170),steelC=rgb8(216,226,242);
   const Ink goldI=inkOf(gold),paleI=inkOf(pale),steelI=inkOf(steelC),waveI=inkOf(mixed(gold,accent_,.25f));
+  sorcMark(1);
   // The header gleams as the first rank stands aimed, before the volley.
   glint(t,.48f,.4f);
+  sorcMark(2);
   // Gates open from the centre outward; rank r of gate i.
   static constexpr int RANK[GATES]={3,1,0,2,4};
   static constexpr float LEN[3]={34,42,27};
@@ -346,6 +356,7 @@ inline void Renderer::armoryTreasury(float t) {
       if(t>2.0f && gu<.3f){const float s=len2*.72f*e2*(1-gu/.3f);twinkle(px+dx*s,py+dy*s,WHITE,.8f*sine(HALF_TURN*gu/.3f),1);}
     }
   }
+  sorcMark(3);
   // Motes of gold drift in and vanish into the gates.
   const float moteK=smooth((t-1.5f)/.4f)*(1-smooth((t-WITHDRAW)/.5f));
   if(moteK>0)for(unsigned m=0;m<10;++m) {
@@ -356,6 +367,7 @@ inline void Renderer::armoryTreasury(float t) {
     const float x=px+cosine(an)*d,y=py+sine(an)*d*.6f;
     if(y>b.y1+HALO+1)plot(x,y,u<.5f?pale:gold,moteK*sine(HALF_TURN*u)*.9f);
   }
+  sorcMark(4);
 }
 
 // A single-pixel straight stroke (below the readout's rows).

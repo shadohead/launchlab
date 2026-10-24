@@ -67,6 +67,21 @@ public:
   // cannot be established return false so the flash checkpoint is vetoed and
   // deferred; never write flash with a transfer possibly in flight.
   static constexpr uint32_t QUIET_WAIT_MS=250;
+  // One poll per 20 ms reads the FIFO's four or so frames in two I2C
+  // transactions. Each transaction costs about 0.4 ms of busy-waiting
+  // whatever its length, so polling every 5 ms spent most of the IMU task's
+  // core-0 time on bus overhead. Frame times come from the sensor clock
+  // (Timeline), and a capture waits for fused samples past its end, so a
+  // longer poll delays data by at most one period and loses none.
+  static constexpr uint32_t POLL_MS=20,STACK_POLLS=1000/POLL_MS;
+  // The longest normal stop of FIFO reads is a flash-write checkpoint's quiet
+  // window. On device (0.18) a history log append takes about 16 ms and an
+  // NVS write 110-160 ms; this budget leaves room over the slowest. A poll
+  // right after it reads POLL_MS+STALL_BUDGET_MS of frames, about half the
+  // FIFO. A stop over about a second overflows it and is reported as a gap.
+  static constexpr uint32_t STALL_BUDGET_MS=500;
+  static_assert(Bmi270Fifo::fillBytes(POLL_MS+STALL_BUDGET_MS)<Bmi270Fifo::CAPACITY-Bmi270Fifo::FULL_MARGIN,
+    "A poll after the longest normal stall must find the FIFO short of overflow");
   bool quiet(uint32_t ms=QUIET_MAX_MS) {
     if(gate_ && xSemaphoreTake(gate_,pdMS_TO_TICKS(QUIET_WAIT_MS))!=pdTRUE)return false;
     // Publish the window while holding the gate: the IMU task checks it under
@@ -112,7 +127,7 @@ private:
   static void entry(void *self){static_cast<StickS3MotionAcquisition *>(self)->run();}
   void run() {
     TickType_t last=xTaskGetTickCount();Snapshot s;uint32_t activeFrame=0;
-    Snapshot::Gap span;uint64_t previousWake=0;bool haveAccel=false;
+    Snapshot::Gap span;uint64_t previousWake=0;bool haveAccel=false;unsigned stackPolls=0;
     for(;;) {
       const uint64_t wake=esp_timer_get_time();
       if(previousWake)span.periodUs=std::max(span.periodUs,uint32_t(wake-previousWake));
@@ -170,7 +185,9 @@ private:
           s.fifoAnchors=timeline_.anchors();s.fifoPeriodUs=float(timeline_.periodUs());
         }
       } else ++s.gateMisses;
-      s.stackFree=uxTaskGetStackHighWaterMark(nullptr);
+      // The high-water mark walks the whole free stack a byte at a time
+      // (about 1 ms on device, as long as the rest of a poll): once a second.
+      if(!s.stackFree || ++stackPolls>=STACK_POLLS){stackPolls=0;s.stackFree=uxTaskGetStackHighWaterMark(nullptr);}
       const uint64_t publishStart=esp_timer_get_time();
       if(xSemaphoreTake(ringGate_,pdMS_TO_TICKS(20))==pdTRUE) {
         // setMount can run between fusion and publication. Never restore an
@@ -182,13 +199,13 @@ private:
       pace(last,s);
     }
   }
-  // One poll per 5 ms. Once a period or more behind, FreeRTOS's delay-until
-  // returns without blocking, so a loop held up for long (gate waits, an
-  // overloaded core 0) would run back-to-back through every missed period
-  // and keep IDLE0 off core 0 until the task watchdog resets the chip. The
-  // FIFO already holds the samples those polls would have read, so a late
-  // poll skips them: the period restarts now, after a one-tick block.
-  static constexpr TickType_t PERIOD=pdMS_TO_TICKS(5);
+  // Once a period or more behind, FreeRTOS's delay-until returns without
+  // blocking, so a loop held up for long (gate waits, an overloaded core 0)
+  // would run back-to-back through every missed period and keep IDLE0 off
+  // core 0 until the task watchdog resets the chip. The FIFO already holds
+  // the samples those polls would have read, so a late poll skips them: the
+  // period restarts now, after a one-tick block.
+  static constexpr TickType_t PERIOD=pdMS_TO_TICKS(POLL_MS);
   static void pace(TickType_t &last,Snapshot &s) {
     if(xTaskDelayUntil(&last,PERIOD)==pdTRUE)return;
     const TickType_t now=xTaskGetTickCount();

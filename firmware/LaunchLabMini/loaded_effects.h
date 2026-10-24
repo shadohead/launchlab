@@ -33,6 +33,8 @@ public:
     uint64_t uid=0;uint16_t revision=0;uint8_t engine=0;
     // Its own sound (a SOUND section): the file's CRC identifies it.
     bool sound=false;uint32_t crc=0,soundSamples=0;
+    // A song (level 2): streamed as it plays (music_stream.h), never rendered ahead.
+    bool song=false;
   };
   // What renders a loaded effect's sound: its program and the renderer.
   struct SoundSpace {LoadableFx::Program program;LoadableFx::Sound sound;};
@@ -113,8 +115,18 @@ public:
   bool soundOf(unsigned effect,uint32_t &key,size_t &samples)const {
     if(!playable(effect) || !soundFile_ || !sound_)return false;
     const Info &i=info_[slotOf(effect)];
-    if(!i.sound)return false;
+    if(!i.sound || i.song)return false;
     key=i.crc;samples=i.soundSamples;return true;
+  }
+  // An effect whose sound is a song, which the speaker streams.
+  bool songOf(unsigned effect)const{return playable(effect) && soundFile_ && info_[slotOf(effect)].song;}
+  // The song's file, read into the sound's file copy for the streamer to
+  // copy (an effect being rendered ahead starts again next time).
+  bool readSong(unsigned effect,const uint8_t *&file,size_t &bytes) {
+    if(!songOf(effect))return false;
+    soundSlot_=-1;bytes=0;
+    if(!store_.readFile(slotOf(effect),soundFile_,fileCapacity_,bytes))return false;
+    file=soundFile_;return true;
   }
   // Starts rendering an effect's own sound from its own copy of the file;
   // renderSound() continues it, a slice at a time, the same for any slicing.
@@ -147,7 +159,7 @@ private:
     LoadableFx::Program p;
     if(LoadableFx::load(file_,n,p)!=LoadableFx::Error::None)return;
     std::memcpy(i.name,p.name,sizeof(i.name));i.duration=p.duration;i.fallback=p.fallback;i.revision=p.revision;
-    i.sound=p.hasSound;i.soundSamples=p.soundSamples();i.crc=LoadableFx::get32(file_+28);
+    i.sound=p.hasSound;i.song=p.hasSong;i.soundSamples=p.soundSamples();i.crc=LoadableFx::get32(file_+28);
     i.playable=LoadableFx::hotBytes(p)<=LoadableFx::HOT_BYTES;
   }
   // The effect's program, read and placed unless it is the one already placed.

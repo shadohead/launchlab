@@ -183,9 +183,14 @@ private:
   std::string name_;uint64_t uid_=0;uint16_t revision_=1,duration_=0,readout_=0,sound_=0;uint8_t fallback_=Program::NO_FALLBACK;
   std::vector<float> consts_;std::vector<uint8_t> code_,args_;std::vector<Block> blocks_;
   std::vector<uint8_t> soundCode_;bool soundBlock_=false;
+  // Engine level 2 (pulse, wave, fm and drum voices, stepped noise, a song):
+  // the file says level 2 only when it uses one, so others play on 0.19.
+  bool level2_=false;
+  // The song (SONG section body), built when its block is compiled.
+  std::vector<uint8_t> song_;
   // The sound's voices (arrays expanded), their names and the notes.
   struct VoiceDecl {
-    std::string name;int line=0;uint8_t type=TONE_VOICE,wave=WAVE_SINE,filter=NO_FILTER;uint32_t seed=0;
+    std::string name;int line=0;uint8_t type=TONE_VOICE,wave=WAVE_SINE,filter=NO_FILTER;uint32_t seed=0,datum=0;
     float value[VOICE_PARAMS]={};bool given[VOICE_PARAMS]={};int reg[VOICE_PARAMS]={-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
     bool hzNamed=false,bendNamed=false,pitched=false,played=false;
   };
@@ -280,6 +285,7 @@ private:
       else if(word=="voice")voiceDecl(t.line);
       else if(word=="note" && peek().kind==Tok::Punct && peek().text=="("){NoteCall c=noteCall(t.line);endStatement();playNote(c);}
       else if(word=="notes")notesBlock();
+      else if(word=="song")songBlock(t.line);
       else if(word=="frame"){block(1,true);}
       else if(word=="repeat") {
         NodeP e=expression();const Value v=gen(*e);
@@ -475,17 +481,30 @@ private:
   }
 
   // ---- the sound ----
+  // Level 2's voices name some parameters for what they do: a pulse's duty,
+  // FM's ratio and index (the octave and cubic slots) and a drum's rate (hz).
   static int voiceParam(const std::string &n,bool &bend) {
     static const std::pair<const char *,int> names[]={{"gain",GAIN},{"hz",HZ},{"bend",HZ},{"octave",OCTAVE},{"cubic",CUBIC},{"k",K1},{"k2",K2},
-      {"trigger",TRIGGER},{"attack",ATTACK},{"decay",DECAY},{"length",LENGTH}};
+      {"trigger",TRIGGER},{"attack",ATTACK},{"decay",DECAY},{"length",LENGTH},{"duty",CUBIC},{"ratio",OCTAVE},{"index",CUBIC},{"rate",HZ}};
     bend=n=="bend";
     for(const auto &p:names)if(n==p.first)return p.second;
     return -1;
   }
   // A parameter a voice's kind does not have.
   void checkParam(const VoiceDecl &v,int param,bool bend,const std::string &name,int line) {
-    if(v.type==NOISE_VOICE && (param==HZ || param==OCTAVE || param==CUBIC))fail("a noise voice has no "+name,line);
-    VoiceDecl &w=const_cast<VoiceDecl &>(v);(bend?w.bendNamed:w.hzNamed)|=param==HZ;
+    const char *kind=v.type==TONE_VOICE?"tone":v.type==NOISE_VOICE?"noise":v.type==PULSE_VOICE?"pulse":v.type==WAVETABLE_VOICE?"wave":v.type==FM_VOICE?"fm":"drum";
+    auto refuse=[&]{fail(std::string("a ")+kind+" voice has no "+name,line);};
+    const bool special=name=="duty" || name=="ratio" || name=="index" || name=="rate";
+    if(v.type==TONE_VOICE && special)refuse();
+    if(v.type==NOISE_VOICE) {
+      if(special || param==OCTAVE || param==CUBIC)refuse();
+      if(param==HZ && (v.wave==NOISE_WHITE || bend))fail(v.wave==NOISE_WHITE?"a noise voice has no "+name+" (stepped noise has: noise(step: 4000))":"a noise voice has no bend",line);
+    }
+    if(v.type==PULSE_VOICE && (name=="octave" || name=="cubic" || name=="ratio" || name=="index" || name=="rate"))refuse();
+    if(v.type==WAVETABLE_VOICE && (param==OCTAVE || param==CUBIC || name=="rate"))refuse();
+    if(v.type==FM_VOICE && (name=="octave" || name=="cubic" || name=="duty" || name=="rate"))refuse();
+    if(v.type==DRUM_VOICE && (param==OCTAVE || param==CUBIC || name=="hz" || bend))refuse();
+    VoiceDecl &w=const_cast<VoiceDecl &>(v);(bend?w.bendNamed:w.hzNamed)|=param==HZ && v.type!=DRUM_VOICE && v.type!=NOISE_VOICE;
   }
   float constantNumber(const Node &e,const char *what) {
     const Value v=gen(e);
@@ -505,11 +524,27 @@ private:
     }
     expect("=");
     const Token &kind=next();
-    if(kind.kind!=Tok::Ident || (kind.text!="tone" && kind.text!="noise"))fail("a voice is tone(...) or noise(...)",line);
-    VoiceDecl v;v.name=name;v.line=line;v.type=kind.text=="tone"?TONE_VOICE:NOISE_VOICE;
+    static const std::pair<const char *,uint8_t> kinds[]={{"tone",TONE_VOICE},{"noise",NOISE_VOICE},{"pulse",PULSE_VOICE},{"wave",WAVETABLE_VOICE},{"fm",FM_VOICE},{"drum",DRUM_VOICE}};
+    VoiceDecl v;v.name=name;v.line=line;v.type=0;
+    for(const auto &k:kinds)if(kind.kind==Tok::Ident && kind.text==k.first)v.type=k.second;
+    if(!v.type)fail("a voice is tone(...), noise(...), pulse(...), wave(...), fm(...) or drum(...)",line);
+    if(v.type>=PULSE_VOICE)level2_=true;
     if(v.type==NOISE_VOICE)v.seed=0x9e3779b9u;
     expect("(");
-    if(!punct(")")) {
+    // drum(kick, ...): the bank's drum by name first.
+    if(v.type==DRUM_VOICE) {
+      const Token &d=next();int found=-1;
+      for(unsigned k=0;k<Drums::COUNT;++k)if(d.kind==Tok::Ident && d.text==Drums::BANK[k].name)found=int(k);
+      if(found<0) {
+        std::string names;for(unsigned k=0;k<Drums::COUNT;++k)names+=std::string(k?", ":"")+Drums::BANK[k].name;
+        fail("drum(...) names a drum first: "+names,d.line);
+      }
+      v.datum=uint32_t(found);
+    }
+    bool points=false;
+    const bool closed=punct(")");
+    if(!closed && v.type==DRUM_VOICE)expect(",");
+    if(!closed) {
       do {
         const Token &p=next();
         if(p.kind!=Tok::Ident || !punct(":"))fail("a voice's settings are named: tone(hz: 440, gain: .5)",p.line);
@@ -520,9 +555,28 @@ private:
           const char *const *list=param=="wave"?waves:filters;int found=-1;
           for(int k=0;k<4;++k)if(w.text==list[k])found=k;
           if(w.kind!=Tok::Ident || found<0)fail(param=="wave"?"wave is sine, square, triangle or saw":"filter is none, low, band or high",w.line);
-          if(param=="wave"){if(v.type==NOISE_VOICE)fail("a noise voice has no wave",w.line);v.wave=uint8_t(found);}
+          if(param=="wave"){if(v.type!=TONE_VOICE)fail("only a tone voice has a wave",w.line);v.wave=uint8_t(found);}
           else v.filter=uint8_t(found);
           continue;
+        }
+        if(param=="points") {
+          // wave(points: [a, b, ...]): one cycle, read round with interpolation.
+          if(v.type!=WAVETABLE_VOICE)fail("only a wave voice has points",p.line);
+          expect("[");std::vector<float> values;
+          do{NodeP e=expression();const float c=constantNumber(*e,"a wave's point");if(!(c>=-1 && c<=1))fail("a wave's points are -1 to 1",p.line);values.push_back(c);}while(punct(","));
+          expect("]");
+          if(values.size()<2 || values.size()>256)fail("a wave has 2-256 points",p.line);
+          size_t id=0;while(id<tables_.size() && tables_[id]!=values)++id;
+          if(id==tables_.size()){if(tables_.size()>=MAX_TABLES)fail("too many tables",p.line);tables_.push_back(values);}
+          v.datum=uint32_t(id);points=true;continue;
+        }
+        if(param=="step") {
+          // noise(step: 4000): a new value 4000 times a second, held between.
+          if(v.type!=NOISE_VOICE)fail("only a noise voice steps",p.line);
+          NodeP e=expression();const float c=constantNumber(*e,"a noise's step rate");
+          if(!(c>0 && c<8000))fail("a noise's step is 0-7999 Hz",p.line);
+          if(v.given[HZ])fail("'step' given twice",p.line);
+          v.wave=NOISE_STEPPED;v.given[HZ]=true;v.value[HZ]=c;level2_=true;continue;
         }
         NodeP e=expression();
         if(param=="seed") {
@@ -545,6 +599,7 @@ private:
       expect(")");
     }
     endStatement();
+    if(v.type==WAVETABLE_VOICE && !points)fail("a wave voice needs its points: wave(points: [0, 1, 0, -1])",line);
     if(voices_.size()+size_t(count)>MAX_VOICES)fail("at most "+std::to_string(MAX_VOICES)+" voices",line);
     voiceNames_[name]={int(voices_.size()),count,array};
     for(int k=0;k<count;++k){VoiceDecl one=v;if(array)one.name=name+"["+std::to_string(k)+"]";voices_.push_back(one);}
@@ -648,6 +703,168 @@ private:
     }
     score_.clear();
   }
+  // song(tempo: 140, rows: 4) { pattern NAME { CHANNEL: "row row ..." ... } ... order NAME NAME ... }
+  // Each channel string holds one token a row: "." nothing, a note (c4,
+  // f#3, bb5), "off", a voice's name (play it; a drum or noise voice needs
+  // no note), voice:note (switch and play), vN (volume 1-16 for what
+  // follows), joined by + in one row (v12+e5). A channel named after a
+  // voice starts on it; any other starts on the first voice it names.
+  struct SongChannel {std::string name;int voice=-1;};
+  void songBlock(int line) {
+    if(!song_.empty())fail("a file has one song",line);
+    if(voices_.empty())fail("declare a song's voices first: voice lead = pulse(duty: .25)",line);
+    level2_=true;
+    float tempo=120,rows=4;
+    expect("(");
+    if(!punct(")")) {
+      do {
+        const Token &p=next();if(p.kind!=Tok::Ident || !punct(":"))fail("song's settings are named: song(tempo: 140, rows: 4)",p.line);
+        NodeP e=expression();const float c=constantNumber(*e,"a song's setting");
+        if(p.text=="tempo")tempo=c;else if(p.text=="rows")rows=c;else fail("song has no setting '"+p.text+"'",p.line);
+      } while(punct(","));
+      expect(")");
+    }
+    if(!(rows>=1 && rows<=16) || rows!=float(int(rows)))fail("a song's rows a beat are 1-16",line);
+    const double rowSamples=double(SOUND_RATE)*60/(double(tempo)*rows);
+    if(!(tempo>0) || !(rowSamples>=MIN_ROW_SAMPLES && rowSamples<=MAX_ROW_SAMPLES))fail("this tempo and rows make a row "+std::to_string(int(rowSamples))+" samples; 400-16000 fit",line);
+    expect("{");
+    std::vector<SongChannel> channels;std::map<std::string,int> patternIds;
+    struct Pattern {int rows=0;std::vector<std::vector<uint8_t>> streams;};
+    std::vector<Pattern> patterns;std::vector<int> order;
+    auto channelOf=[&](const std::string &n){
+      for(size_t c=0;c<channels.size();++c)if(channels[c].name==n)return int(c);
+      if(channels.size()>=MAX_CHANNELS)fail("a song has at most "+std::to_string(MAX_CHANNELS)+" channels",line);
+      SongChannel ch;ch.name=n;auto f=voiceNames_.find(n);
+      if(f!=voiceNames_.end()){if(f->second.array)fail("a song plays single voices, not the array '"+n+"'",line);ch.voice=f->second.first;}
+      channels.push_back(ch);return int(channels.size()-1);
+    };
+    auto voiceIndex=[&](const std::string &n,int l){
+      auto f=voiceNames_.find(n);
+      if(f==voiceNames_.end())return -1;
+      if(f->second.array)fail("a song plays single voices, not the array '"+n+"'",l);
+      return f->second.first;
+    };
+    for(;;) {
+      skipNewlines();
+      if(punct("}"))break;
+      const Token &w=next();
+      if(w.kind!=Tok::Ident)fail("a song holds patterns and an order",w.line);
+      if(w.text=="pattern") {
+        const Token &n=next();if(n.kind!=Tok::Ident)fail("expected the pattern's name",n.line);
+        if(patternIds.count(n.text))fail("pattern '"+n.text+"' twice",n.line);
+        if(patterns.size()>=MAX_PATTERNS)fail("a song has at most "+std::to_string(MAX_PATTERNS)+" patterns",n.line);
+        expect("{");
+        Pattern pt;std::vector<std::pair<int,std::vector<std::vector<std::string>>>> lines;
+        for(;;) {
+          skipNewlines();
+          if(punct("}"))break;
+          const Token &c=next();if(c.kind!=Tok::Ident || !punct(":"))fail("a pattern's lines are channel: \"row row ...\"",c.line);
+          const Token &s=next();if(s.kind!=Tok::String)fail("a channel's rows are in quotes",s.line);
+          const int ch=channelOf(c.text);
+          for(const auto &l:lines)if(l.first==ch)fail("channel '"+c.text+"' twice in pattern '"+n.text+"'",c.line);
+          std::vector<std::vector<std::string>> rowTokens;std::string word;
+          auto flush=[&]{if(word.empty())return;std::vector<std::string> parts;size_t at=0;
+            while(at<=word.size()){const size_t plus=word.find('+',at);parts.push_back(word.substr(at,plus==std::string::npos?std::string::npos:plus-at));if(plus==std::string::npos)break;at=plus+1;}
+            rowTokens.push_back(parts);word.clear();};
+          for(char ch2:s.text){if(ch2==' ' || ch2=='\t' || ch2=='|')flush();else word+=ch2;}
+          flush();
+          if(rowTokens.empty())fail("channel '"+c.text+"' has no rows",c.line);
+          if(rowTokens.size()>255)fail("a pattern has at most 255 rows",c.line);
+          pt.rows=std::max(pt.rows,int(rowTokens.size()));
+          lines.push_back({ch,rowTokens});
+          endStatement();
+          // The channel's first voice: its own name, else the first voice it names.
+          if(channels[size_t(ch)].voice<0)
+            for(const auto &row:rowTokens)for(const auto &part:row) {
+              const std::string v=part.substr(0,part.find(':'));const int k=voiceIndex(v,c.line);
+              if(k>=0 && channels[size_t(ch)].voice<0)channels[size_t(ch)].voice=k;
+            }
+        }
+        if(!pt.rows)fail("pattern '"+n.text+"' is empty",n.line);
+        // Encode each channel: a row's events, then waits over the rows after.
+        pt.streams.assign(MAX_CHANNELS,{});
+        for(const auto &l:lines) {
+          std::vector<uint8_t> &out=pt.streams[size_t(l.first)];unsigned pending=0;
+          SongChannel &ch=channels[size_t(l.first)];
+          if(ch.voice<0)fail("channel '"+ch.name+"' names no voice to play",n.line);
+          for(const auto &row:l.second) {
+            std::vector<uint8_t> events;
+            for(const std::string &part:row) {
+              if(part==".")continue;
+              if(part=="off"){events.push_back(SONG_OFF);continue;}
+              // vN is a volume unless a voice of that name was declared (a declared name wins).
+              if(part.size()>=2 && part[0]=='v' && std::isdigit(uint8_t(part[1])) && voiceIndex(part.substr(0,part.find(':')),n.line)<0) {
+                const int q=std::atoi(part.c_str()+1);if(q<1 || q>16 || part.find_first_not_of("0123456789",1)!=std::string::npos)fail("a volume is v1-v16",n.line);
+                events.push_back(uint8_t(SONG_VOLUME|(q-1)));continue;
+              }
+              const size_t colon=part.find(':');const std::string head=part.substr(0,colon);
+              const int vk=voiceIndex(head,n.line);
+              int noteNumber=-1;
+              if(vk>=0) {
+                events.push_back(uint8_t(SONG_VOICE|vk));
+                VoiceDecl &vd=voices_[size_t(vk)];
+                if(colon!=std::string::npos)noteNumber=noteOf(part.substr(colon+1),n.line);
+                else if(vd.type==DRUM_VOICE || vd.type==NOISE_VOICE)noteNumber=60;  // unpitched: the name plays it
+              } else noteNumber=noteOf(part,n.line);
+              if(noteNumber>=0)events.push_back(uint8_t(noteNumber));
+            }
+            if(!events.empty()) {
+              while(pending){const unsigned w2=std::min(pending,63u);out.push_back(uint8_t(SONG_WAIT|w2));pending-=w2;}
+              out.insert(out.end(),events.begin(),events.end());
+            }
+            ++pending;
+          }
+        }
+        patternIds[n.text]=int(patterns.size());patterns.push_back(pt);
+      } else if(w.text=="order") {
+        while(peek().kind==Tok::Ident) {
+          const Token &n=next();auto f=patternIds.find(n.text);
+          if(f==patternIds.end())fail("unknown pattern '"+n.text+"' (patterns come before the order)",n.line);
+          order.push_back(f->second);
+        }
+        endStatement();
+      } else fail("a song holds patterns and an order, not '"+w.text+"'",w.line);
+    }
+    if(patterns.empty())fail("a song needs a pattern",line);
+    if(order.empty())fail("a song needs its order: order verse verse chorus",line);
+    if(order.size()>MAX_ORDER)fail("a song's order has at most "+std::to_string(MAX_ORDER)+" entries",line);
+    double total=0;for(int k:order)total+=double(patterns[size_t(k)].rows)*std::round(rowSamples);
+    if(total>double(MAX_SONG_SECONDS)*SOUND_RATE)fail("a song runs at most "+std::to_string(MAX_SONG_SECONDS)+" s; this one "+std::to_string(int(total/SOUND_RATE))+" s",line);
+    // The voices a song plays are triggered by its notes, and pitched if they can be.
+    for(const SongChannel &ch:channels)(void)ch;
+    for(const Pattern &pt:patterns)for(size_t c=0;c<channels.size();++c) {
+      int voice=channels[c].voice;
+      for(uint8_t e:pt.streams[c]) {
+        if((e&0xF0)==SONG_VOICE)voice=e&15;
+        else if(e<SONG_WAIT){VoiceDecl &vd=voices_[size_t(voice)];vd.played=true;if(vd.type!=DRUM_VOICE && vd.type!=NOISE_VOICE)vd.pitched=true;}
+      }
+    }
+    song_.assign(SONG_HEAD,0);
+    song_[0]=SONG_VERSION;song_[1]=uint8_t(channels.size());song_[2]=uint8_t(patterns.size());
+    put16(song_.data()+4,uint16_t(std::lround(rowSamples)));put16(song_.data()+6,uint16_t(order.size()));
+    for(const SongChannel &ch:channels)song_.push_back(uint8_t(ch.voice));
+    for(int k:order)song_.push_back(uint8_t(k));
+    for(const Pattern &pt:patterns) {
+      song_.push_back(uint8_t(pt.rows));
+      for(size_t c=0;c<channels.size();++c) {
+        const auto &s=pt.streams[c];uint8_t n2[2];put16(n2,uint16_t(s.size()));
+        song_.insert(song_.end(),n2,n2+2);song_.insert(song_.end(),s.begin(),s.end());
+      }
+    }
+    if(song_.size()>8192)fail("a song is at most 8 KB compiled; this one "+std::to_string(song_.size())+" bytes",line);
+  }
+  // A note's name: c d e f g a b, then # or b, then an octave -1 to 9 (c4 is middle C, 60).
+  int noteOf(const std::string &s,int line) {
+    static const int PITCH[7]={9,11,0,2,4,5,7};  // a b c d e f g
+    if(s.empty() || s[0]<'a' || s[0]>'g')fail("unknown token '"+s+"' (a note, a voice, ., off or v1-v16)",line);
+    int n=PITCH[s[0]-'a'];size_t at=1;
+    if(at<s.size() && s[at]=='#'){++n;++at;}else if(at<s.size() && s[at]=='b' && at+1<s.size()){--n;++at;}
+    const std::string octave=s.substr(at);
+    if(octave.empty() || (octave!="-1" && (octave.size()!=1 || !std::isdigit(uint8_t(octave[0])))))fail("a note is a letter, # or b, and an octave -1 to 9: '"+s+"'",line);
+    const int midi=(std::atoi(octave.c_str())+1)*12+n;
+    if(midi<0 || midi>127)fail("note '"+s+"' is outside 0-127",line);
+    return midi;
+  }
   // In the sound block: voice(param: value, ...) sets a voice's parameters
   // (an array's: all of them) every step.
   void voiceSet(const Stmt &st) {
@@ -710,7 +927,7 @@ private:
   // The SOUND section, or empty without voices.
   std::vector<uint8_t> soundSection(uint16_t soundStart) {
     if(voices_.empty())return {};
-    if(!sound_)fail("a sound with voices needs its length: sound 1700 (ms)",voices_[0].line);
+    if(!sound_ && song_.empty())fail("a sound with voices needs its length: sound 1700 (ms)",voices_[0].line);
     const uint32_t samples=uint32_t(sound_)*SOUND_RATE/1000;
     // Notes in time order (then source order); a note to a whole array goes
     // to its first voice free by then (its last note ended: its length), else
@@ -742,10 +959,13 @@ private:
       if(v.pitched && v.hzNamed)fail("voice '"+v.name+"' plays notes' frequencies: give it bend (a factor), not hz",v.line);
       if(!v.pitched && v.bendNamed)fail("voice '"+v.name+"' has bend but no note gives it a frequency",v.line);
       uint8_t r[VOICE_BYTES]={};
-      r[0]=v.type;r[1]=v.wave;r[2]=v.filter;r[3]=uint8_t((triggered?ENVELOPE:0)|(v.pitched?NOTE_PITCH:0));put32(r+4,v.type==NOISE_VOICE?v.seed:0);
+      r[0]=v.type;r[1]=v.wave;r[2]=v.filter;r[3]=uint8_t((triggered?ENVELOPE:0)|(v.pitched?NOTE_PITCH:0));
+      put32(r+4,v.type==NOISE_VOICE?v.seed:v.type==WAVETABLE_VOICE || v.type==DRUM_VOICE?v.datum:0);
       for(unsigned k=0;k<VOICE_PARAMS;++k) {
         if(v.reg[k]>=0){r[8+k]=uint8_t(v.reg[k]);continue;}
-        const float def=k==GAIN?1.0f:(k==HZ && v.pitched)?1.0f:0.0f;
+        // Defaults: gain 1, a note's frequency as is, a pulse's duty .5, FM's ratio and index 1, a drum's rate 1.
+        const float def=k==GAIN?1.0f:(k==HZ && (v.pitched || v.type==DRUM_VOICE))?1.0f:(k==CUBIC && v.type==PULSE_VOICE)?.5f:
+                        ((k==OCTAVE || k==CUBIC) && v.type==FM_VOICE)?1.0f:0.0f;
         r[8+k]=uint8_t(voiceConstant(v.given[k]?v.value[k]:def));
       }
       body.insert(body.end(),r,r+VOICE_BYTES);
@@ -1117,12 +1337,12 @@ private:
     code_.insert(code_.end(),soundCode_.begin(),soundCode_.end());
     if(code_.size()/4>MAX_CODE)fail("program too long",0);
     std::vector<uint8_t> f(HEADER_BYTES,0);
-    put32(f.data(),MAGIC);f[4]=FORMAT;f[5]=ENGINE;
+    put32(f.data(),MAGIC);f[4]=FORMAT;f[5]=level2_?2:1;
     put32(f.data()+8,uint32_t(uid_));put32(f.data()+12,uint32_t(uid_>>32));
     put16(f.data()+16,revision_);put16(f.data()+18,duration_);put16(f.data()+20,readout_);put16(f.data()+22,sound_);
-    auto section=[&](uint8_t type,const uint8_t *body,size_t length) {
+    auto section=[&](uint8_t type,const uint8_t *body,size_t length,uint8_t flags=0) {
       if(length>0xffff)fail("section too large",0);
-      f.push_back(type);f.push_back(0);f.push_back(uint8_t(length));f.push_back(uint8_t(length>>8));
+      f.push_back(type);f.push_back(flags);f.push_back(uint8_t(length));f.push_back(uint8_t(length>>8));
       f.insert(f.end(),body,body+length);
     };
     section(NAME,reinterpret_cast<const uint8_t *>(name_.data()),name_.size());
@@ -1159,6 +1379,7 @@ private:
       const auto body=soundSection(uint16_t(soundCode_.empty()?0:soundStart));
       if(!body.empty())section(SOUND,body.data(),body.size());
     }
+    if(!song_.empty())section(SONG,song_.data(),song_.size(),1);  // required: a 0.19 engine must not ignore it
     put32(f.data()+24,uint32_t(f.size()));
     const uint32_t crc=crc32(f.data(),f.size());  // the CRC field is still zero
     put32(f.data()+28,crc);

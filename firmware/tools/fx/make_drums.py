@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+"""Writes firmware/LaunchLabMini/fx_drums.h: the built-in percussion bank of
+loadable effects' drum voices (engine level 2; docs/FIRMWARE_SOUND_0_20.md).
+
+Every drum is synthesized here from sine sweeps, seeded noise and square
+clusters, so the bank is original LaunchLab material. The bank is part of
+the format: a file names an entry by its index, so entries are only ever
+appended, never changed (test_fx_music pins each entry's samples).
+
+Samples are 16 kHz mono, IMA ADPCM (4 bits a sample) from a zero predictor
+and step index, decoded on the device a sample at a time.
+Usage: python3 firmware/tools/fx/make_drums.py
+"""
+import math
+from pathlib import Path
+
+RATE = 16000
+OUT = Path(__file__).resolve().parents[2] / 'LaunchLabMini' / 'fx_drums.h'
+
+
+class Noise:
+    """xorshift32, as the engine's noise voice, so the drums are reproducible."""
+    def __init__(self, seed):
+        self.s = seed
+
+    def __call__(self):
+        s = self.s
+        s ^= (s << 13) & 0xffffffff
+        s ^= s >> 17
+        s ^= (s << 5) & 0xffffffff
+        self.s = s
+        return (s - (1 << 32) if s & 0x80000000 else s) / 2147483648.0
+
+
+def onepole(xs, k):
+    y, out = 0.0, []
+    for x in xs:
+        y += (x - y) * k
+        out.append(y)
+    return out
+
+
+def sweep(seconds, f0, f1, tau_f, tau_a):
+    phase, out = 0.0, []
+    for i in range(int(seconds * RATE)):
+        t = i / RATE
+        f = f1 + (f0 - f1) * math.exp(-t / tau_f)
+        phase += 2 * math.pi * f / RATE
+        out.append(math.sin(phase) * math.exp(-t / tau_a))
+    return out
+
+
+def kick():
+    body = sweep(.30, 160, 48, .035, .11)
+    n = Noise(0x1234567)
+    click = [n() * math.exp(-i / (RATE * .002)) * .5 for i in range(len(body))]
+    return [b + c for b, c in zip(body, onepole(click, .4))]
+
+
+def snare():
+    n, seconds = Noise(0x2468ace), .22
+    noise = [n() for _ in range(int(seconds * RATE))]
+    band = [a - b for a, b in zip(onepole(noise, .55), onepole(noise, .08))]
+    tone = sweep(seconds, 220, 180, .02, .045)
+    return [b * math.exp(-i / RATE / .065) * 1.4 + .6 * t for i, (b, t) in enumerate(zip(band, tone))]
+
+
+def metal(seconds, tau, seed):
+    freqs = [317, 431, 563, 797, 1013, 1193]
+    n = Noise(seed)
+    out = []
+    for i in range(int(seconds * RATE)):
+        t = i / RATE
+        s = sum(1.0 if math.sin(2 * math.pi * 4 * f * t) >= 0 else -1.0 for f in freqs) / len(freqs)
+        out.append((s * .7 + n() * .3) * math.exp(-t / tau))
+    low = onepole(out, .35)
+    return [x - y for x, y in zip(out, low)]
+
+
+def clap():
+    n, seconds, out = Noise(0x13579bd), .20, []
+    for i in range(int(seconds * RATE)):
+        t = i / RATE
+        burst = sum(math.exp(-(t - at) / .004) for at in (0, .011, .022) if t >= at)
+        tail = math.exp(-max(0.0, t - .022) / .06) if t >= .022 else 0.0
+        out.append(n() * (burst * .6 + tail * .5))
+    return [a - b for a, b in zip(onepole(out, .6), onepole(out, .12))]
+
+
+def tom(f0, f1, seconds):
+    return sweep(seconds, f0, f1, .05, .12)
+
+
+def rim():
+    n, out = Noise(0x55aa55a), []
+    for i in range(int(.05 * RATE)):
+        t = i / RATE
+        out.append((math.sin(2 * math.pi * 1700 * t) * .7 + n() * .3) * math.exp(-t / .008))
+    return out
+
+
+# Index order is the format: append only.
+DRUMS = [
+    ('kick', kick), ('snare', snare), ('hat', lambda: metal(.06, .014, 0x9e3779b)),
+    ('openhat', lambda: metal(.32, .11, 0x7f4a7c1)), ('clap', clap),
+    ('tomlow', lambda: tom(150, 92, .32)), ('tomhigh', lambda: tom(240, 160, .26)), ('rim', rim),
+]
+
+STEP = [7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97,
+        107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796,
+        876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871,
+        5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623,
+        27086, 29794, 32767]
+INDEX = [-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8]
+
+
+def decode_one(nib, pred, idx):
+    step = STEP[idx]
+    diff = step >> 3
+    if nib & 1:
+        diff += step >> 2
+    if nib & 2:
+        diff += step >> 1
+    if nib & 4:
+        diff += step
+    pred = pred - diff if nib & 8 else pred + diff
+    pred = max(-32768, min(32767, pred))
+    idx = max(0, min(88, idx + INDEX[nib]))
+    return pred, idx
+
+
+def encode(samples):
+    """IMA ADPCM, choosing each nibble that decodes closest (the decoder's own arithmetic)."""
+    pred, idx, nibbles = 0, 0, []
+    for s in samples:
+        best = min(range(16), key=lambda nib: abs(decode_one(nib, pred, idx)[0] - s))
+        pred, idx = decode_one(best, pred, idx)
+        nibbles.append(best)
+    if len(nibbles) % 2:
+        nibbles.append(0)
+    return bytes(nibbles[i] | nibbles[i + 1] << 4 for i in range(0, len(nibbles), 2))
+
+
+def main():
+    lines = ['#pragma once',
+             '// Generated by firmware/tools/fx/make_drums.py; do not edit. The built-in',
+             '// percussion bank of drum voices (engine level 2): original drums, 16 kHz',
+             '// mono IMA ADPCM, low nibble first, from predictor 0 and step index 0.',
+             '// Append only: a file names an entry by its index.',
+             '#include <cstdint>', '', 'namespace LoadableFx {', 'namespace Drums {']
+    entries = []
+    for name, make in DRUMS:
+        raw = make()
+        peak = max(abs(x) for x in raw) or 1
+        pcm = [int(round(x / peak * .9 * 32767)) for x in raw]
+        data = encode(pcm)
+        entries.append((name, len(pcm), data))
+        lines.append(f'inline constexpr uint8_t {name.upper()}[{len(data)}]={{')
+        for i in range(0, len(data), 24):
+            lines.append('  ' + ','.join(str(b) for b in data[i:i + 24]) + ',')
+        lines.append('};')
+    lines += ['struct Entry {const char *name;const uint8_t *data;uint32_t samples;};',
+              f'inline constexpr unsigned COUNT={len(entries)};',
+              'inline constexpr Entry BANK[COUNT]={']
+    lines += [f'  {{"{n}",{n.upper()},{s}u}},' for n, s, _ in entries]
+    lines += ['};', '}', '}', '']
+    OUT.write_text('\n'.join(lines))
+    total = sum(len(d) for _, _, d in entries)
+    for n, s, d in entries:
+        print(f'{n}: {s} samples ({s / RATE * 1000:.0f} ms), {len(d)} bytes')
+    print(f'bank: {len(entries)} drums, {total} bytes -> {OUT}')
+
+
+if __name__ == '__main__':
+    main()

@@ -562,15 +562,18 @@ inline void Renderer::ninjaGates(float t) {
   const float cx=b.cx(),cy=b.cy(),hw=(b.x1-b.x0)*.5f,hh=(b.y1-b.y0)*.5f;
   const Rgb green=mixed(rgb8(60,255,120),accent_,.12f),mint=rgb8(190,255,210),steam=rgb8(200,240,215);
   glint(t,BURST,.45f);
+  sorcMark(1);
   // Power: a step per beat, each eased in over 60 ms.
   float power=0;
   for(float beat:BEATS)power+=smooth((t-beat)/.06f)*.125f;
   const float flare=t<BURST?0:1-smooth((t-BURST)/.55f);
   const float fade=1-smooth((t-SETTLE)/(END-.15f-SETTLE));
+  sorcMark(2);
   // Sustain: the aura holds lower and breathes, and three slower, fainter
   // beats follow, as the heart calms.
   float calm=t<BURST?1:.7f+.3f*(1-smooth((t-BURST)/.7f))+.07f*sine((t-BURST)*3.3f);
   for(float beat:AFTER)if(t>=beat)calm+=.3f*std::exp(-9*(t-beat))*smooth((t-beat)/.04f);
+  sorcMark(3);
   // Each beat throws a pulse off the readout, wider as the power builds.
   for(int i=0;i<8;++i) {
     const float age=t-BEATS[i],life=i==7?.45f:.26f;if(age<0 || age>=life)continue;
@@ -581,6 +584,7 @@ inline void Renderer::ninjaGates(float t) {
     const float age=t-beat;if(age<0 || age>=.3f)continue;
     const float e=age/.3f;ellipseAt(cx,cy,hw+6+10*easeOut(e),hh+6+4*easeOut(e),green,.45f*(1-e)*(1-e)*fade,1.0f);
   }
+  sorcMark(4);
   // The aura shells, from the halo mask: shell s is the ring of pixels one
   // step (a 3x3 dilation) outside shell s-1, the first just outside the halo.
   const float strength=(.25f+.75f*power)*(1+.6f*flare)*calm*fade;
@@ -635,6 +639,7 @@ inline void Renderer::ninjaGates(float t) {
       }
     }
   }
+  sorcMark(5);
   // Motes are drawn up into the aura from below and above the readout.
   for(unsigned i=0;i<26;++i) {
     const float life=.45f+.2f*rnd(i,611),a0=t+life*rnd(i,612),cycle=std::floor(a0/life),age=(a0-cycle*life)/life;
@@ -643,6 +648,7 @@ inline void Renderer::ninjaGates(float t) {
     const float x=b.x0+3+(b.x1-b.x0-6)*rnd(s,613)+2*sine(age*9+i),y=top?b.y0-3-8*age:b.y1+13-9*age;
     dot(x,y,i%2?mint:green,strength*.9f*sine(HALF_TURN*age));
   }
+  sorcMark(6);
   // Pebbles lift off the floor as the power builds, are blasted out by the
   // last beat and fall away.
   for(unsigned i=0;i<10;++i) {
@@ -661,6 +667,7 @@ inline void Renderer::ninjaGates(float t) {
     addw(ix,iy,c,kk);addw(ix+1,iy,c,kk);addw(ix,iy+1,c,kk);addw(ix+1,iy+1,c,kk);
     addw(ix,iy-1,rim,int(kk*power));addw(ix+1,iy-1,rim,int(kk*power*.6f));
   }
+  sorcMark(7);
   // Steam bursts up off the readout and drifts away.
   // Steam: a burst off the readout, then wisps venting through the sustain.
   if(t>=BURST)for(unsigned i=0;i<28;++i) {
@@ -671,6 +678,7 @@ inline void Renderer::ninjaGates(float t) {
     const float r=1+2.2f*u,k=(i<16?.8f:.5f)*(1-u)*smooth(age/.06f)*fade;
     dot(x,y,steam,k);dot(x-r,y+r*.4f,steam,k*.6f);dot(x+r,y+r*.3f,steam,k*.6f);
   }
+  sorcMark(8);
 }
 
 // ---- Summon: a palm slams down under the readout; six lines of
@@ -685,12 +693,14 @@ inline void Renderer::ninjaSummon(float t) {
   const float px=b.cx(),py=b.y1+13.0f,squash=.32f;
   const Rgb ink=mixed(rgb8(255,214,150),accent_,.2f),smoke=rgb8(230,234,242),shade=mixed(rgb8(150,160,185),accent_,.25f);
   glint(t,POOF,.45f);
+  sorcMark(1);
   // The slam: a flash and dust kicked sideways.
   if(t>=SLAM && t<SLAM+.2f) {
     const float a=(t-SLAM)/.2f;
     spark(px,py,ink,1.4f*(1-a),3);
     for(int side=-1;side<=1;side+=2)for(int i=0;i<4;++i)dot(px+side*(5+i*5+30*a),py+1-i*.7f-6*a,smoke,(1-a)*(.8f-.15f*i));
   }
+  sorcMark(2);
   // Script: six lines of glyphs written outward across the floor.
   const float sealFade=1-smooth((t-POOF-.2f)/.5f);
   if(sealFade>0 && t>=SLAM) {
@@ -721,6 +731,7 @@ inline void Renderer::ninjaSummon(float t) {
   }
   if(t<POOF)return;
   const float a=t-POOF;
+  sorcMark(3);
   // The pop: a white flash and burst lines.
   if(a<.1f)ninjaGlow(px,py+3,6+7*a/.1f,smoke,.9f*(1-a/.1f));
   if(a<.16f) {
@@ -730,6 +741,7 @@ inline void Renderer::ninjaSummon(float t) {
       line(px+r0*ca,py+r0*sa,px+(r0+9)*ca,py+(r0+9)*sa,smoke,(1-u)*.9f);
     }
   }
+  sorcMark(4);
   // The puffs: thrown out along the floor and up, swelling; then, through
   // the sustain, the cloud lingers, each puff drifting apart and bobbing on
   // its own, thinning away by about 3.6 s.
@@ -746,6 +758,7 @@ inline void Renderer::ninjaSummon(float t) {
   }
   static constexpr uint8_t BAYER[16]={0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5};
   const Ink rim=inkOf(smoke),body=inkOf(shade);
+  sorcMark(5);
   // Body: ordered dither, by screen position, so overlapping puffs share
   // pixels; each pixel belongs to the first puff that covers it. A row at a
   // time: one square root (ninja::root) per puff per row gives its span as
@@ -834,6 +847,7 @@ inline void Renderer::ninjaSummon(float t) {
       if(!inside)addw(ninja::Mask::floorOf(X[i]+r*ca+.5f),ninja::Mask::floorOf(y+.5f),rim,w);
     }
   }
+  sorcMark(6);
   // Wisps curl off the cloud through the sustain and the settle.
   const float fade=1-smooth((t-SETTLE)/(END-.1f-SETTLE));
   for(unsigned i=0;i<30;++i) {
@@ -841,5 +855,6 @@ inline void Renderer::ninjaSummon(float t) {
     const float q=age/life,x=px+(rnd(i,708)-.5f)*110+3*sine(age*4+i)+(rnd(i,712)-.5f)*8*q,y=py+4+22*rnd(i,709)-12*q;
     dot(x,y,i%3?smoke:shade,.7f*sine(HALF_TURN*q)*fade);
   }
+  sorcMark(7);
 }
 }

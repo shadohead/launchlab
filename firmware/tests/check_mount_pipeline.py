@@ -93,7 +93,8 @@ inline TickType_t xTaskGetTickCount(){return TickType_t(Fake::now/1000);}
 inline int xTaskCreatePinnedToCore(void (*)(void *),const char *,unsigned,void *,unsigned,TaskHandle_t *out,int) {
   *out=reinterpret_cast<void *>(uintptr_t(1));return pdPASS;
 }
-inline unsigned uxTaskGetStackHighWaterMark(TaskHandle_t){return 4096;}
+namespace Fake {inline unsigned stackScans=0;}
+inline unsigned uxTaskGetStackHighWaterMark(TaskHandle_t){++Fake::stackScans;return 4096;}
 inline BaseType_t xTaskDelayUntil(TickType_t *last,TickType_t period) {
   ++Fake::completed;
   if(Fake::delayed)Fake::delayed(Fake::completed);
@@ -137,22 +138,33 @@ TESTS = r'''
 #include <thread>
 #include "motion_owner_test.h"
 using Mode=MountOrientation::Mode;
-namespace FakeFifo {inline std::vector<uint8_t> pending;inline unsigned flushes=0,forcedLength=0;inline uint64_t stallUs=0;}
+// Like the chip, the fake FIFO holds one gyro frame per 5 ms of sensor time
+// since the previous read (at least one per read), the accelerometer in every
+// second one, all with the fake IMU's values, and saturates at its capacity.
+namespace FakeFifo {inline std::vector<uint8_t> pending;inline unsigned flushes=0,forcedLength=0,lengthReads=0,sensorFrames=0;inline uint64_t stallUs=0,lastUs=0;}
 bool Bmi270Fifo::readRegisters(uint8_t reg,uint8_t *data,size_t n) {
   Fake::now+=Fake::transferUs;
   if(reg==FIFO_LENGTH_0 && n==2) {
-    auto &p=FakeFifo::pending;p.clear();
+    ++FakeFifo::lengthReads;auto &p=FakeFifo::pending;p.clear();
     if(FakeFifo::forcedLength){p.assign(FakeFifo::forcedLength,0x8C);data[0]=uint8_t(p.size());data[1]=uint8_t(p.size()>>8);return true;}
+    auto &last=FakeFifo::lastUs;
+    const int64_t since=last?int64_t(Fake::now)-int64_t(last):GYRO_PERIOD_US;
+    const unsigned frames=unsigned(std::max<int64_t>(1,since/GYRO_PERIOD_US));
+    last=(last?last:Fake::now-GYRO_PERIOD_US)+uint64_t(frames)*GYRO_PERIOD_US;
     const unsigned fresh=M5.Imu.update();const auto d=M5.Imu.getImuData();
     // Inverse of boardAxes: raw X=-board Y, raw Y=board X, raw Z=board Z.
     auto put=[&](const FakeVector &v,float scale) {
       const float raw[3]={-v.y/scale,v.x/scale,v.z/scale};
       for(float r:raw){const auto x=int16_t(std::lround(std::max(-32768.0f,std::min(32767.0f,r))));p.push_back(uint8_t(x));p.push_back(uint8_t(uint16_t(x)>>8));}
     };
-    const bool gyro=fresh&2,accel=fresh&1;
-    if(gyro || accel)p.push_back(gyro && accel?ACC_GYR:gyro?GYR:ACC);
-    if(gyro)put(d.gyro,StickS3AccelRange::GYRO_FULL_SCALE_DPS/32768);
-    if(accel)put(d.accel,accelRange().fullScaleG()/32768);
+    for(unsigned i=0;i<frames;++i) {
+      const bool gyro=fresh&2,accel=(fresh&1) && FakeFifo::sensorFrames++%2==0;
+      if(!gyro && !accel)continue;
+      p.push_back(gyro && accel?ACC_GYR:gyro?GYR:ACC);
+      if(gyro)put(d.gyro,StickS3AccelRange::GYRO_FULL_SCALE_DPS/32768);
+      if(accel)put(d.accel,accelRange().fullScaleG()/32768);
+    }
+    if(p.size()>CAPACITY)p.resize(CAPACITY);
     data[0]=uint8_t(p.size());data[1]=uint8_t(p.size()>>8);return true;
   }
   if(reg==FIFO_DATA && n<=FakeFifo::pending.size()) {
@@ -163,7 +175,7 @@ bool Bmi270Fifo::readRegisters(uint8_t reg,uint8_t *data,size_t n) {
   return false;
 }
 bool Bmi270Fifo::writeRegister(uint8_t reg,uint8_t value) {
-  if(reg==CMD && value==FLUSH){++FakeFifo::flushes;FakeFifo::pending.clear();}
+  if(reg==CMD && value==FLUSH){++FakeFifo::flushes;FakeFifo::pending.clear();FakeFifo::lastUs=Fake::now;}
   return true;
 }
 static bool near(float a,float b,float tolerance=1e-5f){return std::fabs(a-b)<=tolerance;}
@@ -176,7 +188,7 @@ static void vectorIs(const float *v,float x,float y,float z) {
 static void cleanRuntime() {
   Fake::now=1000000;Fake::completed=0;Fake::locked={};Fake::released={};Fake::delayed={};
   Fake::inHook=false;M5.Imu={};
-  Fake::realistic=false;Fake::transferUs=0;Fake::busySince=Fake::now;Fake::longestBusyUs=0;
+  Fake::realistic=false;Fake::transferUs=0;Fake::busySince=Fake::now;Fake::longestBusyUs=0;FakeFifo::lastUs=0;FakeFifo::sensorFrames=0;
 }
 static void runFor(StickS3MotionAcquisition &owner,unsigned count,
                    std::function<void(unsigned)> delayed={}) {
@@ -234,20 +246,26 @@ static void validationAndSerialization() {
 static void continuousOwnerWarmup() {
   cleanRuntime();auto owner=std::make_unique<StickS3MotionAcquisition>();assert(owner->begin());
   M5.Imu.data.accel={.25f,.1f,.963068f};M5.Imu.data.gyro={.2f,-.1f,.15f};
-  uint64_t firstNew=0;uint32_t oldResets=0;bool sawWarming=false,sawReady=false;
-  runFor(*owner,1221,[&](unsigned iteration) {
-    if(iteration==800) {
+  uint64_t firstNew=0;uint32_t oldResets=0;bool sawWarming=false,sawReady=false,sawWarmCapture=false;
+  // Polls in time: switch at 4 s, then run 2.1 s, past the 1.5 s warmup.
+  constexpr unsigned POLL=StickS3MotionAcquisition::POLL_MS,SWITCH=4000/POLL,FRAMES=POLL/5;
+  runFor(*owner,SWITCH+2100/POLL+1,[&](unsigned iteration) {
+    if(iteration==SWITCH) {
       assert(owner->snapshot_.orientationReady && std::fabs(owner->snapshot_.gravity[0])>.1f);
       oldResets=owner->orientation_.resets();assert(owner->setMount(Mode::Sidecar));
       assert(!owner->snapshot().fusedUs && !owner->ring_.size());
-      M5.Imu.data.accel={1,0,0};M5.Imu.data.gyro={0,0,0};
+      // The new values begin with an accelerometer frame (it comes every second gyro frame).
+      M5.Imu.data.accel={1,0,0};M5.Imu.data.gyro={0,0,0};FakeFifo::sensorFrames=0;
     }
-    if(iteration<=800)return;
+    if(iteration<=SWITCH)return;
     const auto s=owner->snapshot();assert(s.mount==Mode::Sidecar);
     // Diagnostics remain native while stored samples/fusion use Top axes.
     vectorIs(s.a,1,0,0);vectorIs(s.g,0,0,0);
-    if(iteration==801) {
-      firstNew=Fake::now;assert(owner->ring_.size()==1);
+    if(iteration==SWITCH+1) {
+      // The first read after the switch holds one poll's frames; the oldest starts the warmup.
+      // Fusion emits the first frame, then one sample per 10 ms grid step.
+      assert(owner->ring_.size()==1+(FRAMES-1)*5000/LauncherOrientation::STEP_US);firstNew=owner->ring_.at(0).us;
+      assert(Fake::now-firstNew==(FRAMES-1)*5000);
       const auto &sample=owner->ring_.at(0);vectorIs(sample.a,0,0,1);vectorIs(sample.g,0,0,0);
       assert(!sample.settled && !s.orientationReady && s.fusionResets==oldResets+1);
       LauncherOrientation fresh;LaunchMotion::Sample raw;raw.us=firstNew;raw.a[2]=1;
@@ -262,12 +280,12 @@ static void continuousOwnerWarmup() {
     const uint64_t age=Fake::now-firstNew;
     assert(s.orientationReady==(age>=1500000));
     if(!s.orientationReady)sawWarming=true;else sawReady=true;
-    if(age==400000) {
-      LaunchMotion::Trace trace;assert(owner->capture(firstNew+100000,firstNew+200000,6000,2,trace));
+    if(age>=400000 && !sawWarmCapture) {
+      sawWarmCapture=true;LaunchMotion::Trace trace;assert(owner->capture(firstNew+100000,firstNew+200000,6000,2,trace));
       assert(trace.quality==LaunchMotion::Quality::Warming);
     }
   });
-  assert(sawWarming && sawReady);
+  assert(sawWarming && sawReady && sawWarmCapture);
   const auto s=owner->snapshot();vectorIs(s.gravity,0,0,1);
   LaunchMotion::Trace trace;assert(owner->capture(firstNew+1700000,firstNew+1850000,6000,3,trace));
   assert(trace.valid() && trace.number==3 && trace.fused);
@@ -307,9 +325,11 @@ static void stalePublication(bool returnToTop) {
   });
   assert(changed && owner->frame_==(returnToTop?2u:1u));
   // Frames are stamped on the sensor timeline, which follows read time gradually.
-  const auto s=owner->snapshot();assert(s.mount==target && s.fusedUs>1000000 && s.fusedUs<=1015000 && !s.orientationReady);
-  assert(owner->ring_.size()==1 && owner->ring_.at(0).us==s.fusedUs);
-  vectorIs(owner->ring_.at(0).a,0,0,1);
+  // The fourth poll brings one poll's gyro frames: the first fuses at once, then one per grid step.
+  constexpr uint64_t POLL_US=StickS3MotionAcquisition::POLL_MS*1000;constexpr unsigned FRAMES=POLL_US/5000;
+  const auto s=owner->snapshot();assert(s.mount==target && s.fusedUs>1000000 && s.fusedUs<=1000000+3*POLL_US && !s.orientationReady);
+  assert(owner->ring_.size()==1+(FRAMES-1)*5000/LauncherOrientation::STEP_US && owner->ring_.latest()==s.fusedUs);
+  for(unsigned i=0;i<owner->ring_.size();++i)vectorIs(owner->ring_.at(i).a,0,0,1);
 }
 static void flashQuiet() {
   // No FIFO transfer starts inside a flash-write window; reads resume at its
@@ -320,20 +340,24 @@ static void flashQuiet() {
   owner->quiet();runFor(*owner,10);
   assert(M5.Imu.updates==before && owner->snapshot_.quietPolls==10 && owner->ring_.size()==samples);
   owner->endQuiet();runFor(*owner,3);assert(M5.Imu.updates==before+3 && owner->ring_.size()>samples);
+  // Window lengths in polls: 40 ms, and the 10 s cap on a window that never ends.
+  constexpr unsigned POLL=StickS3MotionAcquisition::POLL_MS,SHORT=40/POLL,CAP=StickS3MotionAcquisition::QUIET_MAX_MS/POLL;
   owner->quiet(40);runFor(*owner,20);
-  assert(owner->snapshot_.quietPolls==8 && M5.Imu.updates==before+3+12);
-  owner->quiet(60000);runFor(*owner,2020);
-  assert(owner->snapshot_.quietPolls==2000 && M5.Imu.updates==before+3+12+20);
+  assert(owner->snapshot_.quietPolls==SHORT && M5.Imu.updates==before+3+(20-SHORT));
+  owner->quiet(60000);runFor(*owner,CAP+20);
+  assert(owner->snapshot_.quietPolls==CAP && M5.Imu.updates==before+3+(20-SHORT)+20);
   // A (nearly) full FIFO may begin inside a payload: flushed, never parsed.
   const unsigned flushes=FakeFifo::flushes,size=owner->ring_.size();
   FakeFifo::forcedLength=Bmi270Fifo::CAPACITY-8;runFor(*owner,1);FakeFifo::forcedLength=0;
   assert(FakeFifo::flushes==flushes+1 && owner->snapshot_.fifoOverflows==1 && owner->snapshot_.fifoErrors==0);
   assert(owner->ring_.size()==size);
-  // A transfer stalled 8 ms past its bus time is suspect even though it reported success.
-  FakeFifo::stallUs=Bmi270Fifo::transferBudgetUs(13)+1;runFor(*owner,1);FakeFifo::stallUs=0;
-  assert(FakeFifo::flushes==flushes+2 && owner->snapshot_.fifoStalls==1 && owner->snapshot_.lastStallUs==Bmi270Fifo::transferBudgetUs(13)+1);
+  // A transfer stalled 8 ms past its bus time is suspect even though it
+  // reported success. The read after the flush holds one poll's frames.
+  const unsigned bytes=Bmi270Fifo::fillBytes(POLL);
+  FakeFifo::stallUs=Bmi270Fifo::transferBudgetUs(bytes)+1;runFor(*owner,1);FakeFifo::stallUs=0;
+  assert(FakeFifo::flushes==flushes+2 && owner->snapshot_.fifoStalls==1 && owner->snapshot_.lastStallUs==Bmi270Fifo::transferBudgetUs(bytes)+1);
   assert(owner->ring_.size()==size && owner->snapshot_.fifoErrors==0);
-  FakeFifo::stallUs=Bmi270Fifo::transferBudgetUs(13)-1;runFor(*owner,1);FakeFifo::stallUs=0;
+  FakeFifo::stallUs=Bmi270Fifo::transferBudgetUs(bytes)-1;runFor(*owner,1);FakeFifo::stallUs=0;
   assert(owner->snapshot_.fifoStalls==0 && owner->ring_.size()>size);
 }
 static void quietBarrierAndAnchoring() {
@@ -368,11 +392,12 @@ static void runUntil(StickS3MotionAcquisition &owner,uint64_t end,std::function<
   Fake::delayed={};
 }
 static void lateLoopYields() {
-  // Held up for a minute (here: another task holds the IMU gate, so every
-  // poll waits 20 ms for it and the 5 ms schedule falls far behind), the
-  // loop must not then run back-to-back through every missed period. The
-  // FIFO already holds what those polls would have read, and on device that
-  // spin kept IDLE0 off core 0 until the task watchdog reset the chip.
+  // Held up for a minute (here: another task holds both IMU gates, so every
+  // poll waits 20 ms for each and the schedule falls far behind), the loop
+  // must not then run back-to-back through every missed period. The FIFO
+  // already holds what those polls would have read, and on device that spin
+  // kept IDLE0 off core 0 until the task watchdog reset the chip.
+  constexpr uint64_t POLL_US=StickS3MotionAcquisition::POLL_MS*1000;
   cleanRuntime();Fake::realistic=true;Fake::transferUs=400;
   auto owner=std::make_unique<StickS3MotionAcquisition>();assert(owner->begin());
   M5.Imu.data.accel={0,0,1};
@@ -382,30 +407,86 @@ static void lateLoopYields() {
     if(Fake::now<hold)return;
     if(!before) {
       // Settled and on schedule before the hold.
-      assert(owner->snapshot_.orientationReady && Fake::longestBusyUs<5000);
+      assert(owner->snapshot_.orientationReady && Fake::longestBusyUs<POLL_US);
       assert(owner->snapshot_.latePolls==0 && owner->snapshot_.missedPolls==0);
-      before=owner->ring_.size();owner->gate_->heldByOtherMs=60000;return;
+      before=owner->ring_.size();owner->gate_->heldByOtherMs=owner->ringGate_->heldByOtherMs=60000;return;
     }
-    if(owner->gate_->heldByOtherMs && Fake::now>=release)owner->gate_->heldByOtherMs=0;
+    if(owner->gate_->heldByOtherMs && Fake::now>=release)owner->gate_->heldByOtherMs=owner->ringGate_->heldByOtherMs=0;
     if(Fake::now<release)return;
-    // Back on the 5 ms schedule at once after the release.
-    if(previous && Fake::now-previous==5000)++steady;
+    // Back on schedule at once after the release.
+    if(previous && Fake::now-previous==POLL_US)++steady;
     previous=Fake::now;++polls;
   });
-  // Every iteration blocked: never anywhere near the 5 s watchdog.
-  assert(Fake::longestBusyUs<5000);
+  // Every poll blocked: no busy stretch longer than one poll's own transfers.
+  assert(Fake::longestBusyUs<=2*Fake::transferUs);
   const auto &s=owner->snapshot_;
-  assert(s.gateMisses>2000 && s.latePolls>=s.gateMisses && s.missedPolls>=3*s.gateMisses);
-  assert(polls>=5995 && polls<=6002 && steady+3>=polls);
+  assert(s.gateMisses>1000 && s.latePolls>=s.gateMisses && s.missedPolls>=s.gateMisses);
+  const unsigned expected=30000000/POLL_US;
+  assert(polls+5>=expected && polls<=expected+2 && steady+3>=polls);
   // Fusion and the ring carried on from the FIFO; the hold is one honest gap.
   assert(before && s.gaps==1 && s.maxGapUs>60000000 && s.orientationReady);
-  assert(owner->ring_.latest()+10000>=Fake::now);
+  assert(owner->ring_.latest()+POLL_US>=Fake::now);
   // A loop whose every poll costs more than its period (core 0 overloaded)
   // still blocks once per poll.
-  cleanRuntime();Fake::realistic=true;Fake::transferUs=3000;
+  cleanRuntime();Fake::realistic=true;Fake::transferUs=POLL_US*3/4;
   owner=std::make_unique<StickS3MotionAcquisition>();assert(owner->begin());
   runUntil(*owner,Fake::now+10000000,[]{});
-  assert(Fake::longestBusyUs<7000 && owner->snapshot_.latePolls>1000);
+  assert(Fake::longestBusyUs<=2*Fake::transferUs && owner->snapshot_.latePolls>200);
+}
+static void pollCost() {
+  // Each FIFO transaction busy-waits about 0.4 ms on the M5 I2C driver
+  // whatever its length, and the stack high-water mark walks the whole free
+  // stack (about 1 ms). At most 50 polls a second (two transactions each)
+  // and one stack walk a second, while every 200 Hz frame still arrives.
+  cleanRuntime();auto owner=std::make_unique<StickS3MotionAcquisition>();assert(owner->begin());
+  M5.Imu.data.accel={0,0,1};
+  Fake::stackScans=0;runFor(*owner,1);assert(Fake::stackScans==1 && owner->snapshot_.stackFree==4096);
+  Fake::stackScans=0;FakeFifo::lengthReads=0;
+  const uint64_t start=Fake::now;
+  unsigned polls=0;
+  Fake::completed=0;Fake::limit=0;
+  Fake::delayed=[&](unsigned){++polls;if(Fake::now-start>=10000000)throw Fake::Stop{};};
+  try{owner->run();assert(false);}catch(const Fake::Stop &){}
+  Fake::delayed={};
+  const uint64_t seconds=(Fake::now-start)/1000000;
+  assert(seconds>=10 && FakeFifo::lengthReads<=50*seconds+1 && polls<=50*seconds+1);
+  // run() was re-entered: one walk on its first poll, then one a second.
+  assert(Fake::stackScans>=seconds && Fake::stackScans<=seconds+2);
+  // Every frame arrived (run() counts from its own start): 200 Hz gyro, each
+  // paired with an accelerometer reading.
+  const unsigned frames=owner->snapshot_.pairedSamples;
+  assert(frames+4>=200*seconds && frames<=200*seconds+4 && owner->snapshot_.gaps==0);
+}
+static void fifoHeadroom() {
+  // A poll right after the longest normal stop of reads (a flash-write quiet
+  // window of STALL_BUDGET_MS) finds the FIFO short of overflow: nothing is
+  // lost and fusion sees no gap. A stop past the FIFO's second overflows it,
+  // which is reported as one honest gap.
+  using Owner=StickS3MotionAcquisition;
+  constexpr uint64_t POLL_US=Owner::POLL_MS*1000;
+  cleanRuntime();auto owner=std::make_unique<Owner>();assert(owner->begin());
+  M5.Imu.data.accel={0,0,1};
+  const uint64_t start=Fake::now,quietAt=start+1000000,longAt=quietAt+3000000,end=longAt+3000000;
+  unsigned quiets=0;size_t largest=0;
+  Fake::completed=0;Fake::limit=0;
+  Fake::delayed=[&](unsigned) {
+    largest=std::max(largest,size_t(owner->snapshot_.fifoMaxBytes));
+    if(!quiets && Fake::now>=quietAt){assert(owner->quiet(Owner::STALL_BUDGET_MS));++quiets;}
+    else if(quiets==1 && Fake::now>=longAt) {
+      // Everything so far arrived: every 200 Hz gyro frame paired, no gap.
+      const auto &s=owner->snapshot_;
+      assert(s.fifoOverflows==0 && s.gaps==0 && s.maxGapUs<=2*Bmi270Fifo::GYRO_PERIOD_US);
+      assert(s.pairedSamples+4>=(Fake::now-start)/Bmi270Fifo::GYRO_PERIOD_US);
+      assert(largest>=Bmi270Fifo::fillBytes(Owner::STALL_BUDGET_MS) && largest<Bmi270Fifo::CAPACITY-Bmi270Fifo::FULL_MARGIN);
+      assert(owner->quiet(Owner::QUIET_MAX_MS));++quiets;
+    } else if(quiets==2 && Fake::now>=longAt+1100000){owner->endQuiet();++quiets;}
+    if(Fake::now>=end)throw Fake::Stop{};
+  };
+  try{owner->run();assert(false);}catch(const Fake::Stop &){}
+  Fake::delayed={};
+  const auto &s=owner->snapshot_;
+  assert(quiets==3 && s.fifoOverflows==1 && s.gaps==1 && s.orientationReady);
+  assert(owner->ring_.latest()+POLL_US>=Fake::now);
 }
 static StickS3MotionAcquisition imuAcquisition;
 static StickS3Level level;
@@ -492,13 +573,70 @@ static void fallbackLevel() {
   // A stale snapshot is not stillness.
   Fake::now+=MotionActivity::FRESH_US+20000;pollLevel(millis());assert(STILL_QUIET(millis())==60000);
 }
+static void activityAndStillnessTiming() {
+  // Wake activity and the 2 s stillness gate come from MotionActivity, fed
+  // every fused sample on sensor time. A reference fed the same 5 ms frames
+  // directly gives the transitions; through the real owner (one read per
+  // POLL_MS) and the real UI poll each must show no earlier and at most one
+  // IMU poll, one fusion step and one UI poll later.
+  using Owner=StickS3MotionAcquisition;
+  constexpr uint64_t LATE_US=Owner::POLL_MS*1000+LauncherOrientation::STEP_US+IdlePowerPolicy::LEVEL_POLL_MS*1000;
+  constexpr uint64_t FRAME_US=Bmi270Fifo::GYRO_PERIOD_US;
+  cleanRuntime();level={};lastImuPoll=0;lastLevelSampleUs=0;lastActivityMotionUs=0;imuStill={};
+  const float rest[3]={0,0,0},turning[3]={0,0,12},gravity[3]={0,0,1};
+  M5.Imu.data.accel={0,0,1};M5.Imu.data.gyro={0,0,0};
+  // The sketch's own owner: pollLevel reads it.
+  Owner &owner=imuAcquisition;assert(owner.begin());
+  const uint64_t start=Fake::now,moveAt=start+3000000,stopAt=moveAt+1000000,end=stopAt+4000000;
+  // Reference: the owner's fusion and activity path on ideal sensor time,
+  // with the FIFO's quantised values.
+  LauncherOrientation refFusion;MotionActivity refActivity;
+  uint64_t refMoving=0,refReleased=0;
+  auto quantised=[](float v,float scale){return float(std::lround(v/scale))*scale;};
+  // The owner's first read holds one frame, stamped at its read time: the grid starts there.
+  for(uint64_t us=start;us<=end;us+=FRAME_US) {
+    const float *g=us>moveAt && us<=stopAt?turning:rest;
+    LaunchMotion::Sample raw;raw.us=us;
+    for(unsigned j=0;j<3;++j){raw.a[j]=quantised(gravity[j],accelRange().fullScaleG()/32768);raw.g[j]=quantised(g[j],StickS3AccelRange::GYRO_FULL_SCALE_DPS/32768);}
+    LaunchMotion::Sample mapped=raw;MountOrientation::mapVector(Mode::Top,raw.a,mapped.a);MountOrientation::mapVector(Mode::Top,raw.g,mapped.g);
+    refFusion.feed(mapped,[&](const LaunchMotion::Sample &f) {
+      const bool was=refActivity.state().moving;refActivity.feed(f.us,f.a,f.g,!f.clipped);
+      if(!was && refActivity.state().moving && !refMoving)refMoving=f.us;
+      if(was && !refActivity.state().moving && refMoving && !refReleased)refReleased=f.us;
+    });
+  }
+  assert(refMoving>moveAt+MotionActivity::CONFIRM_US && refMoving<moveAt+MotionActivity::CONFIRM_US+100000);
+  assert(refReleased>stopAt+MotionActivity::RELEASE_US && refReleased<stopAt+MotionActivity::RELEASE_US+500000);
+  uint64_t seenMoving=0,seenReleased=0,gateClosed=0,gateOpened=0;
+  Fake::completed=0;Fake::limit=0;
+  Fake::delayed=[&](unsigned) {
+    // Frames read at the next poll were produced from now on.
+    if(Fake::now>=moveAt && Fake::now<stopAt)M5.Imu.data.gyro={0,0,12};else M5.Imu.data.gyro={0,0,0};
+    pollLevel(millis());
+    const auto a=owner.snapshot().activity;
+    if(a.moving && !seenMoving)seenMoving=Fake::now;
+    if(seenMoving && !a.moving && !seenReleased)seenReleased=Fake::now;
+    const bool open=STILL_QUIET(millis())==10000;
+    if(seenMoving && !open && !gateClosed)gateClosed=Fake::now;
+    if(seenReleased && open && !gateOpened)gateOpened=Fake::now;
+    if(Fake::now>=end)throw Fake::Stop{};
+  };
+  try{owner.run();assert(false);}catch(const Fake::Stop &){}
+  Fake::delayed={};
+  assert(seenMoving>=refMoving && seenMoving<=refMoving+LATE_US);
+  assert(seenReleased>=refReleased && seenReleased<=refReleased+LATE_US);
+  // The gate closes with the motion, and opens STILL_MS after the poll that first saw stillness.
+  assert(gateClosed && gateClosed<=seenMoving+IdlePowerPolicy::LEVEL_POLL_MS*1000);
+  const uint64_t gateDue=refReleased+HistoryCheckpoint::STILL_MS*1000ull;
+  assert(gateOpened>=gateDue && gateOpened<=gateDue+LATE_US);
+}
 int main() {
   ownerActivity();
   validationAndSerialization();continuousOwnerWarmup();currentModeAtFusion();
-  stalePublication(false);stalePublication(true);flashQuiet();quietBarrierAndAnchoring();lateLoopYields();fallbackLevel();
+  stalePublication(false);stalePublication(true);flashQuiet();quietBarrierAndAnchoring();lateLoopYields();pollCost();fifoHeadroom();fallbackLevel();activityAndStillnessTiming();
   std::cout<<"PASS: actual mount owner; mutex exclusion, invalid/failure/noop preservation, "
               "frame invalidation, fresh fusion warmup, canonical capture, late/current mapping, "
-              "stale/ABA publication guards, bounded flash-write quiet window, 250 ms quiet barrier/veto, length-time FIFO anchoring, late polls yield instead of starving IDLE0, actual level fallback and dot dropouts without timer renewal\n";
+              "stale/ABA publication guards, bounded flash-write quiet window, 250 ms quiet barrier/veto, length-time FIFO anchoring, late polls yield instead of starving IDLE0, at most 50 polls and one stack walk a second with every frame delivered, no FIFO overflow at a poll after the longest normal stall, activity and the 2 s stillness gate on sensor time at most one poll late, actual level fallback and dot dropouts without timer renewal\n";
 }
 '''
 

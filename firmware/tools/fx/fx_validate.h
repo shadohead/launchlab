@@ -53,6 +53,14 @@ inline Scene fixture(uint16_t background=0) {
 // in proportion to how rarely it was seen: off by 0.5 ms rms a frame, 1 ms
 // at the 95th percentile (design note, "Device frame times"). A primitive
 // no file used then costs 10 us a call.
+// The renderer's pixel terms (pixels written, light probes, mask words
+// scanned, span fills) as Renderer::modelledUs() weighed them when the costs
+// below were fitted (run 5: the renderer at -Os, 2026-10-21). Kept until the
+// files are re-measured with the renderer at -O2, which only makes them
+// cheaper on the device, so the budget check stays on the safe side.
+inline double pixelUs(uint32_t plots,uint32_t probes,uint32_t scans,uint32_t fills,uint32_t spans) {
+  return 1100+1.8*plots+probes+13.0*scans+.082*fills+1.21*spans;
+}
 struct Cost {
   double opUs=.46;
   // In LoadableFx::Prim order: clip plot dot vdot spark twinkle star line fline segment ellipse glow bolt rimbolt fire prime
@@ -61,7 +69,7 @@ struct Cost {
   double stepUs[LoadableFx::PRIMS]={0,0,0,0,0,0,0,0,0,0,2.09,2.09,0,0,1.61,0,0,0,0,0,0,18.35,3.24,0.42,1.58,0.84,0.44,1.91,0,0,0.98,0,3.78,1.04,0};
   double us(const LoadableFx::Engine &engine)const{
     const LoadableFx::Engine::Stats &s=engine.stats();
-    double us=s.renderUs-.36*s.touches-2.3*s.roots+opUs*s.ops;  // the renderer's terms for pixels, probes and scans only
+    double us=pixelUs(s.plots,s.probes,s.scans,s.fills,s.spans)+opUs*s.ops;
     for(unsigned k=0;k<LoadableFx::PRIMS;++k)us+=callUs[k]*engine.primCalls[k]+stepUs[k]*engine.primTouches[k];
     return us;
   }
@@ -79,7 +87,31 @@ struct Report {
   bool ok=false;std::string problem;LoadableFx::Error error=LoadableFx::Error::None;
   double worstUs=0;unsigned worstMs=0;uint32_t worstOps=0,maxOps=0,maxDraws=0;unsigned frames=0;
   bool movesReadout=false;
+  uint32_t songLoad=0,songWorstMs=0;  // a song's busiest block, hundredths of a percent of core 0 (songLoad())
 };
+
+// A song's busiest block by the render cost model (LoadableFx::SONG_KIND_COST):
+// the music task's share of core 0 there, in hundredths of a percent, and
+// where it falls. Renders the whole sound; 0 for a file without a song.
+struct SongLoad {uint32_t worst=0,worstMs=0;};
+inline SongLoad songLoad(const Program &p) {
+  using namespace LoadableFx;
+  SongLoad r;
+  if(!p.hasSong)return r;
+  static Sound s;s.begin(p);
+  int16_t block[SONG_COST_BLOCK];Sound::Work before=s.work();uint32_t at=0;
+  while(!s.done()) {
+    const size_t n=s.run(block,SONG_COST_BLOCK);
+    if(!n)break;
+    const Sound::Work &w=s.work();uint64_t cost=uint64_t(SONG_BASE_COST)*n+uint64_t(SONG_FILTER_COST)*(w.filterSamples-before.filterSamples);
+    for(unsigned k=0;k<SONG_KINDS;++k)cost+=uint64_t(SONG_KIND_COST[k])*(w.kindSamples[k]-before.kindSamples[k]);
+    const uint32_t share=uint32_t(cost/n);
+    if(share>r.worst){r.worst=share;r.worstMs=uint32_t(uint64_t(at)*1000/SOUND_RATE);}
+    before=w;at+=uint32_t(n);
+  }
+  return r;
+}
+inline std::string percent(uint32_t hundredths){return std::to_string(hundredths/100)+"."+std::to_string(hundredths%100/10)+"%";}
 
 // Whether the file draws a primitive that moves readout pixels.
 inline bool movesReadout(const Program &p) {
@@ -99,6 +131,12 @@ inline Report check(const std::vector<uint8_t> &file,const std::vector<Scene> &s
   // primitive arguments and constant pool (docs: "Internal RAM budget").
   const size_t playing=LoadableFx::hotBytes(p);
   if(playing>RAM_COPY){r.problem="too large for internal RAM: "+std::to_string(playing)+" bytes of code, arguments and constants (at most "+std::to_string(RAM_COPY)+")";return r;}
+  // A song plays on core 0 beside the optical owner and the IMU: its busiest
+  // block must fit the render budget (docs/FIRMWARE_SOUND_0_20.md, "Render budget").
+  const SongLoad load=songLoad(p);r.songLoad=load.worst;r.songWorstMs=load.worstMs;
+  if(load.worst>LoadableFx::SONG_BUDGET){
+    r.problem="song too heavy: "+percent(load.worst)+" of core 0 at "+std::to_string(load.worstMs)+" ms (at most "+percent(LoadableFx::SONG_BUDGET)+")";return r;
+  }
   BestEffectUI::Renderer renderer;LoadableFx::Engine engine(renderer);
   const uint16_t accents[]={0x07ff,0xc5bf,0xfa8a,0xffff};
   constexpr int ANCHOR_BOTTOM=BestEffectUI::Renderer::NUMBER_BOTTOM,HEADER=ANCHOR_BOTTOM+1,NEAR=8;

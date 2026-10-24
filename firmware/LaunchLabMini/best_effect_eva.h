@@ -147,6 +147,7 @@ inline void Renderer::evaSphere(float t) {
   const Rgb crimson=rgb8(240,22,48),blood=rgb8(160,0,28),lcl=rgb8(255,136,56),pale=rgb8(255,230,218);
   const float cx=number_.cx(),cy=number_.cy();
   const float R=std::min(54.0f,w_*.5f-12),horizon=std::min(float(bottom_-30),cy+R-8);
+  sorcMark(1);
   // The sea: rises fast and slows (the wave), holds, then sinks away.
   const float level=t<RISE?h_+4-(h_+4-horizon)*easeOut(t/RISE):t<DISSOLVE?horizon:horizon+(h_+6-horizon)*smooth((t-DISSOLVE)/(END-DISSOLVE-.2f));
   const float flash=t>=IGNITE?1-smooth((t-IGNITE)/.4f):0;
@@ -192,6 +193,7 @@ inline void Renderer::evaSphere(float t) {
   }
   glint(t,IGNITE+.34f,.45f);
   if(t<IGNITE)return;
+  sorcMark(2);
   // The cross-shaped flare where the sphere breaks the surface: the
   // horizontal arm is the flare along the sea, the vertical one a spike.
   if(t<IGNITE+.26f) {
@@ -204,10 +206,12 @@ inline void Renderer::evaSphere(float t) {
     }
     if(t<IGNITE+.18f)evaSpark(cx,horizon-1,pale,1.6f*(1-(t-IGNITE)/.18f),3.2f);
   }
+  sorcMark(3);
   // The sphere rises out of the sea as it grows; the sea hides what is below
   // its surface. Rim: a hot line with a soft limb inside and a crimson edge.
   const float grow=easeOut((t-IGNITE)/.45f);
   const float sy=horizon+(cy-horizon)*grow;
+  sorcMark(4);
   // A slow breath of the radius and brightness through the sustain.
   const float breath=sine((t-IGNITE)*2.1f);
   float r=R*(.25f+.75f*grow)+1.3f*breath*smooth((t-IGNITE-.3f)/.5f),fade=1;
@@ -233,6 +237,7 @@ inline void Renderer::evaSphere(float t) {
       const float c2=ca*cs-sa*sn;sa=sa*cs+ca*sn;ca=c2;
     }
   }
+  sorcMark(5);
   // Motes spiral in from the rim and vanish behind the readout, each pass
   // on a new path; as the sphere dissolves, others drift up off its rim.
   if(t>IGNITE+.15f && t<DISSOLVE+.3f) {
@@ -251,6 +256,7 @@ inline void Renderer::evaSphere(float t) {
     const float a=6.2832f*rnd(i,707),x=cx+r*cosine(a),y=sy+r*sine(a)-24*age;
     if(y<level-2)evaDot(x,y,i%2?lcl:crimson,(1-age/life)*.8f);
   }
+  sorcMark(6);
 }
 
 // ---- Bulwark (the barrier): two blue strikes hit the field beside the readout

@@ -261,19 +261,23 @@ inline void Renderer::torrent(float t) {
   const Rgb foam=rgb8(232,250,255),cyan=rgb8(110,205,255),blue=rgb8(36,118,255),deep=rgb8(30,86,235);
   const float r=std::min(11.0f,w_*.085f),line=number_.y1+20.0f,end=w_-r*1.6f;
   const float ebb=1-smooth((t-EBB)/(END-EBB));
+  sorcMark(1);
   // Foam always on the serpent's back: the outer rim of a hump, the inner rim of a dip.
   const Ink zones[]={inkOf(foam),inkOf(cyan),inkOf(blue),inkOf(blue),inkOf(deep)},under[]={inkOf(deep),inkOf(blue),inkOf(blue),inkOf(cyan),inkOf(foam)};
   const Ink rimmed[]={inkOf(foam),inkOf(foam),inkOf(cyan),inkOf(blue)};
+  sorcMark(2);
   // Ripples ring out at the left edge, where the serpent will come in.
   if(t<SWIM+.3f)for(int ring=0;ring<3;++ring) {
     const float u=(t-.11f*ring)/.5f;if(u<=0 || u>=1)continue;
     const float rad=3+15*easeOut(u);
     ellipseAt(4,line,rad*.4f,rad,mixed(cyan,accent_,.3f),.9f*(1-u),2.4f);
   }
+  sorcMark(3);
   // The head runs in from the left edge, fast then slowing as it rears up;
   // after the break the whole stream keeps flowing right at a walk.
   const float run=t<SWIM?0:easeOut((t-SWIM)/(BREAK-SWIM)),flow=t<BREAK?0:FLOW*(t-BREAK);
   const float head=-2*r+(end+2*r)*run+flow;
+  sorcMark(4);
   // Once the crest has sunk the stream runs on to the screen's edge.
   const float limit=t<SINK?end-r*.5f:end-r*.5f+(w_+r-end)*smooth((t-SINK)/.5f);
   const float calm=smooth((t-BREAK-.1f)/.5f);  // the sustained stream is slimmer and cheaper
@@ -297,6 +301,7 @@ inline void Renderer::torrent(float t) {
       }
     }
   }
+  sorcMark(5);
   // Foam fingers run back along the top of the first hump.
   if(t>=SWIM && t<BREAK+.1f) {
     const Band claw[]={{1,inkOf(foam),255},{-1,inkOf(cyan),200}};
@@ -306,6 +311,7 @@ inline void Renderer::torrent(float t) {
   }
   glint(t,BREAK-.02f,.45f);
   if(t<BREAK-.12f)return;
+  sorcMark(6);
   // The crest: the head rears up into a thick curl rolling over to the
   // left, toward the readout, its rim clawed with foam; then it sinks.
   const float b=t-BREAK+.12f,grow=easeOut(b/.3f),roll=.5f*std::max(0.0f,t-BREAK),sink=1-smooth((t-SINK+.3f)/.6f);
@@ -319,6 +325,7 @@ inline void Renderer::torrent(float t) {
     }
   }
   if(t<BREAK)return;
+  sorcMark(7);
   // Spray thrown up from the crest over the readout, falling back.
   for(unsigned i=0;i<30;++i) {
     const float a=t-BREAK-.08f*rnd(i,423);if(a<=0 || a>.62f)continue;
@@ -327,12 +334,14 @@ inline void Renderer::torrent(float t) {
     const Rgb c=i%3?cyan:(i%2?foam:mixed(cyan,accent_,.5f));
     plot(x-vx*.02f,y-(vy+460*a)*.02f,c,k*.6f);dot(x,y,c,k*1.3f);
   }
+  sorcMark(8);
   // Through the sustain, drops leap from the stream and fall back.
   for(unsigned i=0;i<16;++i) {
     const float a=t-(SINK+2.1f*rnd(i,426)),life=.55f;if(a<0 || a>=life)continue;
     const float x=8+(w_-16)*rnd(i,427)+12*a,y=line-r-2-(70-130*a)*a;
     dot(x,y,i%3?cyan:(i%2?foam:mixed(cyan,accent_,.5f)),.9f*(1-smooth((a-.35f)/.2f))*ebb);
   }
+  sorcMark(9);
 }
 
 // ---- Blitz, after the thunder-breathing first form: a long

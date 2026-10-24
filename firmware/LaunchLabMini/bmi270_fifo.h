@@ -23,6 +23,12 @@ static constexpr unsigned CAPACITY=2048,GYRO_PERIOD_US=5000,SETTLE_MS=60;
 // Treat a FIFO this close to full as overflowed. On device a full header-mode
 // FIFO reported 2009-2015 bytes; accel+gyro fill it at about 2000 bytes/s.
 static constexpr unsigned FULL_MARGIN=64;
+// Header-mode fill: a gyro frame every 5 ms (header and 6 bytes), with the
+// accelerometer's 6 bytes in every second one: 2000 bytes/s, so the usable
+// FIFO holds just under a second.
+static constexpr unsigned GYR_FRAME_BYTES=7,ACC_GYR_FRAME_BYTES=13,
+  FILL_BYTES_PER_S=(GYR_FRAME_BYTES+ACC_GYR_FRAME_BYTES)*1000000/(2*GYRO_PERIOD_US);
+constexpr unsigned fillBytes(uint32_t ms){return unsigned(uint64_t(FILL_BYTES_PER_S)*ms/1000);}
 // Measured on device: a single-transaction FIFO read costs about 38 us per
 // byte (600 bytes in 23 ms). A transfer more than 10 ms over that crossed a
 // preemption or flash stall; the I2C hardware aborts a bus held for 13 ms.
