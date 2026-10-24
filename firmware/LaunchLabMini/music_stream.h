@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -9,10 +10,20 @@
 // to the speaker: a song runs up to 120 s, far past what the speaker's
 // pre-rendered buffers hold (2.8 s), so it is rendered as it plays.
 //
-// render() runs in its own task on core 0 at priority 1, below the optical
+// step() runs in its own task on core 0 at priority 1, below the optical
 // ADC owner and the IMU, so neither can be delayed by music: it renders
 // BLOCK samples at a time into a ring of BLOCKS, from its own copy of the
 // file with its own program and renderer, never sharing the UI core's.
+// Above IDLE0, though, the task is bounded: a step renders one block at most
+// and the task then sleeps at least 1 ms, in proportion to the block's render
+// time, so it is busy at most DUTY_PERCENT of the time and IDLE0 always runs
+// (a 45% song in the 0.20 gate, with the optical and IMU tasks, kept IDLE0
+// from running for 5 s: a task-watchdog reset). The render time is measured
+// on the wall clock, preemption by the optical owner and the IMU included, so
+// the cap sits well above the render budget the validator holds songs to
+// (LoadableFx::SONG_BUDGET, 20% of core 0): a song within it never meets the
+// cap, and one past it (a file that skipped the validator) underruns, gaps of
+// silence, never a starved core.
 // feed() runs in the UI loop on core 1, where every speaker call is made:
 // it hands rendered blocks to the speaker's channel, keeping QUEUED there,
 // and learns which have played. Four 32 ms blocks ahead and two queued
@@ -37,6 +48,10 @@ template<class Lock> class MusicStream {
 public:
   static constexpr unsigned BLOCK=512,BLOCKS=4,QUEUED=2;
   static constexpr uint32_t FADE_MS=20;
+  // The most of the wall clock the music task may be busy for (it sleeps the
+  // rest, so IDLE0 runs whenever the optical owner and the IMU leave room);
+  // and the wait before trying again while the ring is full (a block plays in 32 ms).
+  static constexpr uint32_t DUTY_PERCENT=60,FULL_WAIT_MS=4;
   // What start() needs: room for the file and the renderer (PSRAM on the
   // device), and the ring.
   struct Space {uint8_t file[LoadableFx::MAX_FILE];LoadableFx::Program program;LoadableFx::Sound sound;int16_t ring[BLOCKS][BLOCK];};
@@ -58,27 +73,38 @@ public:
     active_=true;++plays_;
     return true;
   }
-  // Core 0 (the music task): renders every free block; true while there is
-  // more to render, so the task knows whether to keep polling.
-  bool render() {
-    typename Lock::Hold hold(lock_);
-    if(!active_)return false;
-    LoadableFx::Sound &s=space_->sound;
-    while(skip_ && !s.done()) {
-      // A late start: the samples before `skip` are rendered and dropped.
-      int16_t scratch[64];const size_t n=s.run(scratch,std::min<size_t>(skip_,64));skip_-=uint32_t(n);if(!n)break;
+  // Core 0 (the music task): one block rendered (or a late start's skipped
+  // samples, a block's worth); returns how long to sleep, in ms, before the
+  // next step: in proportion to the render time `now` (microseconds) measured,
+  // at least 1, or FULL_WAIT_MS while the ring is full; 0 with nothing to do
+  // (wait to be woken by start()).
+  template<class Now> uint32_t step(Now now) {
+    const uint32_t t0=now();
+    {
+      typename Lock::Hold hold(lock_);
+      if(!active_ || done_)return 0;
+      LoadableFx::Sound &s=space_->sound;
+      if(skip_) {
+        // A late start: the samples before `skip` are rendered and dropped.
+        int16_t scratch[64];size_t left=std::min<size_t>(skip_,BLOCK);
+        while(left && !s.done()){const size_t n=s.run(scratch,std::min<size_t>(left,64));if(!n)break;left-=n;skip_-=uint32_t(n);}
+        if(s.done())skip_=0;
+      } else if(filled_.load()-played_.load()>=BLOCKS) {
+        return FULL_WAIT_MS;
+      } else {
+        // A slot is free once its block has played (or was never fed); only this
+        // task writes a free slot, and it publishes the block after writing it.
+        const unsigned k=filled_.load()%BLOCKS;
+        length_[k]=uint32_t(s.run(space_->ring[k],BLOCK));
+        if(length_[k])filled_.fetch_add(1);
+      }
+      done_=s.done() && !skip_;
     }
-    // A slot is free once its block has played (or was never fed); only this
-    // task writes a free slot, and it publishes the block after writing it.
-    while(!s.done() && filled_.load()-played_.load()<BLOCKS) {
-      const unsigned k=filled_.load()%BLOCKS;
-      length_[k]=uint32_t(s.run(space_->ring[k],BLOCK));
-      if(!length_[k])break;
-      filled_.fetch_add(1);
-    }
-    done_=s.done();
-    return !done_;
+    const uint32_t us=now()-t0;
+    return std::max<uint32_t>(1,uint32_t((uint64_t(us)*(100-DUTY_PERCENT)/DUTY_PERCENT+999)/1000));
   }
+  // Blocks rendered since start().
+  uint32_t blocks()const{return filled_.load();}
   // Core 1 (each UI loop pass): what the channel has played, the next
   // blocks queued, the fade, and the end.
   void feed(uint32_t nowMs,MusicOutput &out) {

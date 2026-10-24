@@ -87,7 +87,31 @@ struct Report {
   bool ok=false;std::string problem;LoadableFx::Error error=LoadableFx::Error::None;
   double worstUs=0;unsigned worstMs=0;uint32_t worstOps=0,maxOps=0,maxDraws=0;unsigned frames=0;
   bool movesReadout=false;
+  uint32_t songLoad=0,songWorstMs=0;  // a song's busiest block, hundredths of a percent of core 0 (songLoad())
 };
+
+// A song's busiest block by the render cost model (LoadableFx::SONG_KIND_COST):
+// the music task's share of core 0 there, in hundredths of a percent, and
+// where it falls. Renders the whole sound; 0 for a file without a song.
+struct SongLoad {uint32_t worst=0,worstMs=0;};
+inline SongLoad songLoad(const Program &p) {
+  using namespace LoadableFx;
+  SongLoad r;
+  if(!p.hasSong)return r;
+  static Sound s;s.begin(p);
+  int16_t block[SONG_COST_BLOCK];Sound::Work before=s.work();uint32_t at=0;
+  while(!s.done()) {
+    const size_t n=s.run(block,SONG_COST_BLOCK);
+    if(!n)break;
+    const Sound::Work &w=s.work();uint64_t cost=uint64_t(SONG_BASE_COST)*n+uint64_t(SONG_FILTER_COST)*(w.filterSamples-before.filterSamples);
+    for(unsigned k=0;k<SONG_KINDS;++k)cost+=uint64_t(SONG_KIND_COST[k])*(w.kindSamples[k]-before.kindSamples[k]);
+    const uint32_t share=uint32_t(cost/n);
+    if(share>r.worst){r.worst=share;r.worstMs=uint32_t(uint64_t(at)*1000/SOUND_RATE);}
+    before=w;at+=uint32_t(n);
+  }
+  return r;
+}
+inline std::string percent(uint32_t hundredths){return std::to_string(hundredths/100)+"."+std::to_string(hundredths%100/10)+"%";}
 
 // Whether the file draws a primitive that moves readout pixels.
 inline bool movesReadout(const Program &p) {
@@ -107,6 +131,12 @@ inline Report check(const std::vector<uint8_t> &file,const std::vector<Scene> &s
   // primitive arguments and constant pool (docs: "Internal RAM budget").
   const size_t playing=LoadableFx::hotBytes(p);
   if(playing>RAM_COPY){r.problem="too large for internal RAM: "+std::to_string(playing)+" bytes of code, arguments and constants (at most "+std::to_string(RAM_COPY)+")";return r;}
+  // A song plays on core 0 beside the optical owner and the IMU: its busiest
+  // block must fit the render budget (docs/FIRMWARE_SOUND_0_20.md, "Render budget").
+  const SongLoad load=songLoad(p);r.songLoad=load.worst;r.songWorstMs=load.worstMs;
+  if(load.worst>LoadableFx::SONG_BUDGET){
+    r.problem="song too heavy: "+percent(load.worst)+" of core 0 at "+std::to_string(load.worstMs)+" ms (at most "+percent(LoadableFx::SONG_BUDGET)+")";return r;
+  }
   BestEffectUI::Renderer renderer;LoadableFx::Engine engine(renderer);
   const uint16_t accents[]={0x07ff,0xc5bf,0xfa8a,0xffff};
   constexpr int ANCHOR_BOTTOM=BestEffectUI::Renderer::NUMBER_BOTTOM,HEADER=ANCHOR_BOTTOM+1,NEAR=8;

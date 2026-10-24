@@ -57,14 +57,16 @@ std::vector<int16_t> renderWhole(const std::vector<uint8_t> &f) {
   for(size_t at=0;at<out.size();)at+=s.run(out.data()+at,out.size()-at);
   return out;
 }
-// Runs a stream in simulated time: the render task every 4 ms, the UI's feed
-// every `feedMs`, the channel playing in between. Stops when the stream
-// ends or after `limitMs`; `each` runs before every feed.
+// Runs a stream in simulated time: the music task stepping as step() asks
+// (each block taking `costUs` to render), the UI's feed every `feedMs`, the
+// channel playing in between. Stops when the stream ends or after `limitMs`;
+// `each` runs before every feed.
 struct Run {size_t dry=0;uint32_t ms=0;};
-template<class Each> Run simulate(Stream &stream,FakeChannel &ch,uint32_t feedMs,uint32_t limitMs,Each each,uint32_t renderMs=4) {
-  Run r;
+template<class Each> Run simulate(Stream &stream,FakeChannel &ch,uint32_t feedMs,uint32_t limitMs,Each each,uint32_t costUs=0) {
+  Run r;uint32_t next=0,reads=0;
+  auto now=[&]{return (reads++)%2?costUs:0u;};
   for(uint32_t ms=0;ms<limitMs && stream.active();++ms) {
-    if(ms%renderMs==0)stream.render();
+    if(ms>=next){const uint32_t sleep=stream.step(now);next=ms+costUs/1000+(sleep?sleep:4);}
     if(ms%feedMs==0){each(ms);stream.feed(ms,ch);}
     r.dry+=ch.play(16);r.ms=ms;
   }
@@ -79,7 +81,8 @@ int main() {
   for(const char *path:songs) {
     const auto f=compileFile(path);const auto whole=renderWhole(f);
     // Fed once per 5 ms or once per 31 ms (the slowest UI frame seen): the
-    // speaker receives the song exactly and never runs dry while it plays.
+    // speaker receives the song exactly and never runs dry while it plays,
+    // the task stepping a block at a time with its 1 ms yields.
     for(uint32_t feedMs:{5u,17u,31u}) {
       Stream stream(space.get());FakeChannel ch;
       assert(stream.start(f.data(),f.size(),0,160,ch));
@@ -99,6 +102,34 @@ int main() {
     }
   }
   {
+    // The music task is bounded (0.20 gate, 2026-10-23: the 120 s worst-case
+    // song took 45% of core 0 and, with the optical and IMU tasks, kept IDLE0
+    // from running for 5 s: a task-watchdog reset). A step renders one block
+    // at most, then the task sleeps at least 1 ms and long enough that it
+    // takes at most DUTY_PERCENT of core 0; a song that needs more underruns.
+    const auto f=compileFile(songs[1]);
+    Stream stream(space.get());FakeChannel ch;
+    assert(stream.start(f.data(),f.size(),0,160,ch));
+    // Each block takes `cost` us to render by this clock (read before and after).
+    uint32_t clock=0,cost=20000,reads=0;
+    auto now=[&]{return clock+((reads++)%2?cost:0);};
+    uint64_t busy=0,slept=0;
+    for(unsigned k=0;k<Stream::BLOCKS;++k) {
+      const uint32_t before=stream.blocks(),ms=stream.step(now);
+      assert(stream.blocks()==before+1);  // one block a step
+      assert(ms>=1 && uint64_t(ms)*1000*Stream::DUTY_PERCENT>=uint64_t(cost)*(100-Stream::DUTY_PERCENT));
+      busy+=cost;slept+=uint64_t(ms)*1000;clock+=cost+ms*1000;
+    }
+    assert(busy*100<=(busy+slept)*Stream::DUTY_PERCENT);
+    // The ring is full until the speaker plays a block: a short wait, nothing rendered.
+    const uint32_t full=stream.blocks();
+    assert(stream.step(now)==Stream::FULL_WAIT_MS && stream.blocks()==full);
+    // Rendering that costs nothing still yields for 1 ms, so IDLE0 always runs.
+    stream.feed(0,ch);ch.play(Stream::BLOCK);stream.feed(32,ch);
+    cost=0;assert(stream.step(now)==1);
+    stream.stop(ch);assert(stream.step(now)==0);  // nothing to do: wait to be woken
+  }
+  {
     // On the device the UI's first feed can come before the music task has
     // rendered a block: nothing has played yet, so it is not an underrun
     // (HIL songs run, 2026-10-23: one counted per song with every block played).
@@ -110,12 +141,13 @@ int main() {
     assert(stream.underruns()==0 && ch.played==renderWhole(f));
   }
   {
-    // A render that cannot keep up (polled every 64 ms, the ring holding 128 ms
-    // but playing faster than one block a poll at the end) is counted, not a stall.
+    // A song too heavy for the duty cap (60 ms to render a 32 ms block, so a
+    // block every 150 ms with the task's sleeps) underruns, counted, and still
+    // plays to its end: gaps of silence, never a stall.
     const auto f=compileFile(songs[1]);
     Stream stream(space.get());FakeChannel ch;
     assert(stream.start(f.data(),f.size(),0,160,ch));
-    simulate(stream,ch,5,200000,[](uint32_t){},100);
+    simulate(stream,ch,5,2000000,[](uint32_t){},60000);
     assert(stream.underruns()>0 && !stream.active());
   }
   {

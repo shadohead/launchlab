@@ -707,10 +707,34 @@ done:
 // Parameters are clamped, so any file renders finite, bounded samples, and
 // the cost is bounded by the file: at most MAX_SOUND_CODE instructions a
 // step and MAX_VOICES voices a sample.
+// ---- A song's render cost (engine level 2; docs/FIRMWARE_SOUND_0_20.md,
+// "Render budget"): the music task's share of core 0 at 80 MHz while a song
+// plays, measured on the device (HIL, 7C:E8, 2026-10-23, the sound renderer
+// at -O2): a base for the player and the task, and each sounding voice by its
+// kind, in hundredths of a percent; a filter adds its own. A voice costs
+// while it sounds: from its trigger until its envelope falls below 2^-16 or
+// its drum sample ends. The validator renders a song and holds its busiest
+// block of SONG_COST_BLOCK samples to SONG_BUDGET, so with the optical owner
+// (about 30%) and the IMU (about 17%) core 0 keeps IDLE0 clear; the music
+// task's duty cap (music_stream.h) is the guard behind it.
+enum SongVoiceKind:uint8_t {KIND_TONE,KIND_NOISE,KIND_STEPPED,KIND_PULSE,KIND_WAVE,KIND_FM,KIND_DRUM,SONG_KINDS};
+// Tone is its dearest wave (triangle 1.60; sine 1.49, square 1.56, saw 1.42).
+constexpr uint16_t SONG_KIND_COST[SONG_KINDS]={160,110,135,232,425,207,311};
+constexpr uint16_t SONG_FILTER_COST=25,SONG_BASE_COST=345,SONG_BUDGET=2000,SONG_COST_BLOCK=512;
+constexpr SongVoiceKind songVoiceKind(uint8_t type,uint8_t wave) {
+  return type==PULSE_VOICE?KIND_PULSE:type==WAVETABLE_VOICE?KIND_WAVE:type==FM_VOICE?KIND_FM:type==DRUM_VOICE?KIND_DRUM:
+         type==NOISE_VOICE?(wave==NOISE_STEPPED?KIND_STEPPED:KIND_NOISE):KIND_TONE;
+}
+
+#if !defined(__clang__) && defined(__GNUC__)
+#pragma GCC push_options
+#pragma GCC optimize("O2","fp-contract=off")
+#endif
 class Sound {
 public:
   // What a render did, for the device cost model (docs/FIRMWARE_LOADABLE_EFFECTS.md, "Sound").
-  struct Work {uint32_t steps=0,ops=0,events=0,voiceSamples=0,toneSamples=0,noiseSamples=0,filterSamples=0,partialSamples=0,attackSamples=0,idleNoise=0;};
+  struct Work {uint32_t steps=0,ops=0,events=0,voiceSamples=0,toneSamples=0,noiseSamples=0,filterSamples=0,partialSamples=0,attackSamples=0,idleNoise=0;
+    uint32_t kindSamples[SONG_KINDS]={};};  // a song's render cost (SONG_KIND_COST)
   void begin(const Program &p) {
     p_=&p;index_=step_=event_=filled_=0;work_=Work();
     if(!p.hasSound)return;
@@ -960,7 +984,7 @@ private:
       &Sound::span<true,2,false>,&Sound::span<true,2,true>,&Sound::span<true,3,false>,&Sound::span<true,3,true>};
     const uint32_t j=LOOPS[(noise?8:0)+x.filter*2+(envelope?1:0)](x,s);
     if(noise && j<count)noiseFor(x,count-j);
-    work_.voiceSamples+=j;(noise?work_.noiseSamples:work_.toneSamples)+=j;
+    work_.voiceSamples+=j;(noise?work_.noiseSamples:work_.toneSamples)+=j;work_.kindSamples[songVoiceKind(x.type,x.wave)]+=j;
     if(x.filter)work_.filterSamples+=j;
     if(!noise && x.wave==WAVE_SINE && (s.octave!=0 || s.cubic!=0))work_.partialSamples+=j;
     if(envelope && age0<x.attack)work_.attackSamples+=std::min(j,x.attack-age0);
@@ -1041,7 +1065,7 @@ private:
     };
     const unsigned kind=x.type==NOISE_VOICE?K_STEPPED:x.type==PULSE_VOICE?K_PULSE:x.type==WAVETABLE_VOICE?K_TABLE:x.type==FM_VOICE?K_FM:K_DRUM;
     const uint32_t j=LOOPS[kind][x.filter][envelope?1:0](x,s);
-    work_.voiceSamples+=j;work_.toneSamples+=j;
+    work_.voiceSamples+=j;work_.toneSamples+=j;work_.kindSamples[songVoiceKind(x.type,x.wave)]+=j;
     if(x.filter)work_.filterSamples+=j;
     if(envelope && age0<x.attack)work_.attackSamples+=std::min(j,x.attack-age0);
   }
@@ -1126,6 +1150,9 @@ private:
   Voice voice_[MAX_VOICES];
   float mix_[SOUND_STEP];
 };
+#if !defined(__clang__) && defined(__GNUC__)
+#pragma GCC pop_options
+#endif
 
 // Stops a frame between draw calls: a deterministic cap on instructions and
 // an optional clock (the device's: time since the frame began).

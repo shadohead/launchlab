@@ -323,6 +323,14 @@ int main() {
       if(r.ok || r.error.find(b.message)==std::string::npos)std::fprintf(stderr,"expected '%s', got '%s'\n",b.message,r.error.c_str());
       assert(!r.ok && r.error.find(b.message)!=std::string::npos && r.line>0);
     }
+    // A voice named like a volume (v1, v12) is the voice: a declared name wins
+    // over the vN volume token, which still works for names nobody declared.
+    // The names never reach the file, so both spellings compile the same bytes.
+    const char *named="voice v1 = drum(kick)\nvoice v2 = pulse()\nsong(tempo: 120) {\n pattern p {\n  beat: \"v1 . v3+v1 v1+v2:c4\"\n  v2: \"c4 v3+e4 . off\"\n }\n order p\n}\n";
+    const char *plain="voice kd = drum(kick)\nvoice pl = pulse()\nsong(tempo: 120) {\n pattern p {\n  beat: \"kd . v3+kd kd+pl:c4\"\n  pl: \"c4 v3+e4 . off\"\n }\n order p\n}\n";
+    const auto a=compileResult(effect(named,0)),b=compileResult(effect(plain,0));
+    if(!a.ok)std::fprintf(stderr,"voices named like volumes: %s (line %d)\n",a.error.c_str(),a.line);
+    assert(a.ok && b.ok && a.bytes==b.bytes);
   }
   std::printf("PASS: level gating (0.19 sources stay level 1), pulse/wave/fm/drum/stepped-noise voices against references, "
               "the drum bank pinned, song rows on their samples with waits, voices, volumes, offs and the order, any slicing, "

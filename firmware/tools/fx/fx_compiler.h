@@ -792,7 +792,8 @@ private:
             for(const std::string &part:row) {
               if(part==".")continue;
               if(part=="off"){events.push_back(SONG_OFF);continue;}
-              if(part.size()>=2 && part[0]=='v' && std::isdigit(uint8_t(part[1]))) {
+              // vN is a volume unless a voice of that name was declared (a declared name wins).
+              if(part.size()>=2 && part[0]=='v' && std::isdigit(uint8_t(part[1])) && voiceIndex(part.substr(0,part.find(':')),n.line)<0) {
                 const int q=std::atoi(part.c_str()+1);if(q<1 || q>16 || part.find_first_not_of("0123456789",1)!=std::string::npos)fail("a volume is v1-v16",n.line);
                 events.push_back(uint8_t(SONG_VOLUME|(q-1)));continue;
               }

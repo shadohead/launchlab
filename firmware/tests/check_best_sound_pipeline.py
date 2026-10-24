@@ -462,7 +462,7 @@ int main() {
     assert(soundPlayer.prepared(mine) && soundPlayer.prepare(mine));
     assert(soundPlayer.play(mine,Appearance::Sound::Low) && soundPlayer.streaming() && soundPlayer.playing());
     // Play it a while: the music task renders, the loop feeds and the channel plays.
-    auto run=[&](unsigned passes,Snapshot s){for(unsigned i=0;i<passes;++i){stream.render();hostUs+=4000;if(MusicChannel::held && i%8==7)--MusicChannel::held;tickSound(s);}};
+    auto run=[&](unsigned passes,Snapshot s){for(unsigned i=0;i<passes;++i){stream.step([]{return 0u;});hostUs+=4000;if(MusicChannel::held && i%8==7)--MusicChannel::held;tickSound(s);}};
     run(50,Snapshot{});
     assert(soundPlayer.streaming() && MusicChannel::queuedBlocks>0);
     // Its celebration's frames have ended: a song keeps playing.

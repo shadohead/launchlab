@@ -1338,8 +1338,12 @@ static LoadedSoundSource loadedSounds;
 static Music *music=nullptr;
 static constexpr uint32_t MUSIC_STACK=3584;
 static void musicTask(void *) {
+  // A block a step, then the sleep step() asks for (at least 1 ms, keeping
+  // the task under Music::DUTY_PERCENT of core 0); with nothing to render it
+  // waits for play() to wake it.
   for(;;) {
-    if(music->render())vTaskDelay(pdMS_TO_TICKS(4));
+    const uint32_t ms=music->step([]{return uint32_t(esp_timer_get_time());});
+    if(ms)vTaskDelay(pdMS_TO_TICKS(ms));
     else ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(250));
   }
 }
