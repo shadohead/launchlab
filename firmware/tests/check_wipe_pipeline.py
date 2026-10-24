@@ -38,6 +38,7 @@ def function(source, name, result="void", static=True):
 
 PREFIX = r'''
 #include "controls.h"
+#include "start_mark_reference.h"
 #include "usb_command_guard.h"
 #include "accel_range.h"
 #include "wipe_confirmation.h"
@@ -110,7 +111,7 @@ enum class TournamentView:uint8_t{RecordingOnly,Rpm};
 static TournamentView tournamentView=TournamentView::RecordingOnly;
 static const char *tournamentViewName(){return "recording_only";}
 static RpmEstimator::Mode rpmEstimator=RpmEstimator::DEFAULT_MODE;
-static StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;
+static StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;static StartMarkReference::Reference startMarks;static bool startMarksDirty=false;
 static MountOrientation::Mode mountMode=MountOrientation::Mode::Top;
 static Appearance::Config appearance;static Appearance::Celebration bestEffect,editorEffect;static Themes::Library themeLibrary;
 static InactivityTimer inactivity;static StickS3Level level;static StickS3Level::Reading drawnLevel;
@@ -190,7 +191,7 @@ static void previewHistory(){normal();}static void checkStorage(){normal();}stat
 static void exportScreen(){normal();}static void exportSignal(){normal();}
 static Appearance::Effect celebrationEffect(){return Appearance::Effect::Flames;}
 static void previewBestEffect(Appearance::Effect){normal();}
-static void prepareMotion(const Snapshot &){normal();}static void logLaunchMetrics(const Snapshot &){normal();}
+static void prepareMotion(const Snapshot &){normal();}static void logLaunchMetrics(const Snapshot &){normal();}static void noteStartMark(const Snapshot&){}static void saveStartMarks(){}
 static void finishMotion(){normal();}static void retryMotion(uint32_t,const Snapshot &){normal();}
 static void saveHistory(uint32_t,const Snapshot &){normal();}
 // Settings saves and the orphaned-checkpoint release must never run after an

@@ -58,6 +58,13 @@ public:
   uint32_t launches=0, attempts=0, resultRevision=0, cycles=0, revolutions=0;
   uint32_t opticalEdges=0, rejectedPeriods=0, rejectedShape=0, inconsistentWindows=0, slowWindows=0, weakWindows=0;
   uint32_t rearmExtensions=0;
+  // While a sound plays the sketch raises the marks a launch must start on
+  // (StartMarkReference, 0.20.1; 0 otherwise). It holds only the start: a
+  // confirmed launch is measured as ever. soundHeldWindows counts consistent
+  // windows it held back; startMark is the weakest mark of the window that
+  // started the current or last launch.
+  float startFloor=0, startMark=0;
+  uint32_t soundHeldWindows=0;
   // A pull ended and its ripcord rewind has not been seen yet. The rewind
   // spins the gear from rest like a pull, and one optical channel cannot tell
   // its direction, so while this is set every strong turn in REARM extends it.
@@ -114,10 +121,13 @@ public:
       // Fast marks keep the mean on a transition at half the grid points or
       // more (from about 25,000 rpm with a 30% mark), and the median became a
       // transition's slope: the band then exceeded the whole swing, no edge
-      // registered and the burst ended before its peak (0.20.1). A pull
-      // starts slowly, so during one the band stays within twice the band it
-      // started with; outside a pull it still guards against phantom edges.
-      if(phase==Phase::Launch)noiseBand=fminf(noiseBand,fmaxf(3.0f,2.0f*startNoiseBand));
+      // registered and the burst ended before its peak (0.20.1). During a
+      // confirmed pull the band may not rise above the larger of the band the
+      // pull started with and half the pull's own mark swing: the marks
+      // always clear it, and it never falls below the noise the pull began
+      // in (as the swing collapses at its end). Outside a pull it is
+      // unchanged and still guards against phantom edges.
+      if(phase==Phase::Launch)noiseBand=fminf(noiseBand,fmaxf(startNoiseBand,.5f*pulseSwing()));
     }
     const bool blanked=nowUs>=blankFrom && nowUs<blankUntil;
     if(!blanked)trackSwing(value);
@@ -518,6 +528,8 @@ private:
     if(phase==Phase::Ready) {
       if(rpm<MIN_LAUNCH_RPM){slowWindows++;return;}
       if(!strong){weakWindows++;return;}
+      if(*ampBounds.first<startFloor){soundHeldWindows++;return;}
+      startMark=*ampBounds.first;
       burstStartUs=stamp-uint64_t(periods[0])-periods[1]-periods[2];
       phase=Phase::Launch;attempts++;peakRpm=sustainedPeakRpm=singlePeakRpm=sustainedPeakAmplitude=singlePeakAmplitude=0;cycles=0;revolutions=3;startNoiseBand=noiseBand;
       lastStrongCycle=stamp;

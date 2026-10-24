@@ -11,7 +11,6 @@
 // ramp, hold and decay) at 8,000-30,000 rpm, each at eight grid phases (the
 // first mark's offset within a turn and the sample within the 5-sample
 // group), read by both estimators: within 1% of the peak.
-#include "../LaunchLabRpm/analog_tachometer.h"
 #include "../LaunchLabMini/sensor_profile.h"
 #include <algorithm>
 #include <cassert>

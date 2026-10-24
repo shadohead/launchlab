@@ -107,7 +107,7 @@ struct ShakeWake {unsigned arms=0,sleeps=0,restores=0;bool arm(){++arms;return t
 } shakeWake;
 static unsigned restoreFailureNotes=0;static void noteMotionRestoreFailure(){++restoreFailureNotes;}
 static void prepareMotion(const Snapshot&){motionPending=true;}
-static void logLaunchMetrics(const Snapshot&){}
+static void logLaunchMetrics(const Snapshot&){}static void noteStartMark(const Snapshot&){}static void saveStartMarks(){}
 // Settings persistence has its own production harness (check_save_paths.py).
 static void writeSettings(){}
 static void cancelSettingEdit(){}

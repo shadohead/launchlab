@@ -36,6 +36,7 @@ namespace Hil{inline bool nvsWrite(const char *key,size_t bytes);}
 #include "display_flip_setting.h"
 #include "display_orientation.h"
 #include "sensor_profile_setting.h"
+#include "start_mark_reference.h"
 #include "mount_orientation_setting.h"
 #include "controls_ui.h"
 #include "motion_acquisition.h"
@@ -426,6 +427,49 @@ static bool nvsAvailable(unsigned &available){
   nvs_stats_t stats{};if(nvs_get_stats(nullptr,&stats)!=ESP_OK)return false;
   available=unsigned(stats.available_entries);return true;
 }
+
+// The start floor while a sound plays (start_mark_reference.h, 0.20.1): this
+// unit's recent confirmed pulls' weakest start marks, for its sensor profile.
+static StartMarkReference::Reference startMarks;
+static bool startMarksDirty=false;
+static constexpr const char *START_MARKS_KEY="start_marks";
+static void loadStartMarks() {
+  StartMarkReference::Image image;const size_t n=prefs.getBytesLength(START_MARKS_KEY);
+  if(n!=StartMarkReference::IMAGE_BYTES || prefs.getBytes(START_MARKS_KEY,image,n)!=n ||
+     !startMarks.decode(image,unsigned(n)) || startMarks.profile!=uint8_t(sensorProfile))startMarks.clear(uint8_t(sensorProfile));
+}
+// A confirmed pull's weakest start mark joins the reference of its profile.
+static void noteStartMark(const Snapshot &e) {
+  if(!e.valid || e.startMark<=0)return;
+  if(startMarks.profile!=uint8_t(e.sensorProfile))startMarks.clear(uint8_t(e.sensorProfile));
+  startMarks.add(e.startMark);startMarksDirty=true;
+}
+// Saved with the NVS mirror at sleep and power-off, never while the unit is
+// in use. A first save takes NVS room, so it keeps the reserve for optional
+// records; an empty reference (a new profile, after a wipe) removes the key.
+static void saveStartMarks() {
+  if(!startMarksDirty)return;
+  if(!startMarks.count) {
+    if(!prefs.isKey(START_MARKS_KEY) || prefs.remove(START_MARKS_KEY))startMarksDirty=false;
+    return;
+  }
+  const unsigned own=NvsBudget::blobEntries(StartMarkReference::IMAGE_BYTES);
+  const unsigned needed=NvsBudget::optionalNeeded(own,prefs.isKey(START_MARKS_KEY)?0:own,NvsBudget::blobEntries(PracticeHistory::IMAGE_BYTES));
+  unsigned available=0;
+  if(!nvsAvailable(available) || available<needed){Serial.printf("START_MARKS_NOTICE refused nvs_space available=%u needed=%u\n",available,needed);return;}
+  StartMarkReference::Image image;startMarks.encode(image);
+  if(prefs.putBytes(START_MARKS_KEY,image,sizeof(image))==sizeof(image))startMarksDirty=false;
+  else Serial.println("START_MARKS_ERROR save_failed");
+}
+// Each loop pass: while any sound plays, a launch starts only on marks half
+// as strong as this unit's pulls (at most 400 counts); otherwise as ever.
+static void updateStartFloor() {
+  static float last=-1;
+  // A reference kept for another profile (a restore can change it) does not apply.
+  const float minMark=StickS3SensorProfile::minMark(sensorProfile);
+  const float floor=!soundPlayer.playing()?0:startMarks.profile==uint8_t(sensorProfile)?startMarks.floor(minMark):minMark;
+  if(floor!=last){acquisition.setStartFloor(floor);last=floor;}
+}
 LOOP_HELPER static void nvsStatus() {
   nvs_stats_t stats{};const esp_err_t error=nvs_get_stats(nullptr,&stats);
   Serial.printf("NVS_STATUS ok=%d used_entries=%u available_entries=%u total_entries=%u namespaces=%u history_save_entries=%u history_headroom=%d\n",
@@ -443,12 +487,13 @@ LOOP_HELPER static void status() {
     unsigned(M5.Display.getRotation()),
     (unsigned long long)s.samples,s.rate,s.mean,(unsigned long)s.minimum,(unsigned long)s.maximum,
     (unsigned long)s.last,(unsigned long)s.overflows,(unsigned long)s.readErrors,esp_err_to_name(s.error));
-  Serial.printf("RPM_STATUS state=%s valid=%d peak_rpm=%.1f live_peak=%.1f launches=%lu edges=%lu weak_rejected=%lu slow_rejected=%lu noise=%.1f amplitude=%.1f rearm_ms=%lu candidate_rpm=%.1f contrast=%.1f hysteresis=%.1f shape_rejected=%lu inconsistent=%lu rearm_extensions=%lu detector_us=%llu recorder_s=%lu min_mark=%.0f edge_fraction=%.2f\n",
+  Serial.printf("RPM_STATUS state=%s valid=%d peak_rpm=%.1f live_peak=%.1f launches=%lu edges=%lu weak_rejected=%lu slow_rejected=%lu noise=%.1f amplitude=%.1f rearm_ms=%lu candidate_rpm=%.1f contrast=%.1f hysteresis=%.1f shape_rejected=%lu inconsistent=%lu rearm_extensions=%lu detector_us=%llu recorder_s=%lu min_mark=%.0f edge_fraction=%.2f start_floor=%.0f start_mark=%.0f sound_held=%lu ref_pulls=%u ref_median=%.0f\n",
     s.stateName(),s.valid,s.resultRpm,s.peakRpm,(unsigned long)s.launches,(unsigned long)s.edges,
     (unsigned long)s.weak,(unsigned long)s.slow,s.noise,s.amplitude,(unsigned long)s.rearmMs,
     s.candidateRpm,s.contrast,s.hysteresis,(unsigned long)s.shape,(unsigned long)s.inconsistent,
     (unsigned long)s.rearmExtensions,(unsigned long long)s.detectorUs,
-    acquisition.storage()?60ul:0ul,StickS3SensorProfile::minMark(s.sensorProfile),StickS3SensorProfile::EDGE_SWING_FRACTION);
+    acquisition.storage()?60ul:0ul,StickS3SensorProfile::minMark(s.sensorProfile),StickS3SensorProfile::EDGE_SWING_FRACTION,
+    s.startFloor,s.startMark,(unsigned long)s.soundHeld,unsigned(startMarks.count),startMarks.median());
   Serial.printf("SENSOR_PROFILE_STATUS selected=%s min_mark=%.0f saved_setting=%s\n",
     StickS3SensorProfile::name(s.sensorProfile),StickS3SensorProfile::minMark(s.sensorProfile),StickS3SensorProfile::name(sensorProfile));
   Serial.printf("RPM_ESTIMATORS selected=%s units=rpm three_turn_peak_rpm=%.1f single_turn_peak_rpm=%.1f confirmation_turns=3 max_rpm=30000 single_updates=%lu single_rejected=%lu\n",
@@ -1043,7 +1088,11 @@ static void writeSettings() {
   }
   if(items&SettingsSave::Sensor) {
     bool current=live.sensorProfile==sensorProfile;
-    if(!current && acquisition.request(Action::SensorProfile,uint8_t(sensorProfile))){current=true;practice.newSession();launchFeedback.clear();}
+    if(!current && acquisition.request(Action::SensorProfile,uint8_t(sensorProfile))) {
+      current=true;practice.newSession();launchFeedback.clear();
+      // Another sensor's marks: its own reference starts empty.
+      startMarks.clear(uint8_t(sensorProfile));startMarksDirty=true;saveStartMarks();
+    }
     if(current && SensorProfileSetting::save(prefs,sensorProfile))saved|=SettingsSave::Sensor;
   }
   if((items&SettingsSave::Sleep) && prefs.putUChar("sleep_min",inactivity.minutes())==1)saved|=SettingsSave::Sleep;
@@ -1217,6 +1266,7 @@ LOOP_HELPER static void commitWipe(const Snapshot &s) {
   soundPlayer.stop();soundRequest={};celebrationSound=soundPreview=false;
   bestEffect.clear();editorEffect.clear();launchFeedback.clear();
   restoreRx.cancel();
+  startMarks.clear(uint8_t(sensorProfile));startMarksDirty=false;  // the wipe takes its key too
   DeviceWipe::NvsStore store;
   wipeComplete=DeviceWipe::begin(store)==DeviceWipe::Result::Complete;
   wipeFailed=!wipeComplete;wipeConfirmation.cancel();dirty=true;
@@ -1465,7 +1515,7 @@ LOOP_HELPER static ShutdownFlush flushForShutdown(uint32_t now,const Snapshot &s
   // Finish any queued accepted result before saving; the owner is now stopped.
   Snapshot event;
   bool newPull=false;
-  while(acquisition.takeEvent(event))if(practice.accept(event.launches,event.valid,event.resultRpm,now)){prepareMotion(event);logLaunchMetrics(event);newPull=true;}
+  while(acquisition.takeEvent(event))if(practice.accept(event.launches,event.valid,event.resultRpm,now)){prepareMotion(event);logLaunchMetrics(event);noteStartMark(event);newPull=true;}
   if(newPull) {
     inactivity.touch(now);dirty=true;
     if(!acquisition.request(Action::CheckpointEnd))acquisition.request(Action::Pin,s.pin);
@@ -1474,6 +1524,7 @@ LOOP_HELPER static ShutdownFlush flushForShutdown(uint32_t now,const Snapshot &s
   // Settings never hold up power-off: a failed write is logged, stays pending
   // and is retried if the device stays on.
   writeSettings();
+  saveStartMarks();
   const bool historyFailed=practiceStore.pending(practice) && (!practiceStore.ready() || !practiceStore.save(practice));
   if(historyFailed || (bestStore.pending(personalBests) && (!bestStore.ready() || !bestStore.save(personalBests)))) {
     saveError=true;++saveErrors;dirty=true;
@@ -2293,6 +2344,7 @@ void setup() {
   if(!RpmEstimatorSetting::load(prefs,rpmEstimator))
     Serial.printf("RPM_SETTING_NOTICE invalid_record_retained_using_default=%s\n",RpmEstimator::name(RpmEstimator::DEFAULT_MODE));
   if(!SensorProfileSetting::load(prefs,sensorProfile))Serial.println("SENSOR_SETTING_NOTICE invalid_record_retained_using_standard_default");
+  loadStartMarks();
   const uint8_t sleepMinutes=prefs.getUChar("sleep_min",InactivityTimer::DEFAULT_MINUTES);
   if(!inactivity.setMinutes(sleepMinutes))Serial.println("SLEEP_SETTING_NOTICE invalid_saved_value_using_3_min");
   if(!Brightness::load(prefs,brightnessPercent))
@@ -2401,6 +2453,7 @@ LOOP_HELPER static void tickSound(const Snapshot &s) {
     soundRequest.active=false;
   if(!soundPlayer.playing())celebrationSound=soundPreview=false;
   soundPlayer.tick(measuring || motionPending);
+  updateStartFloor();
   if(measuring || motionPending)return;
   // Render a slice per idle pass (1/64 s of audio, a few ms): a waiting
   // request first, else the chosen effect, ready before the next best or the
@@ -2662,7 +2715,7 @@ void loop() {
         event.valid,event.resultRpm,(unsigned long)event.revolutions,event.amplitude,event.startNoise,
         (unsigned long)event.launches,event.endName(),(unsigned long long)event.detectorUs);
       if(practice.accept(event.launches,event.valid,event.resultRpm,millis())) {
-        prepareMotion(event);logLaunchMetrics(event);
+        prepareMotion(event);logLaunchMetrics(event);noteStartMark(event);
         inactivity.touch(millis());
         Serial.printf("HISTORY_ADDED number=%lu session=%lu rpm=%.1f\n",(unsigned long)practice.recent()->number,
           (unsigned long)practice.recent()->session,practice.recent()->rpm);

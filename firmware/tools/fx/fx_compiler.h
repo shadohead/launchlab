@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
@@ -829,7 +830,11 @@ private:
     if(order.empty())fail("a song needs its order: order verse verse chorus",line);
     if(order.size()>MAX_ORDER)fail("a song's order has at most "+std::to_string(MAX_ORDER)+" entries",line);
     double total=0;for(int k:order)total+=double(patterns[size_t(k)].rows)*std::round(rowSamples);
-    if(total>double(MAX_SONG_SECONDS)*SOUND_RATE)fail("a song runs at most "+std::to_string(MAX_SONG_SECONDS)+" s; this one "+std::to_string(int(total/SOUND_RATE))+" s",line);
+    // As long as a celebration at most (0.20.1); 0.20.0 allowed 120 s.
+    if(total>double(SONG_PLAY_MS)*SOUND_RATE/1000) {
+      char seconds[16];std::snprintf(seconds,sizeof(seconds),"%.1f",total/SOUND_RATE);
+      fail("a song plays at most "+std::to_string(SONG_PLAY_MS/1000)+" s, as long as a celebration; this one runs "+seconds+" s",line);
+    }
     // The voices a song plays are triggered by its notes, and pitched if they can be.
     for(const SongChannel &ch:channels)(void)ch;
     for(const Pattern &pt:patterns)for(size_t c=0;c<channels.size();++c) {

@@ -210,6 +210,11 @@ enum Section:uint8_t {NAME=1,CONSTS=2,CODE=3,ARGS=4,BLOCKS=5,SOUND=6,META=7,SPRI
 // once when loading, so a pattern's events fit its rows.
 constexpr uint8_t SONG_VERSION=1;constexpr unsigned SONG_HEAD=8,MAX_CHANNELS=8,MAX_PATTERNS=64,MAX_ORDER=256,
   MIN_ROW_SAMPLES=400,MAX_ROW_SAMPLES=16000,MAX_SONG_SECONDS=120;
+// A song plays as long as a celebration at most: SONG_PLAY_MS, the longest
+// effect (0.20.1, the owner). The compiler and validator refuse a longer
+// one; the loader still takes 0.20.0's songs of up to MAX_SONG_SECONDS and
+// plays their first SONG_PLAY_MS, fading out over its last SONG_CUT_FADE_MS.
+constexpr uint32_t SONG_PLAY_MS=MAX_DURATION,SONG_CUT_FADE_MS=300;
 enum SongEvent:uint8_t {SONG_WAIT=0x80,SONG_VOICE=0xC0,SONG_VOLUME=0xD0,SONG_OFF=0xE0};
 // Tables: a count, then per table its first pool index and its length (16 bits each).
 constexpr unsigned MAX_TABLES=64;
@@ -244,8 +249,12 @@ struct Program {
   struct Table {uint16_t base=0,length=0;};
   Table tables[MAX_TABLES];unsigned tableCount=0;
   Sprite sprites[MAX_SPRITES];unsigned spriteCount=0;
+  // The song's playing length in samples (SONG_PLAY_MS at most), and
+  // whether it was cut to it (a 0.20.0 song longer than that).
+  uint32_t songPlay()const{return std::min<uint32_t>(songTotal,SONG_PLAY_MS*SOUND_RATE/1000);}
+  bool songCut()const{return songTotal>SONG_PLAY_MS*SOUND_RATE/1000;}
   // The sound's length in samples: its own, or its song's if longer.
-  uint32_t soundSamples()const{return hasSound?std::max(uint32_t(soundMs)*SOUND_RATE/1000,songTotal):0;}
+  uint32_t soundSamples()const{return hasSound?std::max(uint32_t(soundMs)*SOUND_RATE/1000,songPlay()):0;}
   uint32_t maxOps=0,maxDraws=0;                       // static bounds per frame
   // META: the built-in effect that plays when this one cannot (missing,
   // damaged, needs a newer engine); NO_FALLBACK means Orbit.
@@ -765,10 +774,12 @@ public:
   size_t run(int16_t *out,size_t count) {
     if(!p_ || !p_->hasSound)return 0;
     const uint32_t n=p_->soundSamples();size_t written=0;
+    // A cut song fades out over SONG_CUT_FADE_MS; anything else ends in 25 ms.
+    const uint32_t fade=p_->songCut()?SONG_CUT_FADE_MS*SOUND_RATE/1000:SOUND_RATE/40;
     while(written<count && index_<n) {
       const uint32_t within=index_&(SOUND_STEP-1);
       if(within==0 && filled_<=index_)render();
-      out[written++]=limit(mix_[within],index_,n);++index_;
+      out[written++]=limit(mix_[within],index_,n,fade);++index_;
     }
     return written;
   }
@@ -779,14 +790,14 @@ public:
   // full scale and compressing toward 0.95; silence for a non-finite sample.
   // Never contracted into fused multiply-adds (the device's FPU has them),
   // so the device renders what the host and the browser render.
-  LLFX_EXACT static int16_t limit(float v,uint32_t i,uint32_t n) {
+  LLFX_EXACT static int16_t limit(float v,uint32_t i,uint32_t n,uint32_t fade=SOUND_RATE/40) {
 #if defined(__clang__)
 #pragma clang fp contract(off)
 #endif
     if(!std::isfinite(v))return 0;
-    constexpr uint32_t ATTACK=SOUND_RATE/500,FADE=SOUND_RATE/40;
+    constexpr uint32_t ATTACK=SOUND_RATE/500;
     if(i<ATTACK)v*=float(i)/ATTACK;
-    if(n-i<FADE)v*=float(n-i)/FADE;
+    if(n-i<fade)v*=float(n-i)/float(fade);
     const float a=std::fabs(v),d=a-.6f,limited=d<=0?a:.6f+.35f*3*d/(1+3*d);
     return int16_t((v<0?-limited:limited)*32767);
   }

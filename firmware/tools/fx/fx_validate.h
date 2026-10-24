@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <string>
 #include <vector>
 // The engine counts each primitive's calls and steps for the cost model (host builds only).
@@ -133,6 +134,12 @@ inline Report check(const std::vector<uint8_t> &file,const std::vector<Scene> &s
   if(playing>RAM_COPY){r.problem="too large for internal RAM: "+std::to_string(playing)+" bytes of code, arguments and constants (at most "+std::to_string(RAM_COPY)+")";return r;}
   // A song plays on core 0 beside the optical owner and the IMU: its busiest
   // block must fit the render budget (docs/FIRMWARE_SOUND_0_20.md, "Render budget").
+  // A song plays as long as a celebration at most (0.20.1); the device
+  // still plays an older, longer one's first SONG_PLAY_MS, faded.
+  if(p.songCut()) {
+    char seconds[16];std::snprintf(seconds,sizeof(seconds),"%.1f",double(p.songTotal)/LoadableFx::SOUND_RATE);
+    r.problem="song too long: "+std::string(seconds)+" s (at most "+std::to_string(LoadableFx::SONG_PLAY_MS/1000)+" s, as long as a celebration)";return r;
+  }
   const SongLoad load=songLoad(p);r.songLoad=load.worst;r.songWorstMs=load.worstMs;
   if(load.worst>LoadableFx::SONG_BUDGET){
     r.problem="song too heavy: "+percent(load.worst)+" of core 0 at "+std::to_string(load.worstMs)+" ms (at most "+percent(LoadableFx::SONG_BUDGET)+")";return r;

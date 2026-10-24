@@ -176,6 +176,25 @@ int main() {
     assert(next.played==renderWhole(b) && next.volumes.front()==72);
   }
   {
+    // The speaker can finish its last block between feed()'s first look at
+    // the channel and its end check: the stream ends with every block played
+    // and must count them all (HIL songs, 2026-10-24: a 6 s song ended
+    // with 187 of its 188 blocks counted).
+    struct Racing:FakeChannel {
+      unsigned reads=0;
+      unsigned queued() override{if(++reads==2)play(SIZE_MAX/2);return FakeChannel::queued();}
+      size_t play(size_t samples){size_t n=0;while(samples-- && !held.empty()){Block &b=held.front();played.push_back(b.p[b.at++]);++n;if(b.at==b.n)held.pop_front();}return n;}
+    };
+    for(const char *path:songs) {
+      const auto f=compileFile(path);const auto whole=renderWhole(f);
+      Stream stream(space.get());Racing ch;
+      assert(stream.start(f.data(),f.size(),0,160,ch));
+      simulate(stream,ch,5,200000,[&](uint32_t){ch.reads=0;});
+      assert(!stream.active() && ch.played==whole);
+      assert(stream.played()==stream.blocks() && stream.blocks()==(whole.size()+Stream::BLOCK-1)/Stream::BLOCK);
+    }
+  }
+  {
     // Refused: no room, a file that does not load, and a file without a sound.
     FakeChannel ch;Stream none(nullptr);const auto f=compileFile(songs[0]);
     assert(!none.start(f.data(),f.size(),0,160,ch));
@@ -185,5 +204,5 @@ int main() {
     assert(silent.ok && !stream.start(silent.bytes.data(),silent.bytes.size(),0,160,ch));
   }
   std::printf("PASS: songs reach the speaker exactly (from the start or late), fed every 5-31 ms without running dry; "
-              "a starved render counts underruns; a fade ends within 20 ms; stop, restart and refusals\n");
+              "a starved render counts underruns; every block counted when the speaker finishes during a feed; a fade ends within 20 ms; stop, restart and refusals\n");
 }

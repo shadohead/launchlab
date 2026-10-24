@@ -357,6 +357,10 @@ LOOP_HELPER static void hilCommand(char *line) {
     return;
   }
   if(!strcmp(cmd,"tasks")){Hil::tasks();return;}
+  // The heap and the speaker's state alone: a full `p` status prints about
+  // forty lines from the UI loop, which also feeds songs, and once a second
+  // it could starve the speaker under the worst case (0.20.1 songs scenario).
+  if(!strcmp(cmd,"heap")){heapStatus();soundPlayer.status(appearance.sound);Hil::replyLine("HIL_OK heap");return;}
   if(!strncmp(cmd,"snd",3)){const char *a1=arg();hilSoundCommand(cmd,a1,a1?arg():nullptr);return;}
   if(!strcmp(cmd,"gate")) {
     const uint32_t ms=uint32_t(num(300));

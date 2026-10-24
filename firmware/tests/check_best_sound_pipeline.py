@@ -103,6 +103,7 @@ struct HostLock {std::mutex m;struct Hold {std::mutex &m;explicit Hold(HostLock 
 using Music=MusicStream<HostLock>;
 using TaskHandle_t=void *;
 static void xTaskNotifyGive(TaskHandle_t){}
+static void updateStartFloor(){}
 // The speaker's music channel: holds up to two blocks until the test plays them.
 struct MusicChannel:MusicOutput {
   static inline unsigned held=0,queuedBlocks=0,stops=0;static inline int lastVolume=-1;

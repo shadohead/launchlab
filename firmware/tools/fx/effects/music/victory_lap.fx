@@ -1,9 +1,10 @@
 # Victory Lap: an original chiptune for a new best (LaunchLab, 0.20).
 # Pulse lead and harmony, triangle bass and the built-in kit at 140 bpm;
-# the burst of confetti lands on the downbeats.
+# the burst of confetti lands on the downbeats. One 5.1 s phrase: a rise,
+# the lap and the finish, as long as its celebration (0.20.1).
 effect "Victory Lap"
 uid 0x4c4c4d5500000001
-revision 1
+revision 2
 duration 5000
 readout 900
 
@@ -46,5 +47,5 @@ song(tempo: 140, rows: 4) {
     bass: "c2 . . c2 . . g1 . c2 . . . . . . ."
     beat: "kick . . kick . . snare . kick . snare snare snare . . ."
   }
-  order rise lap rise finish
+  order rise lap finish
 }
