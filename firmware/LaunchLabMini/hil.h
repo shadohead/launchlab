@@ -228,7 +228,7 @@ LOOP_HELPER static void hilCommand(char *line) {
   if(!strcmp(cmd,"sync")){Hil::reply("HIL_SYNC reason=idle discarded=0\n");return;}
   if(!strcmp(cmd,"reset")) {
     Hil::pullStartUs=0;optical().setMode(Hil::Optical::Mode::Pass);imu().setMode(Hil::Imu::Mode::Pass);
-    imu().faults.clear();Hil::nvs.fail=Hil::nvs.slow=0;Hil::nvs.armed=false;Hil::usbIdle=false;Hil::allowSleep=false;
+    imu().faults.clear();Hil::nvs.fail=Hil::nvs.slow=0;Hil::nvs.armed=false;Hil::usbIdle=false;Hil::allowSleep=false;Hil::sleepDry=false;
     Hil::replyLine("HIL_OK reset");return;
   }
   if(!strcmp(cmd,"opt")) {
@@ -485,6 +485,7 @@ LOOP_HELPER static void hilCommand(char *line) {
   }
   if(!strcmp(cmd,"usbidle")){Hil::usbIdle=num(1)!=0;Hil::reply("HIL_OK usbidle %d\n",Hil::usbIdle);return;}
   if(!strcmp(cmd,"sleepok")){Hil::allowSleep=num(1)!=0;Hil::reply("HIL_OK sleepok %d\n",Hil::allowSleep.load());return;}
+  if(!strcmp(cmd,"sleepdry")){Hil::sleepDry=num(1)!=0;Hil::reply("HIL_OK sleepdry %d\n",Hil::sleepDry.load());return;}
   if(!strcmp(cmd,"powerlog")) {
     // The next loop pass runs the real 5-minute power-log checkpoint.
     powerRecord(PowerDiagnostics::Sample);lastPowerSaveTry=millis()-300000;
@@ -586,6 +587,15 @@ LOOP_HELPER static void hilCommand(char *line) {
       store.end();heap_caps_free(chunk);acquisition.request(Action::CheckpointEnd);
     }
     Hil::reply("HIL_OK nvsfill ok=%d entries=%u keys=%u\n",ok,taken,keys);return;
+  }
+  if(!strcmp(cmd,"bests")) {
+    // !bests: the personal bests (sensor x method); !bests clear zeroes them
+    // as a new unit has them (saved with the next checkpoint), so scenarios
+    // that need a new best do not depend on what earlier runs left.
+    const char *what=arg();
+    if(what && !strcmp(what,"clear")){for(float &r:personalBests.rpm)r=0;++personalBests.revision;}
+    Hil::reply("HIL_OK bests standard_three=%.1f standard_single=%.1f tcrt_three=%.1f tcrt_single=%.1f revision=%lu\n",
+      personalBests.rpm[0],personalBests.rpm[1],personalBests.rpm[2],personalBests.rpm[3],(unsigned long)personalBests.revision);return;
   }
   if(!strcmp(cmd,"legacytable")) {
     // !legacytable write: 0.15's table record in both of its slots (mile0,

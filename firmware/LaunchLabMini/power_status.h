@@ -4,7 +4,11 @@
 
 class InactivityTimer {
 public:
-  static constexpr uint8_t DEFAULT_MINUTES=3;
+  // A unit with no saved choice (1 minute from 0.20.2, 3 before; a saved
+  // choice, the old default included, is kept).
+  static constexpr uint8_t DEFAULT_MINUTES=1;
+  // Shake to wake (shake_wake_setting.h) for a unit with no saved choice: On.
+  static constexpr bool SHAKE_WAKE_DEFAULT=true;
   static constexpr uint32_t UNUSED_SHAKE_MS=30000;
   static bool validMinutes(uint8_t minutes) {
     return minutes>=1 && minutes<=10;
@@ -37,6 +41,15 @@ private:
   uint8_t minutes_=DEFAULT_MINUTES;
   bool unusedShake_=false;
 };
+
+// How an inactivity sleep wakes. On: the IMU's motion interrupt is armed and
+// its supply held (PM1 GPIO4 wake), and the side key wakes too. Off: the
+// side key's power-off state, a deeper sleep with the IMU unpowered on
+// battery; only the side key wakes (on USB power through its IRQ on G13).
+struct SleepPlan {bool armImu;const char *wake,*mode;};
+constexpr SleepPlan sleepPlan(bool shakeToWake) {
+  return shakeToWake?SleepPlan{true,"imu_motion","imu_only"}:SleepPlan{false,"side_key","power_off"};
+}
 
 namespace IdlePowerPolicy {
 static constexpr uint32_t DIM_MS=30000,LEVEL_POLL_MS=20,UI_POLL_MS=5;

@@ -282,13 +282,14 @@ int main() {
     Contents restored;assert(decode(encoded.data(),length,restored) && same(trial,restored));
   }
   // The original reserved bytes are zero, so every legacy backup loads Top
-  // regardless of the destination's previous choice. Sidecar uses only byte5.
+  // and Shake to wake On regardless of the destination's previous choice.
+  // Sidecar uses only byte 5 and Shake to wake Off (0.20.2) only byte 6.
   const size_t settingsBody=n-4-SETTINGS_BYTES;
   assert(buffer[settingsBody+5]==0 && buffer[settingsBody+6]==0 && buffer[settingsBody+7]==0);
-  decoded.settings.mount=MountOrientation::Mode::Sidecar;
-  assert(decode(buffer.data(),n,decoded) && decoded.settings.mount==MountOrientation::Mode::Top);
+  decoded.settings.mount=MountOrientation::Mode::Sidecar;decoded.settings.shakeWake=false;
+  assert(decode(buffer.data(),n,decoded) && decoded.settings.mount==MountOrientation::Mode::Top && decoded.settings.shakeWake);
   for(unsigned offset:{5u,6u,7u}) {
-    Buffer bad=buffer;bad[settingsBody+offset]=offset==5?2:1;
+    Buffer bad=buffer;bad[settingsBody+offset]=offset==7?1:2;
     put32(bad.data()+n-4,checksum(bad.data(),n-4));
     auto retained=decoded;assert(!decode(bad.data(),n,decoded) && same(decoded,retained));
   }

@@ -456,7 +456,7 @@ def main():
     # Execute the exact earliest standby exclusion; the remaining existing
     # sleep/save behavior has its own full USB/standby production harness.
     off = function(source, "autoPowerOff")
-    bodies += off[:off.index("  if(usbAwake.inhibited(now))")] + "normal();}\n"
+    bodies += off[:off.index("  if(usbAwake.inhibited(now) && !dry)")] + "normal();}\n"
     bodies += function(source, "loop", static=False)
     bodies += "\nstatic void actualBootBoundary(){" + boundary + "++normalLoads;}\n"
     buttons = ROOT / "tests/fakes/m5_button"

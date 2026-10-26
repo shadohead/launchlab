@@ -8,8 +8,21 @@
 namespace Controls {
 enum class Page:uint8_t {Main,Menu,HistoryMenu,History,Battery,Settings,Edit,NewSession,Tournament,Wipe};
 enum class Effect:uint8_t {None,Recap,BeginEdit,Preview,Apply,CancelEdit,Older,NewSession,Tournament,BeginWipe,ConfirmWipe,CancelWipe};
-enum class Setting:uint8_t {Sleep,Rpm,Brightness,Flip,Sensor,Theme,BestEffect,Celebrate,Sound,Mount,WipeAll};
-static constexpr unsigned EDITABLE_SETTING_COUNT=10,SETTING_COUNT=11;
+// Values are stable (HIL `!set N`, saved wake navigation); the screen shows
+// them in ORDER. Shake to wake (0.20.2) is listed right after Sleep after.
+enum class Setting:uint8_t {Sleep,Rpm,Brightness,Flip,Sensor,Theme,BestEffect,Celebrate,Sound,Mount,ShakeWake,WipeAll};
+static constexpr unsigned EDITABLE_SETTING_COUNT=11,SETTING_COUNT=12;
+// The Settings list, five rows a page: general, appearance, then Mounting,
+// Wipe all and Back (SETTING_COUNT, after the last).
+static constexpr Setting ORDER[SETTING_COUNT]={Setting::Sleep,Setting::ShakeWake,Setting::Rpm,Setting::Brightness,Setting::Sensor,
+  Setting::Flip,Setting::Theme,Setting::BestEffect,Setting::Celebrate,Setting::Sound,Setting::Mount,Setting::WipeAll};
+// A row's place in ORDER (Back, SETTING_COUNT, is last), and the row after it.
+constexpr unsigned position(unsigned setting) {
+  for(unsigned i=0;i<SETTING_COUNT;++i)if(unsigned(ORDER[i])==setting)return i;
+  return SETTING_COUNT;
+}
+constexpr unsigned rowAt(unsigned position){return position<SETTING_COUNT?unsigned(ORDER[position]):SETTING_COUNT;}
+constexpr unsigned nextRow(unsigned setting){return rowAt((position(setting)+1)%(SETTING_COUNT+1));}
 struct State {
   Page page=Page::Main;
   uint8_t menu=0,history=0,setting=0,draft=0;
@@ -53,11 +66,11 @@ struct State {
       case Page::Menu:menu=(menu+1)%6;break;
       case Page::HistoryMenu:history=(history+1)%4;break;
       case Page::History:return Effect::Older;
-      case Page::Settings:setting=(setting+1)%(SETTING_COUNT+1);break;
+      case Page::Settings:setting=uint8_t(nextRow(setting));break;
       case Page::Edit:
         switch(Setting(setting)) {
           case Setting::Sleep:draft=draft>=10?1:draft+1;break;
-          case Setting::Rpm:case Setting::Flip:case Setting::Sensor:case Setting::Mount:draft=!draft;break;
+          case Setting::Rpm:case Setting::Flip:case Setting::Sensor:case Setting::Mount:case Setting::ShakeWake:draft=!draft;break;
           case Setting::Brightness:draft=draft>=100?10:draft+10;break;
           case Setting::Theme:
             do draft=(draft+1)%Appearance::ALL_THEMES;
@@ -109,9 +122,10 @@ struct Gesture {
 // its schema so the old Back row still opens Back instead of the new editor.
 // Adding Wipe uses another schema and never resumes a destructive dialog.
 // 0.15 inserts Celebrate after Best effect: older rows from Sound on move
+// down one. 0.20.2 adds Shake to wake as value 10: Wipe all and Back move
 // down one.
 static constexpr uint32_t LEGACY_WAKE_MAGIC=0x4e560000,WAKE7_MAGIC=0x4e570000,
-  WAKE8_MAGIC=0x4e580000,WAKE9_MAGIC=0x4e590000,WAKE10_MAGIC=0x4e5a0000,WAKE_MAGIC=0x4e5b0000;
+  WAKE8_MAGIC=0x4e580000,WAKE9_MAGIC=0x4e590000,WAKE10_MAGIC=0x4e5a0000,WAKE11_MAGIC=0x4e5b0000,WAKE_MAGIC=0x4e5c0000;
 inline uint32_t encodeWake(State state,uint8_t tournamentView) {
   if(state.page==Page::Edit || state.page==Page::Wipe)state.page=Page::Settings;
   return WAKE_MAGIC|uint32_t(state.page)|(uint32_t(state.menu)<<4)|
@@ -122,9 +136,9 @@ inline bool decodeWake(uint32_t value,State &out,uint8_t &tournamentView) {
   // Each layout's Back row is the one after its last setting.
   unsigned setting=0,back=0;
   const auto wideMagic=value&0xffffc000;
-  if(wideMagic==WAKE_MAGIC || wideMagic==WAKE10_MAGIC || wideMagic==WAKE9_MAGIC || wideMagic==WAKE8_MAGIC) {
+  if(wideMagic==WAKE_MAGIC || wideMagic==WAKE11_MAGIC || wideMagic==WAKE10_MAGIC || wideMagic==WAKE9_MAGIC || wideMagic==WAKE8_MAGIC) {
     setting=(value>>9)&15;tournamentView=(value>>13)&1;
-    back=wideMagic==WAKE8_MAGIC?8:wideMagic==WAKE9_MAGIC?9:wideMagic==WAKE10_MAGIC?10:SETTING_COUNT;
+    back=wideMagic==WAKE8_MAGIC?8:wideMagic==WAKE9_MAGIC?9:wideMagic==WAKE10_MAGIC?10:wideMagic==WAKE11_MAGIC?11:SETTING_COUNT;
   }
   else {
     const auto magic=value&0xffffe000;
@@ -134,7 +148,11 @@ inline bool decodeWake(uint32_t value,State &out,uint8_t &tournamentView) {
   }
   if(setting>back)return false;
   if(setting==back)setting=SETTING_COUNT;
-  else if(wideMagic!=WAKE_MAGIC && setting>=unsigned(Setting::Celebrate))++setting;
+  else if(wideMagic!=WAKE_MAGIC) {
+    // In the 0.15-0.20.1 numbering (WAKE11): Celebrate is 7, Wipe all 10.
+    if(wideMagic!=WAKE11_MAGIC && setting>=7)++setting;
+    if(setting==10)setting=unsigned(Setting::WipeAll);
+  }
   state.setting=uint8_t(setting);
   if(uint8_t(state.page)>uint8_t(Page::Wipe) || state.page==Page::Edit || state.page==Page::Wipe || state.menu>=6 || state.setting>SETTING_COUNT)return false;
   out=state;return true;

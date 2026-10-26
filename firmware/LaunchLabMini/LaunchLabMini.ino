@@ -34,6 +34,7 @@ namespace Hil{inline bool nvsWrite(const char *key,size_t bytes);}
 #include "rpm_estimator_setting.h"
 #include "brightness.h"
 #include "display_flip_setting.h"
+#include "shake_wake_setting.h"
 #include "display_orientation.h"
 #include "sensor_profile_setting.h"
 #include "start_mark_reference.h"
@@ -65,11 +66,11 @@ namespace Hil{inline bool nvsWrite(const char *key,size_t bytes);}
 #define LOOP_HELPER __attribute__((noinline))
 #if LAUNCHLAB_HIL
 // Test-only hardware-in-the-loop build; never a release. See tools/hil.
-static constexpr char VERSION[] = "0.20.1-sticks3-songs-hil-pm";
+static constexpr char VERSION[] = "0.20.2-sticks3-songs-hil-pm";
 #elif LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = "0.20.1-sticks3-songs-pm";
+static constexpr char VERSION[] = "0.20.2-sticks3-songs-pm";
 #else
-static constexpr char VERSION[] = "0.20.1-sticks3-songs";
+static constexpr char VERSION[] = "0.20.2-sticks3-songs";
 #endif
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ
@@ -188,6 +189,8 @@ static constexpr uint32_t ORPHAN_CHECKPOINT_MS=1000;
 static bool orphanSeen=false;static uint32_t orphanSince=0;
 static uint8_t brightnessPercent=Brightness::DEFAULT_PERCENT;
 static bool displayFlipped=false;
+// Shake to wake (0.20.2, shake_wake_setting.h): whether an inactivity sleep arms the IMU wake.
+static bool shakeToWake=ShakeWakeSetting::DEFAULT_ON;
 static RpmEstimator::Mode rpmEstimator=RpmEstimator::DEFAULT_MODE;
 static StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;
 static MountOrientation::Mode mountMode=MountOrientation::Mode::Top;
@@ -539,8 +542,8 @@ LOOP_HELPER static void status() {
   Serial.printf("HISTORY_PENDING unsaved_pulls=%lu pending_ms=%lu flush_due_ms=%lu coalesce_ms=%lu max_pending_ms=%lu retry_remaining_ms=%lu\n",
     (unsigned long)(historyLog.isOpen()?practice.generation()-loggedHistory:practiceStore.pendingCount(practice)),(unsigned long)pendingMs,
     (unsigned long)(pendingHistory?flushDue:0),(unsigned long)coalesceMs,(unsigned long)HistoryCheckpoint::MAX_PENDING_MS,(unsigned long)retryRemaining);
-  Serial.printf("POWER_STATUS auto_off_s=%lu wake=shake sleep=imu_only sensor_rail=L2_off_in_battery_standby idle_s=%lu off_in_s=%lu battery_valid=%d battery_mv=%u battery_pct=%d charging=%s max_battery_poll_us=%lu auto_off_inhibited=%d\n",
-    (unsigned long)(inactivity.timeout()/1000),(unsigned long)(inactivity.elapsed(now)/1000),(unsigned long)((inactivity.remaining(now)+999)/1000),
+  Serial.printf("POWER_STATUS auto_off_s=%lu shake_wake=%d wake=%s sleep=%s sensor_rail=L2_off_in_battery_standby idle_s=%lu off_in_s=%lu battery_valid=%d battery_mv=%u battery_pct=%d charging=%s max_battery_poll_us=%lu auto_off_inhibited=%d\n",
+    (unsigned long)(inactivity.timeout()/1000),shakeToWake,shakeToWake?"shake":"side_key",shakeToWake?"imu_only":"power_off",(unsigned long)(inactivity.elapsed(now)/1000),(unsigned long)((inactivity.remaining(now)+999)/1000),
     battery.valid(now),unsigned(battery.millivolts),battery.valid(now)?battery.percent:-1,
     battery.chargeName(),(unsigned long)maxBatteryPollUs,usbAwake.inhibited(now));
   Serial.printf("USB_POWER host_sof=%d host_seen=%d auto_off_inhibited=%d reason=%s power_known=%d last_power_read_ok=%d source=0x%02x host_poll_ms=%lu power_poll_ms=%lu\n",
@@ -692,6 +695,7 @@ static uint8_t settingValue(unsigned row) {
     case S::Celebrate:return uint8_t(milestones.mode());
     case S::Sound:return uint8_t(appearance.sound);
     case S::Mount:return uint8_t(mountMode);
+    case S::ShakeWake:return uint8_t(shakeToWake);
     case S::WipeAll:break;
   }
   return 0;
@@ -1098,6 +1102,7 @@ static void writeSettings() {
   if((items&SettingsSave::Sleep) && prefs.putUChar("sleep_min",inactivity.minutes())==1)saved|=SettingsSave::Sleep;
   if((items&SettingsSave::Brightness) && prefs.putUChar(Brightness::KEY,brightnessPercent)==1)saved|=SettingsSave::Brightness;
   if((items&SettingsSave::Flip) && DisplayFlipSetting::save(prefs,displayFlipped))saved|=SettingsSave::Flip;
+  if((items&SettingsSave::ShakeWake) && ShakeWakeSetting::save(prefs,shakeToWake))saved|=SettingsSave::ShakeWake;
   if(items&SettingsSave::Mount) {
     bool current=liveMount==mountMode;
     if(!current && imuAcquisition.setMount(mountMode)) {
@@ -1143,6 +1148,7 @@ static void commitSetting() {
       break;
     case Controls::Setting::Brightness:changed=value!=brightnessPercent;brightnessPercent=value;break;
     case Controls::Setting::Flip:changed=bool(value)!=displayFlipped;displayFlipped=value;break;
+    case Controls::Setting::ShakeWake:changed=bool(value)!=shakeToWake;shakeToWake=value;break;
     case Controls::Setting::Sensor:
       applied=StickS3SensorProfile::valid(value);changed=applied && StickS3SensorProfile::Mode(value)!=sensorProfile;
       if(changed)sensorProfile=StickS3SensorProfile::Mode(value);
@@ -1537,18 +1543,33 @@ LOOP_HELPER static ShutdownFlush flushForShutdown(uint32_t now,const Snapshot &s
   return ShutdownFlush::Ready;
 }
 
+#if LAUNCHLAB_HIL
+// !sleepdry: the wake state the sleep set up, read back where it would have
+// powered off (the caller holds the IMU/I2C gate): PM1's wake enables (0x18,
+// GPIO4 = the IMU's interrupt), its hold (0x07, bit 5 holds the IMU supply)
+// and the IMU's power control (bit 2 accelerometer, bit 1 gyroscope).
+static void hilSleepDryReport(const SleepPlan &plan) {
+  uint8_t wake=0xff,hold=0xff,imu=0xff;
+  const bool ok=pm1Idle().read(0x18,&wake,1) && pm1Idle().read(0x07,&hold,1) && M5.In_I2C.readRegister(0x68,0x7D,&imu,1,400000);
+  Serial.printf("SLEEP_DRY_RUN ok=%d shake_wake=%d arm_imu=%d wake=%s mode=%s pm1_wake=0x%02x pm1_hold=0x%02x imu_power=0x%02x imu_wake_armed=%d\n",
+    ok,shakeToWake,plan.armImu,plan.wake,plan.mode,wake,hold,imu,ok && (wake&0x18)==0x10 && (hold&0x60)==0x20);
+}
+#endif
 LOOP_HELPER static void autoPowerOff(uint32_t now,const Snapshot &s) {
   if(wipeBlocked || controls.page==Controls::Page::Wipe)return;
 #if LAUNCHLAB_HIL
   if(!Hil::allowSleep.load())return;
+  const bool dry=Hil::sleepDry.load();  // The rig's host is attached: never really sleep.
+#else
+  constexpr bool dry=false;
 #endif
-  if(usbAwake.inhibited(now))return;
+  if(usbAwake.inhibited(now) && !dry)return;
   if(motionPending || !inactivity.due(now,s.phase==AnalogTachometer::Phase::Launch) ||
      (lastShutdownTry && now-lastShutdownTry<60000))return;
   // Recheck immediately at the timer boundary; periodic polling alone could
   // leave a just-attached computer unnoticed for up to 250ms.
   pollUsbAwake(now,s,true);
-  if(usbAwake.inhibited(now) || !inactivity.due(now,s.phase==AnalogTachometer::Phase::Launch))return;
+  if((usbAwake.inhibited(now) && !dry) || !inactivity.due(now,s.phase==AnalogTachometer::Phase::Launch))return;
   lastShutdownTry=now;
   // A failed save retries after 60 s; a new pull restarts the full timeout.
   const auto flushed=flushForShutdown(now,s);
@@ -1556,7 +1577,7 @@ LOOP_HELPER static void autoPowerOff(uint32_t now,const Snapshot &s) {
   if(flushed!=ShutdownFlush::Ready)return;
   // A host may attach while the forced history flush is blocking.
   pollUsbAwake(millis(),acquisition.snapshot(),true);
-  if(usbAwake.inhibited(millis())) {
+  if(usbAwake.inhibited(millis()) && !dry) {
     if(!acquisition.request(Action::CheckpointEnd))acquisition.request(Action::Pin,s.pin);
     return;
   }
@@ -1566,7 +1587,9 @@ LOOP_HELPER static void autoPowerOff(uint32_t now,const Snapshot &s) {
   UsbTx::drain(200);
   if(imuAcquisition.lock()) {
     bool usbCancelled=false;
-    if(shakeWake.arm()) {
+    // Shake to wake Off sleeps as the side key's power-off does: no IMU arm.
+    const auto plan=sleepPlan(shakeToWake);
+    if(!plan.armImu || shakeWake.arm()) {
       const WakeUi::State state{tournamentMode,historyPage && !demo && !diagnostics,
         uint8_t(tournamentView),uint8_t(historyView)};
       if(prefs.putUInt("wake_ui",WakeUi::encode(state))==sizeof(uint32_t) && saveWakeNavigation()) {
@@ -1578,16 +1601,19 @@ LOOP_HELPER static void autoPowerOff(uint32_t now,const Snapshot &s) {
         if(!savePowerLog())Serial.println("POWER_LOG_NOTICE sleep_checkpoint_failed");
         sleepReceipt={PowerDiagnostics::MAGIC,wallUs()};
         M5.Display.setBrightness(0);M5.Display.sleep();
-        Serial.printf("SHAKE_SLEEP timeout_s=%lu sensor_rail=L2_off_on_battery wake=imu_motion mode=imu_only\n",(unsigned long)(inactivity.timeout()/1000));UsbTx::drain(200);
+        Serial.printf("SHAKE_SLEEP timeout_s=%lu sensor_rail=L2_off_on_battery wake=%s mode=%s shake_wake=%d\n",(unsigned long)(inactivity.timeout()/1000),plan.wake,plan.mode,shakeToWake);UsbTx::drain(200);
         // Flash/USB flushing above can outlast the earlier host check. This
         // last O(1) SOF read is safe while holding the IMU mutex; do not call
         // pollUsbAwake here because it can attempt that mutex again.
-        if(HWCDC::isPlugged()) {
-          usbCancelled=true;usbAwake.sampleHost(millis(),true);usbAutoOffInhibited=true;
-          inactivity.touch(millis());lastShutdownTry=0;
+        if(dry || HWCDC::isPlugged()) {
+          usbCancelled=true;inactivity.touch(millis());lastShutdownTry=0;
+          if(!dry){usbAwake.sampleHost(millis(),true);usbAutoOffInhibited=true;}
           --powerLog.sleeps;powerLog.next=previousPowerNext;powerLog.count=previousPowerCount;
           powerLog.records[previousPowerNext]=previousPowerRecord;powerLogDirty=true;
-          Serial.println("POWER_OFF_DEFERRED usb_host_attached_before_sleep");
+#if LAUNCHLAB_HIL
+          if(dry)hilSleepDryReport(plan);
+#endif
+          Serial.println(dry?"POWER_OFF_DEFERRED sleep_dry_run":"POWER_OFF_DEFERRED usb_host_attached_before_sleep");
         } else shakeWake.sleep();
         sleepReceipt.magic=0;powerLog.pendingSleep=0;
         savePowerLog();
@@ -1604,7 +1630,7 @@ LOOP_HELPER static void autoPowerOff(uint32_t now,const Snapshot &s) {
     const bool extRestored=pm1Idle().run([](){M5.Power.setExtOutput(extPower);return true;});
     imuAcquisition.unlock();
     if(!extRestored)Serial.println("EXT_POWER_NOTICE restore_wake_failed");
-    Serial.printf("POWER_OFF_DEFERRED reason=%s restored=%d retry_s=%u\n",usbCancelled?"usb_host_attached":"shake_sleep_failed",restored,usbCancelled?0:60);
+    Serial.printf("POWER_OFF_DEFERRED reason=%s restored=%d retry_s=%u\n",dry?"sleep_dry_run":usbCancelled?"usb_host_attached":"shake_sleep_failed",restored,usbCancelled?0:60);
   } else Serial.println("POWER_OFF_DEFERRED imu_bus_busy");
   if(!acquisition.request(Action::CheckpointEnd))acquisition.request(Action::Pin,s.pin);
 }
@@ -1680,7 +1706,7 @@ LOOP_HELPER static void exportBackup() {
   if(!contents){Serial.println("BACKUP_ERROR out_of_memory");return;}
   contents->practice=practice;contents->look=appearance;contents->bests=personalBests;
   contents->hasMotion=referenceMotion.valid();if(contents->hasMotion)contents->motion=referenceMotion;
-  contents->settings={inactivity.minutes(),brightnessPercent,rpmEstimator,sensorProfile,displayFlipped,mountMode};
+  contents->settings={inactivity.minutes(),brightnessPercent,rpmEstimator,sensorProfile,displayFlipped,mountMode,shakeToWake};
   contents->hasThemes=!themeLibrary.empty();contents->themes=themeLibrary;
   contents->hasMilestones=!milestones.isDefault();contents->milestones=milestones;
   contents->hasEffectSet=!effectSet.isDefault();contents->effectSet=effectSet;
@@ -1745,6 +1771,7 @@ LOOP_HELPER static void finishRestore(const Snapshot &s) {
     prefs.putUChar("sleep_min",settings.sleepMinutes)==1 && prefs.putUChar(Brightness::KEY,settings.brightness)==1 &&
     RpmEstimatorSetting::save(prefs,settings.rpmMethod) && SensorProfileSetting::save(prefs,settings.sensorProfile) &&
     DisplayFlipSetting::save(prefs,settings.flipped) && MountOrientationSetting::save(prefs,settings.mount) &&
+    ShakeWakeSetting::save(prefs,settings.shakeWake) &&
     (!contents->hasThemes || themeStore.save(contents->themes,true)) &&
     (!contents->hasMilestones || milestoneStore.save(contents->milestones)) &&
     (!contents->hasEffectSet || effectSetStore.saveViewed(contents->effectSet));
@@ -2346,9 +2373,13 @@ void setup() {
   if(!SensorProfileSetting::load(prefs,sensorProfile))Serial.println("SENSOR_SETTING_NOTICE invalid_record_retained_using_standard_default");
   loadStartMarks();
   const uint8_t sleepMinutes=prefs.getUChar("sleep_min",InactivityTimer::DEFAULT_MINUTES);
-  if(!inactivity.setMinutes(sleepMinutes))Serial.println("SLEEP_SETTING_NOTICE invalid_saved_value_using_3_min");
+  if(!inactivity.setMinutes(sleepMinutes)) {
+    inactivity.setMinutes(InactivityTimer::DEFAULT_MINUTES);
+    Serial.printf("SLEEP_SETTING_NOTICE invalid_saved_value_using_%u_min\n",unsigned(InactivityTimer::DEFAULT_MINUTES));
+  }
   if(!Brightness::load(prefs,brightnessPercent))
     Serial.printf("BRIGHTNESS_SETTING_NOTICE invalid_saved_value_using_default_pct=%u\n",unsigned(Brightness::DEFAULT_PERCENT));
+  if(!ShakeWakeSetting::load(prefs,shakeToWake))Serial.println("SHAKE_WAKE_SETTING_NOTICE invalid_saved_value_retained_using_on");
   if(!DisplayFlipSetting::load(prefs,displayFlipped))Serial.println("DISPLAY_SETTING_NOTICE invalid_record_retained_using_flip_off_default");
   if(!MountOrientationSetting::load(prefs,mountMode))Serial.println("MOUNT_SETTING_NOTICE invalid_record_retained_using_top_default");
   liveMount=mountMode;

@@ -34,7 +34,8 @@ int main() {
   assert(!filter.state().valid && !filter.state().sampleUs);
   a[0]=0;feed(100);filter.feed(us+10000,a,g,false);assert(!filter.state().valid);
 
-  InactivityTimer timer;timer.begin(1000,true);
+  // A 3-minute session (the default is 1 minute from 0.20.2).
+  InactivityTimer timer;assert(timer.setMinutes(3));timer.begin(1000,true);
   for(uint32_t t=1000;t<91000;t+=100)timer.motion(t);
   assert(timer.unusedShake() && timer.activeTimeout()==30000 && !timer.due(91000));
   assert(!timer.due(120899) && timer.due(120900));

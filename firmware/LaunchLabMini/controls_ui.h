@@ -12,7 +12,8 @@
 namespace ControlsUI {
 static constexpr const char *MENU[]={"History","New session","Battery","Settings","Tournament","Back"};
 static constexpr const char *HISTORY[]={"Launches","Pull trend","Session trend","Back"};
-static constexpr const char *SETTINGS[]={"Sleep after","RPM method","Brightness","Flip display","Sensor profile","Theme","Best effect","Celebrate","Sound","Mounting","Wipe all","Back"};
+// By Controls::Setting value; the list shows them in Controls::ORDER.
+static constexpr const char *SETTINGS[]={"Sleep after","RPM method","Brightness","Flip display","Sensor profile","Theme","Best effect","Celebrate","Sound","Mounting","Shake to wake","Wipe all","Back"};
 // Set by the UI owner before rendering: the visible theme's colors, the
 // names the Theme row shows (custom themes; the built-in names otherwise)
 // and the milestone table the Celebrate editor summarizes.
@@ -50,21 +51,24 @@ inline void value(char *out,unsigned length,unsigned setting,unsigned value) {
     case Controls::Setting::Celebrate:snprintf(out,length,"%s",Milestones::label(Milestones::Mode(value)));break;
     case Controls::Setting::Sound:snprintf(out,length,"%s",Appearance::label(Appearance::Sound(value)));break;
     case Controls::Setting::Mount:snprintf(out,length,"%s",MountOrientation::label(MountOrientation::Mode(value)));break;
+    case Controls::Setting::ShakeWake:snprintf(out,length,"%s",value?"On":"Off");break;
     case Controls::Setting::WipeAll:snprintf(out,length,"Erase device data");break;
   }
 }
 inline void settings(lgfx::LGFXBase &g,const Controls::State &state,const uint8_t *values) {
   heading(g,"Settings");char text[24];
-  // Pages of five rows: general, appearance, then Wipe all and Back.
-  const unsigned first=state.setting<5?0:state.setting<10?5:10,last=std::min(first+4,Controls::SETTING_COUNT);
-  for(unsigned i=first;i<=last;++i) {
-    const int y=33+int(i-first)*31;
+  // Pages of five rows (Controls::ORDER): general, appearance, then
+  // Mounting, Wipe all and Back.
+  const unsigned at=Controls::position(state.setting),first=at<5?0:at<10?5:10,last=std::min(first+4,Controls::SETTING_COUNT);
+  for(unsigned p=first;p<=last;++p) {
+    const unsigned i=Controls::rowAt(p);
+    const int y=33+int(p-first)*31;
     if(i==state.setting)g.drawRoundRect(4,y-3,g.width()-8,30,4,colors.accent);
     g.setTextColor(i==state.setting?colors.accent:colors.text,colors.background);
     g.drawString(SETTINGS[i],g.width()/2,y,2);
     if(i<Controls::SETTING_COUNT){value(text,sizeof(text),i,i<Controls::EDITABLE_SETTING_COUNT?values[i]:0);g.drawString(text,g.width()/2,y+18,1);}
   }
-  if(first<10){g.setTextColor(colors.muted,colors.background);g.drawString(first?"B Next: wipe all":"B Next: appearance",g.width()/2,194,1);}
+  if(first<10){g.setTextColor(colors.muted,colors.background);g.drawString(first?"B Next: mounting":"B Next: appearance",g.width()/2,194,1);}
   footer(g,state.setting==unsigned(Controls::Setting::WipeAll)?"A Open  B Next":state.setting<Controls::SETTING_COUNT?"A Edit  B Next":"A Back  B Next");
 }
 inline void editor(lgfx::LGFXBase &g,const Controls::State &state,bool failed,bool changedMetric) {
