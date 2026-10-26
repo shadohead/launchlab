@@ -25,6 +25,7 @@ public:
   }
   // The real store keeps a typed u8; here it is a one-byte record.
   uint8_t getUChar(const char *key,uint8_t fallback=0){auto i=data.find(space+key);return i==data.end() || i->second.size()!=1?fallback:i->second[0];}
+  size_t putUChar(const char *key,uint8_t value){return putBytes(key,&value,1);}
   bool remove(const char *key){if(beforeWrite)beforeWrite();if(failWrite)return false;return data.erase(space+key)!=0;}
   size_t putBytes(const char *key,const void *bytes,size_t n) {
     if(beforeWrite)beforeWrite();

@@ -576,6 +576,15 @@
       "md5": "62d597b18484f6dddaa791ba57952aac",
       "elfSha256": "47ca9bbf11594ac6bde9976a5f04eea178af412ce73203aedbf56fe5eb95d0f3",
       "sensor": "qre1113"
+    },
+    {
+      "version": "0.20.2",
+      "runtime": "0.20.2-sticks3-songs-pm",
+      "size": 1848688,
+      "sha256": "d8dd23138fdf0b720c4abfb7bc497a30902c89d0ceb7c9b6dc43fcd449d12b70",
+      "md5": "4a2b8b0f68919996e469a78643e633a9",
+      "elfSha256": "b8a706ed7cf22047466e2d8eb5001dfaaac6d0a228e172a347ab26e3ab0f5dd5",
+      "sensor": "qre1113"
     }
   ],
   "profiles": [

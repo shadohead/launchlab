@@ -29,6 +29,7 @@ prefix=r'''
 #include "brightness.h"
 #include "device_wipe.h"
 #include "display_flip_setting.h"
+#include "shake_wake_setting.h"
 #include "display_orientation.h"
 #include "sensor_profile_setting.h"
 #include "start_mark_reference.h"
@@ -63,7 +64,7 @@ static struct {void cancel(){}}restoreRx;
 static void beginWipe();static void cancelWipe();
 // The start-mark reference (its saves are checked by check_save_paths).
 static StartMarkReference::Reference startMarks;static bool startMarksDirty=false;static void loadStartMarks(){}static void saveStartMarks(){}
-static bool tournamentMode=false,historyPage=false,dirty=false,diagnostics=false,demo=false,motionDemo=false,motionPending=false,settingsSaveError=false,restorePreview=false,displayFlipped=false;
+static bool tournamentMode=false,historyPage=false,dirty=false,diagnostics=false,demo=false,motionDemo=false,motionPending=false,settingsSaveError=false,restorePreview=false,displayFlipped=false,shakeToWake=ShakeWakeSetting::DEFAULT_ON;
 static uint8_t brightnessPercent=Brightness::DEFAULT_PERCENT;
 static uint32_t historyOffset=0,newSessionAt=0,tournamentHintUntil=0;
 enum class TournamentView:uint8_t{RecordingOnly,Rpm};
@@ -148,7 +149,7 @@ visible_start=source.index('static bool visibleDisplayFlipped()')
 prefix+='\n'+source[visible_start:source.index('}',visible_start)+1]+'\n'
 tests=r'''
 static void reset(){
-  controls={};appearance={};appearanceStore={};bestEffect={};tournamentMode=historyPage=dirty=diagnostics=demo=motionDemo=motionPending=settingsSaveError=restorePreview=displayFlipped=false;
+  controls={};appearance={};appearanceStore={};bestEffect={};tournamentMode=historyPage=dirty=diagnostics=demo=motionDemo=motionPending=settingsSaveError=restorePreview=displayFlipped=false;shakeToWake=ShakeWakeSetting::DEFAULT_ON;
   gestureA={};gestureB={};wipeConfirmation={};wipeFailed=wipeBlocked=false;
   historyOffset=newSessionAt=tournamentHintUntil=0;historyView=PracticeUI::View::Recent;tournamentView=TournamentView::RecordingOnly;
   practice={};demoPractice={};latestMotion={};launchFeedback={};inactivity={};brightnessPercent=BRIGHT;rpmEstimator=RpmEstimator::DEFAULT_MODE;sensorProfile=StickS3SensorProfile::DEFAULT_MODE;
@@ -205,6 +206,29 @@ static void bootDefaults() {
     const auto before=Preferences::data;boot();
     assert(rpmEstimator==method && brightnessPercent==percent && Preferences::data==before && !prefs.writes && Serial.last.empty());
   }
+  // Sleep after (the owner, 2026-10-26): 1 minute for a unit that never
+  // chose; a saved choice, the old 3-minute default included, is kept; an
+  // invalid saved value falls back to 1 and is kept as it is.
+  static_assert(InactivityTimer::DEFAULT_MINUTES==1);
+  freshStore();inactivity.setMinutes(10);boot();
+  assert(inactivity.minutes()==1 && inactivity.timeout()==60000 && Preferences::data.empty() && !prefs.writes && Serial.last.empty());
+  for(uint8_t minutes:{2,3,5,10}) {
+    freshStore();assert(prefs.putUChar("sleep_min",minutes)==1);const auto before=Preferences::data;
+    inactivity.setMinutes(minutes==10?2:10);boot();
+    assert(inactivity.minutes()==minutes && Preferences::data==before && !prefs.writes && Serial.last.empty());
+  }
+  for(uint8_t bad:{0,11,255}) {
+    freshStore();assert(prefs.putUChar("sleep_min",bad)==1);const auto before=Preferences::data;
+    inactivity.setMinutes(10);boot();
+    assert(inactivity.minutes()==1 && Preferences::data==before && !prefs.writes && Serial.last=="SLEEP_SETTING_NOTICE invalid_saved_value_using_%u_min\n");
+  }
+  // Shake to wake (0.20.2): On with no saved choice; a saved Off is kept;
+  // an invalid record reads as On, is kept, and says so.
+  freshStore();shakeToWake=false;boot();assert(shakeToWake && Preferences::data.empty() && !prefs.writes);
+  freshStore();assert(prefs.putUChar(ShakeWakeSetting::KEY,0)==1);{const auto before=Preferences::data;shakeToWake=true;boot();
+   assert(!shakeToWake && Preferences::data==before && !prefs.writes && Serial.last.empty());}
+  freshStore();assert(prefs.putUChar(ShakeWakeSetting::KEY,9)==1);{const auto before=Preferences::data;shakeToWake=false;boot();
+   assert(shakeToWake && Preferences::data==before && !prefs.writes && Serial.last=="SHAKE_WAKE_SETTING_NOTICE invalid_saved_value_retained_using_on");}
   // Invalid records: the defaults are used, the bytes are kept and each
   // notice names the default it fell back to.
   for(uint8_t percent:{0,5,45,110,255}) {
@@ -324,7 +348,7 @@ int main(){
   holdB();assert(visibleDisplayFlipped() && M5.Display.rotation==0 && restorePreview && Preferences::data==flipStored);
   acquisition.state.phase=AnalogTachometer::Phase::Ready;previewSetting();assert(!restorePreview && M5.Display.rotation==0);
   // Apply during a pull or capture: the choice is taken, its record waits.
-  reset();edit(0);for(unsigned i=0;i<7;++i)buttonB();assert(controls.draft==10 && inactivity.minutes()==3 && !prefs.writes);
+  reset();edit(0);for(unsigned i=0;i<9;++i)buttonB();assert(controls.draft==10 && inactivity.minutes()==1 && !prefs.writes);
   acquisition.state.phase=AnalogTachometer::Phase::Launch;buttonA();
   assert(controls.page==Page::Settings && !settingsSaveError && inactivity.minutes()==10 && !prefs.writes && settingsSave.pending()==SettingsSave::Sleep);
   acquisition.state.phase=AnalogTachometer::Phase::Ready;motionPending=true;retry(20);assert(!prefs.writes && !acquisition.refusals);

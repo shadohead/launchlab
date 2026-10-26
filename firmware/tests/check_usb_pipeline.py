@@ -105,6 +105,7 @@ struct Receipt {uint32_t magic=0;int64_t atUs=0;} sleepReceipt;
 struct ShakeWake {unsigned arms=0,sleeps=0,restores=0;bool arm(){++arms;return true;}bool restore(){++restores;return true;}
   bool sleep(){assert(!practiceStore.pending(practice));++sleeps;return false;}
 } shakeWake;
+static bool shakeToWake=true;
 static unsigned restoreFailureNotes=0;static void noteMotionRestoreFailure(){++restoreFailureNotes;}
 static void prepareMotion(const Snapshot&){motionPending=true;}
 static void logLaunchMetrics(const Snapshot&){}static void noteStartMark(const Snapshot&){}static void saveStartMarks(){}

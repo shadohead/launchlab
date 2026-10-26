@@ -115,6 +115,7 @@ static void powerRecord(uint8_t){}static bool savePowerLog(){return true;}
 struct SleepReceipt{uint32_t magic;int64_t atUs;};static SleepReceipt sleepReceipt;
 struct {bool arm(){return true;}bool restore(){return true;}
   bool sleep(){assert(!practiceStore.pending(practice));reachedSleep=true;return false;}} shakeWake;
+static bool shakeToWake=true;
 static unsigned restoreFailureNotes=0;static void noteMotionRestoreFailure(){++restoreFailureNotes;}
 static void logLaunchMetrics(const Snapshot&){}static void noteStartMark(const Snapshot&){}static void saveStartMarks(){}
 // Settings persistence has its own production harness (check_save_paths.py).

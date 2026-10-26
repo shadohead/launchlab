@@ -4,10 +4,10 @@
 
 int main() {
   InactivityTimer timer;timer.touch(1000);
-  assert(timer.minutes()==3 && timer.timeout()==180000);
-  assert(timer.remaining(1000)==180000 && !timer.due(180999));
-  assert(timer.due(181000) && timer.remaining(181000)==0);
-  assert(!timer.due(181000,true)); // active measured burst is protected
+  assert(timer.minutes()==1 && timer.timeout()==60000);
+  assert(timer.remaining(1000)==60000 && !timer.due(60999));
+  assert(timer.due(61000) && timer.remaining(61000)==0);
+  assert(!timer.due(61000,true)); // active measured burst is protected
   for(uint8_t minutes=1;minutes<=10;++minutes) {
     assert(timer.setMinutes(minutes));timer.touch(1000);
     assert(!timer.due(1000+timer.timeout()-1));assert(timer.due(1000+timer.timeout()));
@@ -56,5 +56,5 @@ int main() {
   smooth.update(3500,true,true,1,66000);assert(smooth.percent==25); // stale samples reset
   smooth.update(0,false,false,0,67000);assert(smooth.percent==-1);
   smooth.update(3700,true,true,1,68000);assert(smooth.percent==50); // error recovery resets
-  std::cout<<"PASS: 3-minute default, all 1–10 minute timeouts, invalid-value rejection, activity reset, active-burst guard, millis wrap, checked battery voltage, estimate limits, stale/error handling and charging GPIO\n";
+  std::cout<<"PASS: 1-minute default, all 1–10 minute timeouts, invalid-value rejection, activity reset, active-burst guard, millis wrap, checked battery voltage, estimate limits, stale/error handling and charging GPIO\n";
 }

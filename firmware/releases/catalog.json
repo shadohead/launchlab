@@ -930,5 +930,20 @@
       "tcrt5000"
     ],
     "published_channel": "beta"
+  },
+  {
+    "release": "0.20.2-sticks3-songs-pm",
+    "runtime_version": "0.20.2-sticks3-songs-pm",
+    "board": "M5StickS3 K150",
+    "date": "2026-10-26",
+    "binary": "LaunchLabMini.ino.bin",
+    "binary_bytes": 1848688,
+    "sha256": "d8dd23138fdf0b720c4abfb7bc497a30902c89d0ceb7c9b6dc43fcd449d12b70",
+    "application_offset": "0x10000",
+    "profiles": [
+      "qre1113",
+      "tcrt5000"
+    ],
+    "published_channel": "beta"
   }
 ]

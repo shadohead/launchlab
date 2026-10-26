@@ -71,6 +71,7 @@ prefix = r'''
 #include "rpm_estimator_setting.h"
 #include "brightness.h"
 #include "display_flip_setting.h"
+#include "shake_wake_setting.h"
 #include "display_orientation.h"
 #include "sensor_profile_setting.h"
 #include "start_mark_reference.h"
@@ -121,7 +122,7 @@ struct Prefs:Preferences {
 static uint8_t stored(const char *key){uint8_t value=0;assert(prefs.getBytes(key,&value,1)==1);return value;}
 struct {struct {unsigned brightness=0,rotation=0;void setBrightness(unsigned v){brightness=v;}void setRotation(unsigned v){rotation=v;}}Display;}M5;
 static Controls::State controls;static SettingsSave settingsSave;
-static bool motionPending=false,settingsSaveError=false,restorePreview=false,displayFlipped=false,dirty=false,extPower=false;
+static bool motionPending=false,settingsSaveError=false,restorePreview=false,displayFlipped=false,dirty=false,extPower=false,shakeToWake=ShakeWakeSetting::DEFAULT_ON;
 static bool saveError=false,wipeCheckpointHeld=false,orphanSeen=false;
 static uint8_t brightnessPercent=Brightness::DEFAULT_PERCENT;static uint32_t orphanSince=0;
 static constexpr uint32_t ORPHAN_CHECKPOINT_MS=1000,HISTORY_COALESCE_MS=10000,HISTORY_SAVE_RETRY_MS=5000;
@@ -189,7 +190,7 @@ static void boot() {
   StickS3SensorProfile::configure(acquisition.detector_,StickS3SensorProfile::Mode::Standard);
   assert(acquisition.initAdc());ownerPump=pump;acquisition.setRequestHook(quietImuForFlash);
   dropReplies=dropCommands=false;imuAcquisition={};controls={};settingsSave={};
-  motionPending=settingsSaveError=restorePreview=displayFlipped=dirty=extPower=saveError=wipeCheckpointHeld=orphanSeen=false;
+  motionPending=settingsSaveError=restorePreview=displayFlipped=dirty=extPower=saveError=wipeCheckpointHeld=orphanSeen=false;shakeToWake=ShakeWakeSetting::DEFAULT_ON;
   brightnessPercent=Brightness::DEFAULT_PERCENT;orphanSince=lastSaveTry=saveCount=saveErrors=maxSaveUs=lastAcceptedAt=historyPendingSince=0;
   inactivity={};launchFeedback={};practice={};appearance={};personalBests={};
   rpmEstimator=RpmEstimator::DEFAULT_MODE;sensorProfile=StickS3SensorProfile::DEFAULT_MODE;
@@ -216,6 +217,19 @@ static void freshEdgeAtApply() {
     passes(1000);assert(!settingsSave.pending() && stored("bright_pct")==50+10*i && imuAcquisition.windows==i+1u && running());
   }
   std::cout<<"PASS: Apply right after a fresh optical edge (the press jiggling the launcher) is taken at once and saved on the next quiet pass\n";
+}
+
+// Shake to wake (0.20.2) is a setting: Apply takes it at once, its own key is
+// written in the next checkpoint and, like every setting, it never waits for
+// the optional-record reserve (the reserve exists so settings still fit).
+static void shakeWakeSave() {
+  using S=Controls::Setting;
+  boot();freeEntries=0;apply(unsigned(S::ShakeWake),0);
+  assert(!shakeToWake && SettingsSave::item(unsigned(S::ShakeWake))==SettingsSave::ShakeWake);
+  passes(1000);assert(!settingsSave.pending() && stored(ShakeWakeSetting::KEY)==0 && running());
+  apply(unsigned(S::ShakeWake),1);passes(1000);assert(shakeToWake && !settingsSave.pending() && stored(ShakeWakeSetting::KEY)==1);
+  freeEntries=158;
+  std::cout<<"PASS: Shake to wake applies at once and saves its own key in the next checkpoint, never held back by the NVS reserve\n";
 }
 
 static void imuVeto() {
@@ -722,7 +736,7 @@ static void sensorFaultHistory() {
 
 main = r'''
 int main() {
-  freshEdgeAtApply();imuVeto();applyDuringPull();lostReplies();usbDeviceSettings();shutdownFlush();startMarkSaves();themeRequests();milestoneRequests();milestoneImport();effectSetRequests();nvsReserve();historyLogSaves();sensorFaultHistory();
+  freshEdgeAtApply();imuVeto();shakeWakeSave();applyDuringPull();lostReplies();usbDeviceSettings();shutdownFlush();startMarkSaves();themeRequests();milestoneRequests();milestoneImport();effectSetRequests();nvsReserve();historyLogSaves();sensorFaultHistory();
 }
 '''
 

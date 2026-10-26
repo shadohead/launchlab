@@ -59,6 +59,10 @@ struct UserSettings {
   StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;
   bool flipped=false;
   MountOrientation::Mode mount=MountOrientation::Mode::Top;
+  // 0.20.2: byte 6 of the settings section, 1 for Off. A backup from a unit
+  // with it On is byte for byte as before (older backups restore as On);
+  // firmware before 0.20.2 refuses one with it Off before writing anything.
+  bool shakeWake=InactivityTimer::SHAKE_WAKE_DEFAULT;
 };
 
 struct Contents {
@@ -131,7 +135,7 @@ inline size_t encode(const Contents &c,const char *runtime,uint8_t *out,size_t c
   Appearance::Bests::Image bests;c.bests.encode(bests);section(Bests,bests.data(),bests.size());
   if(c.hasMotion && c.motion.valid()){LaunchMotion::encode(c.motion,1,*motion);section(Motion,motion->data(),motion->size());}
   const uint8_t settings[SETTINGS_BYTES]={c.settings.sleepMinutes,c.settings.brightness,uint8_t(c.settings.rpmMethod),
-    uint8_t(c.settings.sensorProfile),uint8_t(c.settings.flipped),uint8_t(c.settings.mount),0,0};
+    uint8_t(c.settings.sensorProfile),uint8_t(c.settings.flipped),uint8_t(c.settings.mount),uint8_t(!c.settings.shakeWake),0};
   section(Settings,settings,sizeof(settings));
   const uint32_t format=c.format();
   if(c.themesSection()){Themes::Library::Image themes;c.themes.encode(themes);section(CustomThemes,themes.data(),themes.size());}
@@ -224,12 +228,13 @@ inline bool decode(const uint8_t *data,size_t n,Contents &out) {
       case Settings:{
         // The first reserved byte now carries mounting. Legacy backups are
         // zero (Top); older firmware rejects Sidecar before writing anything.
-        if(length!=SETTINGS_BYTES || body[6] || body[7])break;
+        // The next carries Shake to wake Off (0.20.2), the same way.
+        if(length!=SETTINGS_BYTES || body[6]>1 || body[7])break;
         auto &s=c->settings;
         ok=InactivityTimer::validMinutes(body[0]) && Brightness::valid(body[1]) &&
           RpmEstimator::valid(body[2]) && StickS3SensorProfile::valid(body[3]) && body[4]<=1 && MountOrientation::valid(body[5]);
         if(ok){s.sleepMinutes=body[0];s.brightness=body[1];s.rpmMethod=RpmEstimator::Mode(body[2]);
-          s.sensorProfile=StickS3SensorProfile::Mode(body[3]);s.flipped=body[4];s.mount=MountOrientation::Mode(body[5]);}
+          s.sensorProfile=StickS3SensorProfile::Mode(body[3]);s.flipped=body[4];s.mount=MountOrientation::Mode(body[5]);s.shakeWake=!body[6];}
         break;
       }
     }

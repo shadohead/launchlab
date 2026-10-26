@@ -24,6 +24,11 @@ inline std::atomic<int64_t> adcSilentUntil{0};
 // 1): a rig whose USB link dropped after a reboot would otherwise sleep after
 // the timeout and stay unreachable until someone shakes it.
 inline std::atomic<bool> allowSleep{false};
+// !sleepdry 1: the inactivity sleep runs its whole path with the rig's USB
+// host attached (saves, wake markers, the IMU arm or not) and stops just
+// before PM1's power-off and deep sleep, reporting the wake state it set up.
+// The unit never sleeps, so a rig is never left needing the side key.
+inline std::atomic<bool> sleepDry{false};
 // Shared start of a scripted pull (host clock, us). 0 = no pull scheduled.
 inline std::atomic<int64_t> pullStartUs{0};
 inline std::atomic<uint32_t> pullCount{0};
