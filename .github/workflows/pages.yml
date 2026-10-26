@@ -19,6 +19,16 @@ jobs:
           node-version: 24
       - run: npm test
         working-directory: site
+      # The image's clang with ASan/UBSan, as on the development Macs and in
+      # the private host suite: GCC treats byte-identical #pragma once headers
+      # as one file, so test_shake_wake could not include the frozen 0.20.1
+      # decoder beside today's. The kernel's 32 bits of mmap randomization
+      # break ASan's shadow memory, so cap them as the runner images recommend.
+      - name: Toolchain
+        run: |
+          sudo sysctl -w vm.mmap_rnd_bits=28
+          echo "CXX=clang++" >> "$GITHUB_ENV"
+          clang++ --version
       - run: bash scripts/test-firmware.sh
       - run: python3 scripts/verify-artifacts.py
       - run: npm run build
