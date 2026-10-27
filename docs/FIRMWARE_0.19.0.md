@@ -1,6 +1,6 @@
 # Firmware 0.19.0 build context (beta)
 
-The beta runtime is `0.19.0-sticks3-loadable-pm`, application SHA-256 `8a2ff3bf53130a48fa429e63bf1ab44d6d2c5373ce2e088633dac23f6f5736b6`. The compiled source snapshot is frozen in the [release directory](../firmware/releases/0.19.0-sticks3-loadable-pm/). It is a beta: the recommended release remains [0.18.0](FIRMWARE_0.18.0.md). It uses the same PM SDK, toolchain, bootloader and partition table as [0.13.5](FIRMWARE_0.13.5.md). Use the [USB updater](https://launchlab.beywatch.gg/update) for the shipping image.
+The beta runtime is `0.19.0-sticks3-loadable-pm`, application SHA-256 `8a2ff3bf53130a48fa429e63bf1ab44d6d2c5373ce2e088633dac23f6f5736b6`. The compiled source snapshot is frozen in the [release directory](../firmware/releases/0.19.0-sticks3-loadable-pm/). It is a beta: the recommended release is now [0.20.2](FIRMWARE_0.20.2.md). It uses the same PM SDK, toolchain, bootloader and partition table as [0.13.5](FIRMWARE_0.13.5.md). Use the [USB updater](https://launchlab.beywatch.gg/update) for the shipping image.
 
 ## Build from source
 
