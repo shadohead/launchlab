@@ -5,36 +5,45 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
+#include <array>
 #include <iostream>
+#include <string>
 #include <vector>
 static constexpr uint16_t TFT_BLACK=0,TFT_WHITE=1,TFT_DARKGREY=2,TFT_CYAN=3,TFT_ORANGE=4;
-static constexpr int top_center=0;
+static constexpr int top_center=0,top_left=1,top_right=2;
 namespace fonts {static int Font4=4,Font2=2;}
 namespace lgfx {
 struct LGFXBase {
   unsigned strings=0,footers=0,cycleHints=0;
   uint16_t ink=0;
+  int datum=top_center;
   std::vector<int> valueEdges;
   std::vector<int> valueFonts;
+  std::vector<std::array<int,4>> spans; // left, right, y and font of every string
+  std::vector<std::string> texts;
+  bool drew(const char *text)const{return std::find(texts.begin(),texts.end(),text)!=texts.end();}
   int width(){return 135;}
-  void setTextDatum(int){}void setTextColor(uint16_t color,uint16_t){ink=color;}
+  void setTextDatum(int d){datum=d;}void setTextColor(uint16_t color,uint16_t){ink=color;}
   void fillRect(int x,int y,int w,int h,uint16_t){assert(x>=0 && y>=0 && x+w<=135 && y+h<=240);}
   void drawRoundRect(int x,int y,int w,int h,int,uint16_t){fillRect(x,y,w,h,0);}
   int textWidth(const char *text,const int *font){return int(std::strlen(text))*(*font==4?18:8);}
   void drawString(const char *text,int x,int y,int font) {
     const int glyph=font==4?18:font==2?8:6,height=font==4?26:font==2?16:8;
     const int width=int(std::strlen(text))*glyph;
-    assert(x-width/2>=0 && x+(width+1)/2<=135 && y>=0 && y+height<=240);
+    const int left=datum==top_left?x:datum==top_right?x-width:x-width/2;
+    const int right=datum==top_left?x+width:datum==top_right?x:x+(width+1)/2;
+    assert(left>=0 && right<=135 && y>=0 && y+height<=240);
+    spans.push_back({left,right,y,font});texts.push_back(text);
     ++strings;if(y==231)++footers;
     if(!std::strcmp(text,"B next option ->")){assert(y==139 && ink==0x39e7);++cycleHints;}
-    else if(y>=86 && y<=95){valueEdges.push_back(x-width/2);valueEdges.push_back(x+(width+1)/2);valueFonts.push_back(font);}
+    else if(y>=86 && y<=95){valueEdges.push_back(left);valueEdges.push_back(right);valueFonts.push_back(font);}
   }
 };
 }
 #include "controls_ui.h"
 int main() {
   using namespace Controls;unsigned renders=0;
-  for(unsigned row=0;row<6;++row){lgfx::LGFXBase g;ControlsUI::list(g,"Menu",ControlsUI::MENU,6,row);assert(g.footers==1);++renders;}
+  for(unsigned row=0;row<MENU_COUNT;++row){lgfx::LGFXBase g;ControlsUI::list(g,"Menu",ControlsUI::MENU,MENU_COUNT,row);assert(g.footers==1);++renders;}
   for(unsigned row=0;row<4;++row){lgfx::LGFXBase g;ControlsUI::list(g,"History",ControlsUI::HISTORY,4,row);assert(g.footers==1);++renders;}
   uint8_t values[]={10,0,100,1,0,0,0,2,2,0,1};
   for(unsigned row=0;row<=SETTING_COUNT;++row){lgfx::LGFXBase g;State state;state.setting=row;ControlsUI::settings(g,state,values);assert(g.footers==1);++renders;}
@@ -101,6 +110,54 @@ int main() {
     ControlsUI::milestones=nullptr;
   }
   for(bool start:{false,true}){lgfx::LGFXBase g;ControlsUI::session(g,start);assert(g.footers==1);++renders;}
+  {
+    WearCheck::Session wear;
+    const WearCheck::Tilt tilts[]={
+      {false,0.0f,0.0f,0.0f},
+      {true,0.8f,0.05f,-0.02f},
+      {true,18.5f,0.8f,0.6f},
+      {true,87.9f,0.0f,1.0f},
+      {true,88.4f,0.0f,-1.0f}
+    };
+    for(const auto &t:tilts){lgfx::LGFXBase g;ControlsUI::wearCheck(g,wear,t,t);assert(g.footers==1);++renders;}
+    // On target, READY asks for the release only while the detector would
+    // measure it: in its rearm second after a pull, a release is taken as
+    // that pull's rewind and never reported.
+    for(bool detectorReady:{true,false}) {
+      lgfx::LGFXBase g;ControlsUI::wearCheck(g,wear,tilts[1],tilts[1],detectorReady);assert(g.footers==1);++renders;
+      assert(g.drew("READY - PULL")==detectorReady && g.drew("WAIT")==!detectorReady && g.drew("Extend, wait, let go"));
+    }
+    {lgfx::LGFXBase g;ControlsUI::wearCheck(g,wear,tilts[2],tilts[2],false);assert(g.drew("TILT TO 0 DEG") && !g.drew("WAIT"));++renders;}
+    uint32_t launches=0;
+    // Rejections and stage transitions through all 3 stages and summary.
+    wear.observePull(++launches,false,0,tilts[1]);
+    {lgfx::LGFXBase g;ControlsUI::wearCheck(g,wear,tilts[1],tilts[1]);assert(g.footers==1);++renders;}
+    wear.observePull(++launches,true,3200,tilts[0]);
+    {lgfx::LGFXBase g;ControlsUI::wearCheck(g,wear,tilts[0],tilts[0]);assert(g.footers==1);++renders;}
+    wear.observePull(++launches,true,3200,tilts[2]);
+    {lgfx::LGFXBase g;ControlsUI::wearCheck(g,wear,tilts[2],tilts[2]);assert(g.footers==1);++renders;}
+    for(unsigned i=0;i<3;++i){wear.observePull(++launches,true,3250+i*10,tilts[1]);lgfx::LGFXBase g;ControlsUI::wearCheck(g,wear,tilts[3],tilts[3]);assert(g.footers==1);++renders;}
+    wear.observePull(++launches,true,2029,tilts[1]);
+    {lgfx::LGFXBase g;ControlsUI::wearCheck(g,wear,tilts[1],tilts[1]);assert(g.footers==1);++renders;}
+    wear.observePull(++launches,true,2029,tilts[3]);
+    wear.observePull(++launches,true,2029,tilts[4]);
+    {lgfx::LGFXBase g;ControlsUI::wearCheck(g,wear,tilts[4],tilts[4]);assert(g.footers==1);++renders;}
+    wear.observePull(++launches,true,2040,tilts[3]);
+    wear.observePull(++launches,true,2020,tilts[3]);
+    for(unsigned i=0;i<3;++i){wear.observePull(++launches,true,3700+i*15,tilts[4]);lgfx::LGFXBase g;ControlsUI::wearCheck(g,wear,tilts[4],tilts[4]);assert(g.footers==1);++renders;}
+    assert(wear.complete());
+    // Every line of the result stays inside its 8..127 card, with five-digit pulls too.
+    WearCheck::Session fast;uint32_t n=0;
+    for(unsigned i=0;i<3;++i)fast.observePull(++n,true,12345+i*1111,tilts[1]);
+    for(unsigned i=0;i<3;++i)fast.observePull(++n,true,29876-i*1111,tilts[3]);
+    for(unsigned i=0;i<3;++i)fast.observePull(++n,true,10001+i,tilts[4]);
+    assert(fast.complete());
+    for(const auto *done:{&wear,&fast}) {
+      lgfx::LGFXBase g;ControlsUI::wearCheck(g,*done,tilts[4],tilts[4]);assert(g.footers==1);++renders;
+      // Font 1 (GLCD) is exactly 6 px a glyph; Font 2 widths here are only an upper bound.
+      for(const auto &span:g.spans)if(span[3]==1 && span[2]>=31 && span[2]<213)assert(span[0]>=10 && span[1]<=125);
+    }
+  }
   for(const char *label:{"Enter tournament","Exit tournament","Cancel change","Back"})for(unsigned elapsed:{0u,999u,1000u,10000u}) {
     lgfx::LGFXBase g;ControlsUI::hold(g,label,elapsed,1000);assert(g.footers==1);++renders;
   }

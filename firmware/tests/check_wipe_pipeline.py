@@ -159,7 +159,8 @@ struct Acquisition {
 }acquisition;
 struct Practice {
   struct Record{uint32_t number=1,session=1;float rpm=6000;}record;
-  bool accept(uint32_t,bool,float,uint32_t){normal();return true;}
+  unsigned accepted=0;
+  bool accept(uint32_t,bool,float,uint32_t){++accepted;normal();return true;}
   const Record *recent()const{return &record;}
 }practice;
 static LaunchMotion::Trace latestMotion,demoMotion;
@@ -191,7 +192,8 @@ static void previewHistory(){normal();}static void checkStorage(){normal();}stat
 static void exportScreen(){normal();}static void exportSignal(){normal();}
 static Appearance::Effect celebrationEffect(){return Appearance::Effect::Flames;}
 static void previewBestEffect(Appearance::Effect){normal();}
-static void prepareMotion(const Snapshot &){normal();}static void logLaunchMetrics(const Snapshot &){normal();}static void noteStartMark(const Snapshot&){}static void saveStartMarks(){}
+static unsigned motionPreps=0,startMarkNotes=0;
+static void prepareMotion(const Snapshot &){++motionPreps;normal();}static void logLaunchMetrics(const Snapshot &){normal();}static void noteStartMark(const Snapshot&){++startMarkNotes;}static void saveStartMarks(){}
 static void finishMotion(){normal();}static void retryMotion(uint32_t,const Snapshot &){normal();}
 static void saveHistory(uint32_t,const Snapshot &){normal();}
 // Settings saves and the orphaned-checkpoint release must never run after an
@@ -242,9 +244,9 @@ static void reset() {
   motionPending=dirty=diagnostics=historyPage=demo=motionDemo=tournamentMode=false;
   extPower=stress=restorePreview=settingsSaveError=displayFlipped=celebrationSound=soundPreview=lastFault=effectWasMoving=false;
   lastDraw=lastStatus=lastRevision=newSessionAt=tournamentHintUntil=uiStalls=historyOffset=0;
-  acquisition={};M5={};imuAcquisition.available=true;Serial={};restoreRx={};soundPlayer={};soundRequest={};
+  acquisition={};practice={};motionPreps=startMarkNotes=0;M5={};imuAcquisition.available=true;Serial={};restoreRx={};soundPlayer={};soundRequest={};
   M5.BtnA.setHoldThresh(1000);M5.BtnB.setHoldThresh(1000);
-  launchFeedback={};inactivity={};usbAwake={};appearance={};bestEffect={};editorEffect={};sleepReceipt.magic=123;
+  launchFeedback={};inactivity={};level={};usbAwake={};appearance={};bestEffect={};editorEffect={};sleepReceipt.magic=123;
   prefs={};Store::seed();
 }
 static void stepAt(uint32_t now,bool a=false,bool b=false,bool fresh=true) {
@@ -428,11 +430,56 @@ static void standbyGuard() {
   controls.page=Page::Main;wipeBlocked=true;autoPowerOff(millis(),acquisition.snapshot());
   assert(normalWrites==writes && !acquisition.begins);
 }
+static void wearCheckIsolation() {
+  reset();
+  controls.page=Page::Menu;controls.menu=5;buttonA();
+  assert(controls.page==Page::WearCheck && historyPage && !controls.wear.complete());
+  auto feedTilt=[&](float gx,float gy,float gz){
+    clockMs+=300;level.feed(gx,gy,gz,clockMs);
+  };
+  auto pushPull=[&](uint32_t id,float rpm){
+    Snapshot e=acquisition.state;e.revision=id;e.launches=id;e.valid=true;e.resultRpm=rpm;
+    acquisition.events.push_back(e);step();
+  };
+  feedTilt(0.0f,0.0f,1.0f);
+  for(unsigned i=1;i<=3;++i)pushPull(i,3250.0f+i*10.0f);
+  assert(controls.wear.stage()==WearCheck::Stage::VerticalUp && !practice.accepted && !motionPreps && !startMarkNotes);
+  feedTilt(0.0f,1.0f,0.0f);
+  for(unsigned i=4;i<=6;++i)pushPull(i,2020.0f+i*5.0f);
+  assert(controls.wear.stage()==WearCheck::Stage::VerticalDown && !practice.accepted && !motionPreps && !startMarkNotes);
+  feedTilt(0.0f,-1.0f,0.0f);
+  for(unsigned i=7;i<=9;++i)pushPull(i,3690.0f+i*5.0f);
+  assert(controls.wear.complete() && controls.wear.totalAccepted()==9 && !practice.accepted && !motionPreps && !startMarkNotes);
+  buttonA();assert(!controls.wear.complete() && controls.wear.totalAccepted()==0 && !practice.accepted);
+  holdB();assert(controls.page==Page::Menu && controls.menu==5);
+  holdB();assert(controls.page==Page::Main && !historyPage);
+  pushPull(10,5500.0f);
+  assert(practice.accepted==1 && motionPreps==1 && startMarkNotes==1);
+}
+// Release recoil: the loop pass that first sees the burst over (Hold) observes
+// the recoiled tilt before it takes the pull's event; the pull is still judged
+// by the tilt held when its burst began.
+static void wearCheckRecoil() {
+  reset();
+  controls.page=Page::Menu;controls.menu=5;buttonA();
+  assert(controls.page==Page::WearCheck);
+  clockMs+=300;level.feed(0.0f,0.0f,1.0f,clockMs);
+  acquisition.state.phase=AnalogTachometer::Phase::Ready;step();
+  acquisition.state.phase=AnalogTachometer::Phase::Launch;step();step();
+  // 15 degrees off level, inside the 18-degree recoil allowance.
+  clockMs+=300;level.feed(0.2588f,0.0f,0.9659f,clockMs);
+  acquisition.state.phase=AnalogTachometer::Phase::Hold;
+  Snapshot e=acquisition.state;e.revision=1;e.launches=1;e.valid=true;e.resultRpm=3250.0f;
+  acquisition.events.push_back(e);step();
+  assert(controls.wear.stageCount(0)==1 && controls.wear.lastOutcome()==WearCheck::Outcome::Accepted);
+  assert(!practice.accepted && !motionPreps && !startMarkNotes);
+}
 int main() {
   physicalAndUsb();pendingUsbPrefix();interruptedHold();busyDoesNotWrite();unseenWarningsDuringLaunch();
-  partialFailureBlocksOldRam();bootRecovery();standbyGuard();
+  partialFailureBlocksOldRam();bootRecovery();standbyGuard();wearCheckIsolation();wearCheckRecoil();
   std::cout<<"PASS: actual wipe sketch/loop/USB flow; physical3s, fresh observations, release restart, "
-              "busy/late-owner gates, partial-failure old-RAM write exclusion, boot recovery and standby guards\n";
+              "busy/late-owner gates, partial-failure old-RAM write exclusion, boot recovery and standby guards, "
+              "wear check pulls kept out of history and motion, release recoil judged by the pre-burst tilt\n";
 }
 '''
 

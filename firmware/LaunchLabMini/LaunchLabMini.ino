@@ -66,11 +66,11 @@ namespace Hil{inline bool nvsWrite(const char *key,size_t bytes);}
 #define LOOP_HELPER __attribute__((noinline))
 #if LAUNCHLAB_HIL
 // Test-only hardware-in-the-loop build; never a release. See tools/hil.
-static constexpr char VERSION[] = "0.20.2-sticks3-songs-hil-pm";
+static constexpr char VERSION[] = "0.20.3-sticks3-songs-hil-pm";
 #elif LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = "0.20.2-sticks3-songs-pm";
+static constexpr char VERSION[] = "0.20.3-sticks3-songs-pm";
 #else
-static constexpr char VERSION[] = "0.20.2-sticks3-songs";
+static constexpr char VERSION[] = "0.20.3-sticks3-songs";
 #endif
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ
@@ -757,7 +757,7 @@ LOOP_HELPER static void draw(const Snapshot &s) {
   } else if(historyPage) {
     view.fillScreen(colors.background);
     switch(controls.page) {
-      case Controls::Page::Menu:ControlsUI::list(view,"Menu",ControlsUI::MENU,6,controls.menu);break;
+      case Controls::Page::Menu:ControlsUI::list(view,"Menu",ControlsUI::MENU,Controls::MENU_COUNT,controls.menu);break;
       case Controls::Page::HistoryMenu:ControlsUI::list(view,"History",ControlsUI::HISTORY,4,controls.history);break;
       case Controls::Page::Settings:drawSettings(view);break;
       case Controls::Page::Edit:ControlsUI::editor(view,controls,settingsSaveError,
@@ -774,6 +774,13 @@ LOOP_HELPER static void draw(const Snapshot &s) {
       case Controls::Page::NewSession:ControlsUI::session(view,controls.startSession);break;
       case Controls::Page::Battery:drawBattery(view,millis());break;
       case Controls::Page::Wipe:ControlsUI::wipe(view,wipeConfirmation,millis(),wipeFailed,wipeBlocked,wipeComplete);break;
+      case Controls::Page::WearCheck: {
+        const auto rawTilt=level.reading(millis());
+        drawnLevel=StickS3Level::forDisplay(rawTilt,visibleDisplayFlipped());
+        ControlsUI::wearCheck(view,controls.wear,WearCheck::Tilt(rawTilt),WearCheck::Tilt(drawnLevel),
+          s.ready && !s.signalFault && !s.suspended && s.phase==AnalogTachometer::Phase::Ready);
+        break;
+      }
       default:PracticeUI::draw(view,demo?demoPractice:practice,historyView,historyOffset,demo,colors);break;
     }
   } else if(launchFeedback.shown()) {
@@ -2725,6 +2732,17 @@ void loop() {
     clock.release();delay(IdlePowerPolicy::UI_POLL_MS);return;
   }
   pollLevel(millis());
+  if(controls.page==Controls::Page::WearCheck) {
+    const auto rawTilt=level.reading(millis());
+    controls.wear.observeLevel(rawTilt,s.phase==AnalogTachometer::Phase::Launch);
+    if(!controls.wear.complete() && uint32_t(millis()-lastDraw)>=100) {
+      const auto tilt=StickS3Level::forDisplay(rawTilt,visibleDisplayFlipped());
+      if(tilt.state!=drawnLevel.state || (tilt.valid() &&
+        (std::fabs(tilt.degrees-drawnLevel.degrees)>=0.15f ||
+         std::fabs(tilt.right-drawnLevel.right)>=0.02f ||
+         std::fabs(tilt.down-drawnLevel.down)>=0.02f)))dirty=true;
+    }
+  }
 #if LAUNCHLAB_MOTION_ADC_GATE
   tickSensorIdle(millis(),s);
 #endif
@@ -2745,7 +2763,23 @@ void loop() {
       Serial.printf("LAUNCH_RESULT valid=%d peak_rpm=%.1f revs=%lu amplitude=%.1f start_noise=%.1f launches=%lu end=%s t_us=%llu\n",
         event.valid,event.resultRpm,(unsigned long)event.revolutions,event.amplitude,event.startNoise,
         (unsigned long)event.launches,event.endName(),(unsigned long long)event.detectorUs);
-      if(practice.accept(event.launches,event.valid,event.resultRpm,millis())) {
+      if(controls.page==Controls::Page::WearCheck) {
+        const auto stageBefore=controls.wear.stage();
+        const auto outcome=controls.wear.observePull(event.launches,event.valid,event.resultRpm,level.reading(millis()));
+        if(outcome!=WearCheck::Outcome::None) {
+          inactivity.touch(millis());
+          Serial.printf("WEAR_CHECK_PULL stage=%s pull=%u/%u outcome=%s rpm=%.1f tilt_deg=%.2f\n",
+            WearCheck::stageName(stageBefore),
+            stageBefore<WearCheck::Stage::Complete?controls.wear.stageCount(unsigned(stageBefore)):WearCheck::PULLS_PER_STAGE,
+            WearCheck::PULLS_PER_STAGE,WearCheck::outcomeName(outcome),event.resultRpm,controls.wear.lastTiltDegrees());
+          if(outcome==WearCheck::Outcome::Completed) {
+            Serial.printf("WEAR_CHECK_RESULT rpm=%.1f median_rpm=%.1f level_rpm=%.1f pull_down_rpm=%.1f pull_up_rpm=%.1f pulls=%u tolerance_deg=%.0f baseline_rpm=%.1f\n",
+              controls.wear.overallMean(),controls.wear.overallMedianMean(),
+              controls.wear.stageMean(0),controls.wear.stageMean(1),controls.wear.stageMean(2),
+              controls.wear.totalAccepted(),WearCheck::TOLERANCE_DEG,WearCheck::FRESH_BASELINE_RPM);
+          }
+        }
+      } else if(practice.accept(event.launches,event.valid,event.resultRpm,millis())) {
         prepareMotion(event);logLaunchMetrics(event);noteStartMark(event);
         inactivity.touch(millis());
         Serial.printf("HISTORY_ADDED number=%lu session=%lu rpm=%.1f\n",(unsigned long)practice.recent()->number,
