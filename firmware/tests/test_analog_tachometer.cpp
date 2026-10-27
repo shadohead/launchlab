@@ -47,6 +47,23 @@ int main() {
   const uint32_t remaining=rearm.rearmMs();level(rearm,250,(remaining-1)*1000);
   assert(rearm.phase==D::Phase::Hold);level(rearm,250,2000);assert(rearm.phase==D::Phase::Ready);
   cycles(rearm,10000,12);finish(rearm);assert(rearm.launches==2 && std::fabs(rearm.resultRpm-6000)<2);
+  // Wear check (0.20.3): a retraction is the string rewinding from rest. One
+  // released from Ready is measured. A slow extension started inside the
+  // previous pull's rearm second keeps it armed through its turns, and a
+  // release before the rearm ends is that pull's rewind (never reported): the
+  // page shows READY only once the phase is Ready.
+  for(uint32_t pauseMs:{300u,700u,1100u}) {
+    D wear=ready();
+    auto retraction=[&](float peak){for(float rpm=700;rpm<peak;rpm*=1.25f)cycles(wear,uint32_t(60e6f/rpm),1);cycles(wear,uint32_t(60e6f/peak),8);};
+    retraction(3000);level(wear,250,200000);
+    assert(wear.launches==1 && std::fabs(wear.resultRpm-3000)<2 && wear.phase==D::Phase::Hold);
+    cycles(wear,100000,12);level(wear,250,pauseMs*1000);  // 600 RPM extension, then held out
+    const bool armed=wear.phase==D::Phase::Ready;
+    assert(armed==(pauseMs>=1100));
+    retraction(3200);finish(wear);
+    assert(wear.launches==(armed?2u:1u));
+    if(armed)assert(std::fabs(wear.resultRpm-3200)<10);
+  }
   // Regression: rejected pulses must break the rewind-motion history. In
   // 0.4.0, one plausible cycle after rejected noise matched an OLD period and
   // restarted the countdown (353 ms remaining became 998 ms).

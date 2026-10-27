@@ -10,7 +10,7 @@
 #include "wipe_confirmation.h"
 
 namespace ControlsUI {
-static constexpr const char *MENU[]={"History","New session","Battery","Settings","Tournament","Back"};
+static constexpr const char *MENU[]={"History","New session","Battery","Settings","Tournament","Wear check","Back"};
 static constexpr const char *HISTORY[]={"Launches","Pull trend","Session trend","Back"};
 // By Controls::Setting value; the list shows them in Controls::ORDER.
 static constexpr const char *SETTINGS[]={"Sleep after","RPM method","Brightness","Flip display","Sensor profile","Theme","Best effect","Celebrate","Sound","Mounting","Shake to wake","Wipe all","Back"};
@@ -185,5 +185,112 @@ inline void wipe(lgfx::LGFXBase &g,const WipeConfirmation &flow,uint32_t now,boo
       footer(g,"Hold A  B Cancel");break;
   }
   if(failed){g.setTextColor(colors.warning,colors.background);g.drawString(blocked?"Wipe needs retry":"Try again when idle",g.width()/2,199,1);}
+}
+// detectorReady: the RPM detector would measure a release now. In its rearm
+// second after a pull (extended by the turns of a slow extension) a release
+// counts as that pull's rewind and is never reported, so READY waits for it.
+inline void wearCheck(lgfx::LGFXBase &g,const WearCheck::Session &wear,const WearCheck::Tilt &rawTilt,const WearCheck::Tilt &displayTilt,
+  bool detectorReady=true) {
+  const int cx=g.width()/2;
+  if(wear.complete()) {
+    heading(g,"Wear check");
+    g.drawRoundRect(8,31,g.width()-16,58,5,colors.accent);
+    char line[28];
+    if(WearCheck::FRESH_BASELINE_RPM>0.0f) {
+      snprintf(line,sizeof(line),"AVG RETRACT %u%%",unsigned(std::lround(WearCheck::healthPercent(wear.overallMean()))));
+    } else {
+      snprintf(line,sizeof(line),"AVG RETRACTION");
+    }
+    g.setTextColor(colors.muted,colors.background);
+    g.drawString(line,cx,35,1);
+    snprintf(line,sizeof(line),"%ld",std::lround(wear.overallMean()));
+    g.setTextColor(colors.number,colors.background);
+    g.drawString(line,cx,46,4);
+    snprintf(line,sizeof(line),"RPM  (med %ld)",std::lround(wear.overallMedianMean()));
+    g.setTextColor(colors.muted,colors.background);
+    g.drawString(line,cx,76,1);
+    // By the direction each stage asked for (2/3 Pull Down, 3/3 Pull Up).
+    const char *stageNames[WearCheck::STAGES]={"Level","Down","Up"};
+    for(unsigned s=0;s<WearCheck::STAGES;++s) {
+      const int y=93+int(s)*40;
+      g.drawRoundRect(8,y,g.width()-16,36,4,colors.muted);
+      // Five-digit pulls drop the unit and the spaces to fit the card (font 1 is 6 px a glyph).
+      const bool wide=std::max({wear.pullRpm(s,0),wear.pullRpm(s,1),wear.pullRpm(s,2)})>=9999.5f;
+      snprintf(line,sizeof(line),wide?"%s: %ld":"%s: %ld RPM",stageNames[s],std::lround(wear.stageMean(s)));
+      g.setTextColor(colors.text,colors.background);
+      g.drawString(line,cx,y+4,2);
+      snprintf(line,sizeof(line),wide?"%ld/%ld/%ld":"%ld / %ld / %ld",
+        std::lround(wear.pullRpm(s,0)),std::lround(wear.pullRpm(s,1)),std::lround(wear.pullRpm(s,2)));
+      g.setTextColor(colors.muted,colors.background);
+      g.drawString(line,cx,y+23,1);
+    }
+    footer(g,"A Again  Hold B Back");
+    return;
+  }
+  const auto stage=wear.stage();
+  heading(g,WearCheck::stageHeader(stage));
+  g.setTextColor(colors.text,colors.background);
+  g.drawString(WearCheck::stagePrompt(stage),cx,30,2);
+  char sub[28];
+  const auto outcome=wear.lastOutcome();
+  if(outcome==WearCheck::Outcome::RejectedLevel) {
+    g.setTextColor(colors.warning,colors.background);
+    g.drawString("Retry: hold 0-12 deg",cx,50,1);
+  } else if(outcome==WearCheck::Outcome::RejectedVert) {
+    g.setTextColor(colors.warning,colors.background);
+    g.drawString("Retry: hold 90 deg",cx,50,1);
+  } else if(outcome==WearCheck::Outcome::RejectedFlip) {
+    g.setTextColor(colors.warning,colors.background);
+    g.drawString("Retry: flip 180 deg",cx,50,1);
+  } else if(outcome==WearCheck::Outcome::RejectedNoImu) {
+    g.setTextColor(colors.warning,colors.background);
+    g.drawString("Retry: wait for IMU",cx,50,1);
+  } else if(outcome==WearCheck::Outcome::RejectedSignal) {
+    g.setTextColor(colors.warning,colors.background);
+    g.drawString("Retry: slow extend",cx,50,1);
+  } else if(wear.currentStageCount()>0) {
+    snprintf(sub,sizeof(sub),"Last: %ld RPM",std::lround(wear.lastRpm()));
+    g.setTextColor(colors.ready,colors.background);
+    g.drawString(sub,cx,50,1);
+  } else {
+    g.setTextColor(colors.muted,colors.background);
+    g.drawString("Extend, wait, let go",cx,50,1);
+  }
+  for(unsigned p=0;p<WearCheck::PULLS_PER_STAGE;++p) {
+    const int px=9+int(p)*40,pw=37,ph=18;
+    const bool done=p<wear.currentStageCount();
+    g.drawRoundRect(px,63,pw,ph,4,done?colors.accent:colors.muted);
+    if(done)snprintf(sub,sizeof(sub),"%ld",std::lround(wear.pullRpm(unsigned(stage),p)));
+    else snprintf(sub,sizeof(sub),"#%u",p+1);
+    g.setTextColor(done?colors.number:colors.muted,colors.background);
+    g.drawString(sub,px+pw/2,68,1);
+  }
+  const int cy=125,radius=32;
+  const auto align=wear.evaluate(rawTilt);
+  const uint16_t ringColor=align==WearCheck::Alignment::Ready?colors.ready:colors.muted;
+  g.drawRoundRect(cx-radius,cy-radius,2*radius,2*radius,radius,colors.muted);
+  g.fillRect(cx-radius+3,cy,2*radius-6,1,colors.muted);
+  g.fillRect(cx,cy-radius+3,1,2*radius-6,colors.muted);
+  g.drawRoundRect(cx-14,cy-14,28,28,14,ringColor);
+  if(rawTilt.valid) {
+    float dx=0.0f,dy=0.0f;
+    wear.reticleOffset(rawTilt,displayTilt,dx,dy);
+    const int dotX=cx+int(std::lround(dx*26.0f));
+    const int dotY=cy+int(std::lround(dy*26.0f));
+    const uint16_t dotColor=align==WearCheck::Alignment::Ready?colors.ready:colors.warning;
+    g.fillRect(dotX-3,dotY-3,7,7,dotColor);
+    snprintf(sub,sizeof(sub),"%.1f deg",rawTilt.degrees);
+    g.setTextColor(dotColor,colors.background);
+    g.drawString(sub,cx,166,2);
+  } else {
+    g.setTextColor(colors.muted,colors.background);
+    g.drawString("--.- deg",cx,166,2);
+  }
+  const bool waiting=align==WearCheck::Alignment::Ready && !detectorReady;
+  const uint16_t alignColor=waiting || align==WearCheck::Alignment::NoImu?colors.muted:
+    align==WearCheck::Alignment::Ready?colors.ready:colors.warning;
+  g.setTextColor(alignColor,colors.background);
+  g.drawString(waiting?"WAIT":WearCheck::alignmentLabel(align),cx,188,2);
+  footer(g,"A Reset  Hold B Back");
 }
 }
