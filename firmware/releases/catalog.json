@@ -944,6 +944,7 @@
       "qre1113",
       "tcrt5000"
     ],
-    "published_channel": "beta"
+    "published_channel": "beta",
+    "channel_note": "published as beta, promoted to stable 2026-10-26"
   }
 ]
