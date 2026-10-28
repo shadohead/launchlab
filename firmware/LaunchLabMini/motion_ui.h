@@ -1,4 +1,5 @@
 #pragma once
+#include "analog_tachometer.h"
 #include "launch_motion.h"
 #include "level_indicator.h"
 #include "motion_replay.h"
@@ -34,13 +35,12 @@ inline void spatial(lgfx::LGFXBase &g,const LaunchMotion::Trace &trial,
   auto project=[&](Vec v){const Vec p=camera(v);return Vec{g.width()*.5f+(p.x-(lo.x+hi.x)*.5f)*scale,top+height*.5f+(p.y-(lo.y+hi.y)*.5f)*scale,0};};
   auto line=[&](Vec a,Vec b,uint16_t color){a=project(a);b=project(b);g.drawLine(lroundf(a.x),lroundf(a.y),lroundf(b.x),lroundf(b.y),color);};
   static constexpr unsigned edges[12][2]={{0,1},{1,2},{2,3},{3,0},{4,5},{5,6},{6,7},{7,4},{0,4},{1,5},{2,6},{3,7}};
-  // Quiet rear edges, brighter near edges, a stationary mid-height plane and
-  // a tiny up arrow give a gravity reference without obscuring the body.
+  // Quiet rear edges, brighter near edges and a stationary mid-height plane
+  // give a gravity reference without obscuring the body.
   for(const auto &e:edges)line(cube.corner(e[0]),cube.corner(e[1]),c.sceneRear);
   for(const unsigned i:{0u,1u,5u,4u})line(cube.corner(i),cube.corner((i+1)%4+(i>=4?4:0)),c.faint);
   line({-.84f,-.84f,0},{.84f,-.84f,0},c.scenePlane);
   line({.84f,-.84f,0},{.84f,.84f,0},c.scenePlane);
-  g.drawLine(9,top+20,9,top+5,c.muted);g.drawLine(9,top+5,6,top+9,c.muted);g.drawLine(9,top+5,12,top+9,c.muted);
   progress=std::max(0.0f,std::min(1.0f,progress));
   // Full recorded context at original speed. Start/End circles retain optical
   // onset/end tilt, independent of the pre/post context shown in the replay.
@@ -76,9 +76,69 @@ inline void spatial(lgfx::LGFXBase &g,const LaunchMotion::Trace &trial,
   }
 }
 
+// RPM in thousands for the curve's scale: "4K" for a whole thousand,
+// "6.5K" below 10,000, "16K" above.
+inline void thousands(char *text,size_t size,float rpm) {
+  const long hundreds=lroundf(rpm/100);
+  if(hundreds%10==0 || rpm>=9950)snprintf(text,size,"%ldK",(hundreds+5)/10);else snprintf(text,size,"%.1fK",hundreds/10.0f);
+}
+// The scale's reference lines below the peak: the smallest round step at
+// least `minimum` RPM, so lines and their labels keep apart.
+inline float curveStep(float minimum) {
+  static constexpr uint16_t hundreds[]={5,10,15,20,25,30,40,50,60,80,100,150,200,250,300,400,500};
+  for(const uint16_t h:hundreds)if(h*100.0f>=minimum)return h*100.0f;
+  return 50000;
+}
+// The pull's RPM turn by turn (0.20.5), in the box left..right x top..bottom:
+// time across, 0 RPM at the foot and the fastest turn at the top line,
+// labelled in thousands, with faint round reference lines below it. Each
+// turn is a dot on the accent line, the fastest larger.
+inline void curve(lgfx::LGFXBase &g,const AnalogTachometer::Curve &curve,
+                  int left,int top,int right,int bottom,const Palette::Colors &c) {
+  g.drawFastHLine(left,bottom,right-left+1,c.faint);
+  if(curve.count<2) {
+    g.setTextColor(c.muted,c.background);g.drawString("No RPM curve",g.width()/2,(top+bottom)/2-4,1);return;
+  }
+  const float peak=curve.peak();
+  const unsigned span=std::max<unsigned>(1,curve.ms[curve.count-1]);
+  auto x=[&](unsigned i){return left+int(lroundf(float(curve.ms[i])*(right-left)/span));};
+  auto y=[&](float value){return bottom-int(lroundf(std::min(1.0f,value/peak)*(bottom-top)));};
+  char text[12];g.setTextDatum(top_right);g.setTextColor(c.muted,c.background);
+  auto scaleLine=[&](float value){
+    const int ly=y(value);for(int dx=left;dx<=right;dx+=4)g.drawFastHLine(dx,ly,2,c.faint);
+    thousands(text,sizeof(text),value);g.drawString(text,left-3,ly-3,1);
+  };
+  scaleLine(peak);
+  // Lines at least GAP px apart, and as far below the peak's: a label is 8 px.
+  static constexpr int GAP=10;const float minimum=peak*GAP/(bottom-top);
+  const float step=curveStep(minimum);
+  for(unsigned k=1;k<=3 && peak-k*step>=minimum;++k)scaleLine(k*step);
+  g.setTextDatum(top_center);
+  // The rise starts from rest at the left edge.
+  int px=left,py=bottom;unsigned fastest=0;
+  for(unsigned i=0;i<curve.count;++i) {
+    const int qx=x(i),qy=y(curve.rpm[i]);
+    g.drawLine(px,py,qx,qy,c.accent);px=qx;py=qy;
+    if(curve.rpm[i]>curve.rpm[fastest])fastest=i;
+  }
+  for(unsigned i=0;i<curve.count;++i)if(i!=fastest)g.fillCircle(x(i),y(curve.rpm[i]),1,c.accent);
+  g.fillCircle(x(fastest),y(curve.rpm[fastest]),2,c.accent);
+}
+// A smooth demo pull peaking at `rpm`: the demo recap's curve.
+inline const AnalogTachometer::Curve &demoCurve(float rpm=6500) {
+  static AnalogTachometer::Curve c;static float made=-1;
+  if(made!=rpm) {
+    c.clear();static constexpr float shape[]={.22f,.4f,.58f,.73f,.85f,.94f,1,.97f,.88f,.76f,.62f,.5f};
+    uint32_t endUs=0;
+    for(const float f:shape){const uint32_t period=uint32_t(60000000.0f/(rpm*f));endUs+=period;c.add(endUs/1000,period);}
+    made=rpm;
+  }
+  return c;
+}
 inline void feedback(lgfx::LGFXBase &g,const LaunchMotion::Trace &trial,
                      bool capturing,bool demo=false,float progress=1,bool flipEnabled=false,
-                     const Palette::Colors &c=Palette::builtIn(0x07ff,true),const char *badge=nullptr) {
+                     const Palette::Colors &c=Palette::builtIn(0x07ff,true),const char *badge=nullptr,
+                     const AnalogTachometer::Curve &rpmCurve=AnalogTachometer::Curve()) {
   const int cx=g.width()/2;char text[64];
   g.setTextDatum(top_center);
   // A celebrated pull's label: NEW BEST, or the milestone it reached.
@@ -90,24 +150,16 @@ inline void feedback(lgfx::LGFXBase &g,const LaunchMotion::Trace &trial,
     // A full-scale reading or a bridged short gap is approximate: still show it, marked.
     g.setTextColor(trial.approximate()?c.warning:c.muted,c.background);
     g.drawString(trial.approximate()?"Tilt approx.":"Tilt replay",cx,164,1);
-    g.drawFastHLine(26,178,83,c.faint);
-    g.fillCircle(26+lroundf(std::max(0.0f,std::min(1.0f,progress))*82),178,2,c.accent);
+    // The replay's progress runs down the right edge, clear of the RPM curve.
+    const int track=g.width()-4;
+    g.drawFastVLine(track,53,105,c.faint);
+    g.fillCircle(track,53+lroundf(std::max(0.0f,std::min(1.0f,progress))*104),2,c.accent);
   } else {
     // Keep the graph area quiet when capture is pending or unavailable.
     g.drawRect(cx-39,71,79,79,c.muted);
     g.setTextColor(c.muted,c.background);g.drawString(capturing?"Capturing":unavailableTilt(trial.quality),cx,104,1);
   }
-  for(unsigned i=0;i<2;++i) {
-    const int bx=i?99:36,by=211,radius=17;
-    const auto level=StickS3Level::forDisplay(i?trial.endLevel:trial.startLevel,flipEnabled);
-    g.setTextColor(c.muted,c.background);g.drawString(i?"End":"Start",bx,183,1);
-    g.drawCircle(bx,by,radius,c.muted);g.drawFastHLine(bx-radius+2,by,2*radius-3,c.muted);
-    g.drawFastVLine(bx,by-radius+2,2*radius-3,c.muted);
-    if(level.valid() && trial.fused && !capturing) {
-      const auto color=level.degrees<=2?c.accent:c.warning;
-      g.fillCircle(bx+lroundf(level.right*13),by+lroundf(level.down*13),4,color);
-    } else g.drawFastHLine(bx-3,by,7,c.muted);
-  }
+  curve(g,rpmCurve,34,184,126,226,c);
 }
 inline void makeDemo(LaunchMotion::Trace &t,bool reference) {
   t={};t.fused=t.stationaryBias=true;t.quality=LaunchMotion::Quality::Valid;t.count=LaunchMotion::Trace::POINTS;t.number=reference?1:2;

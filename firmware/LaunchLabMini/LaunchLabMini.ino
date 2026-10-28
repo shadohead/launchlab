@@ -66,11 +66,11 @@ namespace Hil{inline bool nvsWrite(const char *key,size_t bytes);}
 #define LOOP_HELPER __attribute__((noinline))
 #if LAUNCHLAB_HIL
 // Test-only hardware-in-the-loop build; never a release. See tools/hil.
-static constexpr char VERSION[] = "0.20.4-sticks3-songs-hil-pm";
+static constexpr char VERSION[] = "0.20.5-sticks3-songs-hil-pm";
 #elif LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = "0.20.4-sticks3-songs-pm";
+static constexpr char VERSION[] = "0.20.5-sticks3-songs-pm";
 #else
-static constexpr char VERSION[] = "0.20.4-sticks3-songs";
+static constexpr char VERSION[] = "0.20.5-sticks3-songs";
 #endif
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ
@@ -252,6 +252,8 @@ static DeviceBackup::LineReceiver<(Themes::Request::BYTES+2)/3*4> themeRx;
 // One framed milestone request (USB `U`).
 static DeviceBackup::LineReceiver<(Milestones::Request::BYTES+2)/3*4> milestoneRx;
 static LaunchMotion::Trace latestMotion,referenceMotion,demoMotion;
+// The latest pull's RPM turn by turn (the recap's graph); empty after a restart.
+static AnalogTachometer::Curve latestCurve;
 static bool motionPending=false,referenceError=false,motionDemo=false;
 static uint64_t motionStart=0,motionEnd=0,lastLevelSampleUs=0;
 static uint32_t motionDrops=0;
@@ -382,7 +384,7 @@ LOOP_HELPER static void tickPowerLog(uint32_t now,const Snapshot &s){
   if(!s.resting && powerLogReady && powerLogDirty && now-lastPowerSaveTry>=300000 &&
     HistoryCheckpoint::practiceIdle(now,lastAcceptedAt,
       HistoryCheckpoint::automaticQuietMs(now,imuStill,now-lastPowerSaveTry-300000,HISTORY_COALESCE_MS),
-      motionPending,launchFeedback.shown(),s.phase)){
+      motionPending,launchFeedback.protects(now),s.phase)){
     // Record the attempt first: a vetoed checkpoint must not repeat the IMU
     // quiet wait on every UI tick. The dirty log stays pending.
     lastPowerSaveTry=now;
@@ -819,7 +821,9 @@ LOOP_HELPER static void draw(const Snapshot &s) {
   } else if(launchFeedback.shown()) {
     view.fillScreen(colors.background);
     MotionUI::feedback(view,motionDemo?demoMotion:latestMotion,
-      motionPending && !motionDemo,motionDemo,MotionReplay::playbackProgress(motionDemo?demoMotion:latestMotion,replayFrameElapsed),visibleDisplayFlipped(),colors,celebrationBadge());
+      motionPending && !motionDemo,motionDemo,MotionReplay::playbackProgress(motionDemo?demoMotion:latestMotion,
+        launchFeedback.position(replayFrameElapsed)),visibleDisplayFlipped(),colors,celebrationBadge(),
+      motionDemo?MotionUI::demoCurve(demoMotion.rpm):latestCurve);
     ControlsUI::footer(view,"A Main  B Menu");
     // Direct-draw fallback stays functional without reading the hardware LCD.
     if(screenReady && !motionDemo && !motionPending && bestEffect.badge()) {
@@ -945,7 +949,7 @@ static void toggleFeedback() {
   if(tournamentMode)return;
   bestEffect.clear();
   historyPage=diagnostics=motionDemo=demo=false;
-  launchFeedback.toggle(millis(),latestMotion.number!=0);dirty=true;
+  launchFeedback.toggle(millis(),latestMotion.number!=0,MotionReplay::playbackDurationMs(latestMotion));dirty=true;
   Serial.printf("MAIN_FEEDBACK shown=%d reason=button t_ms=%lu\n",launchFeedback.shown(),(unsigned long)millis());
 }
 
@@ -953,10 +957,18 @@ static void buttonA();
 static void buttonB();
 LOOP_HELPER static void toggleHistory(){buttonB();}
 LOOP_HELPER static void nextView(){buttonA();}
+// The pull's RPM turn by turn, copied by the optical task with its result.
+LOOP_HELPER static void takeCurve(const Snapshot &event) {
+  if(!acquisition.curve(event.revision,latestCurve))latestCurve.clear();
+  const auto &c=latestCurve;unsigned peak=0;for(unsigned i=1;i<c.count;++i)if(c.rpm[i]>c.rpm[peak])peak=i;
+  Serial.printf("RPM_CURVE launch=%lu points=%u stride=%u peak_rpm=%u peak_ms=%u last_ms=%u\n",(unsigned long)practice.recent()->number,
+    unsigned(c.count),unsigned(c.stride),c.count?unsigned(c.rpm[peak]):0u,c.count?unsigned(c.ms[peak]):0u,c.count?unsigned(c.ms[c.count-1]):0u);
+}
 LOOP_HELPER static void prepareMotion(const Snapshot &event) {
   lastAcceptedAt=millis();if(!historyPendingSince)historyPendingSince=lastAcceptedAt;
   if(motionPending)++motionDrops;
   latestMotion={};latestMotion.number=practice.recent()->number;latestMotion.rpm=event.resultRpm;
+  takeCurve(event);
   const bool beat=bestStore.ready() && personalBests.observe(unsigned(event.sensorProfile),unsigned(event.estimator),event.valid,event.resultRpm);
   // The selected estimator's RPM is the pull's RPM, for milestones as for bests.
   const bool visible=!tournamentMode && !historyPage && !diagnostics;
@@ -986,7 +998,8 @@ LOOP_HELPER static void finishMotion() {
   const auto state=acquisition.snapshot();
   if(state.phase==AnalogTachometer::Phase::Launch || !launchFeedback.shown() || tournamentMode || historyPage || diagnostics || motionDemo)bestEffect.clear();
   else bestEffect.captured(latestMotion.number);
-  if(launchFeedback.shown())launchFeedback.show(millis());
+  // The replay starts over now its trace is in, as it was opened.
+  if(launchFeedback.shown())launchFeedback.show(millis(),launchFeedback.replay(),MotionReplay::playbackDurationMs(latestMotion));
   Serial.printf("MAIN_FEEDBACK shown=%d reason=result t_ms=%lu\n",launchFeedback.shown(),(unsigned long)millis());
   Serial.printf("MOTION_RESULT launch=%lu quality=%s points=%u duration_ms=%lu rpm=%.1f stationary_bias=%d saturated=%d bridged=%d capture_retries=%lu peak_accel_g=%.2f accel_range_g=%.0f peak_gyro_dps=%.0f gyro_range_dps=%.0f\n",
     (unsigned long)latestMotion.number,LaunchMotion::name(latestMotion.quality),latestMotion.count,
@@ -1004,6 +1017,8 @@ LOOP_HELPER static void finishMotion() {
     latestMotion.endLevel.valid(),latestMotion.endLevel.right,latestMotion.endLevel.down);
 }
 LOOP_HELPER static void exportMotion() {
+  Serial.printf("RPM_CURVE_EXPORT launch=%lu count=%u stride=%u\n",(unsigned long)latestMotion.number,unsigned(latestCurve.count),unsigned(latestCurve.stride));
+  for(unsigned i=0;i<latestCurve.count;++i)Serial.printf("RPM_CURVE_POINT t_ms=%u rpm=%u\n",unsigned(latestCurve.ms[i]),unsigned(latestCurve.rpm[i]));
   for(const auto *t:{&referenceMotion,&latestMotion}) {
     const char *role=t==&referenceMotion?"reference":"latest";
     Serial.printf("MOTION_EXPORT role=%s number=%lu rpm=%.3f quality=%s count=%u duration_ms=%lu stationary_bias=%d fused=%d\n",role,
@@ -1522,7 +1537,7 @@ LOOP_HELPER static void saveHistory(uint32_t now,const Snapshot &s) {
   if((!history && !best) || now-lastSaveTry<retryMs ||
      !HistoryCheckpoint::practiceIdle(now,lastAcceptedAt,
        fault?HISTORY_COALESCE_MS:HistoryCheckpoint::automaticQuietMs(now,imuStill,historyPendingSince?now-historyPendingSince:0,
-         HISTORY_COALESCE_MS),motionPending,launchFeedback.shown(),
+         HISTORY_COALESCE_MS),motionPending,launchFeedback.protects(now),
        fault?AnalogTachometer::Phase::Paused:s.phase))return;
   // Coalesce a rapid practice bout instead of resetting fusion after each pull.
   // Pending RAM history is flushed once the newest accepted pull has been idle.
@@ -2567,7 +2582,7 @@ LOOP_HELPER static void previewBestEffect(Appearance::Effect effect) {
     soundPlayer.stop();const int64_t started=esp_timer_get_time();
     soundPlayer.prepare(effect);renderUs=uint32_t(esp_timer_get_time()-started);
   }
-  launchFeedback.show(millis());
+  launchFeedback.show(millis(),LaunchFeedback::Replay::Twice,MotionReplay::playbackDurationMs(latestMotion));
   bestEffect.queue(true,latestMotion.number,effect);bestEffect.captured(latestMotion.number);
   maxEffectUs=maxDrawUs=0;dirty=true;
 #if LAUNCHLAB_HIL
@@ -2657,7 +2672,7 @@ LOOP_HELPER static void runUsbCommand(const char *command,const Snapshot &s) {
     controls.page=Controls::Page::Main;syncNavigation();
     historyPage=diagnostics=false;motionDemo=true;
     MotionUI::makeDemo(demoMotion,false);
-    launchFeedback.show(millis());dirty=true;
+    launchFeedback.show(millis(),LaunchFeedback::Replay::Twice,MotionReplay::playbackDurationMs(demoMotion));dirty=true;
     Serial.println("RECAP_DEMO synthetic only; real launches and reference unchanged");
   }
   else if(c=='b')holdB();
@@ -2884,7 +2899,8 @@ void loop() {
   // One final clean frame removes the decoration; the NEW BEST label stays.
   if(dirty && (stress || s.phase!=AnalogTachometer::Phase::Launch))effectWasMoving=effectMoving;
   if(!tournamentMode && !diagnostics && !historyPage && launchFeedback.shown() && !motionPending &&
-     MotionReplay::playbackNeedsFrame(motionDemo?demoMotion:latestMotion,launchFeedback.replayElapsed(now),launchFeedback.lastReplayElapsed()) && now-lastDraw>=50)dirty=true;
+     MotionReplay::playbackNeedsFrame(motionDemo?demoMotion:latestMotion,
+       launchFeedback.position(launchFeedback.replayElapsed(now)),launchFeedback.position(launchFeedback.lastReplayElapsed())) && now-lastDraw>=50)dirty=true;
   if(!tournamentMode && !diagnostics && !historyPage && !launchFeedback.shown() && now-lastDraw>=100) {
     const auto tilt=StickS3Level::forDisplay(level.reading(now),visibleDisplayFlipped());
     if(tilt.state!=drawnLevel.state || (tilt.valid() &&

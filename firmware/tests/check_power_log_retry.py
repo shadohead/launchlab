@@ -38,7 +38,7 @@ static uint32_t millis(){return clockMs;}
 static bool powerLogReady=true,powerLogDirty=true,motionPending=false;
 static constexpr uint32_t HISTORY_COALESCE_MS=10000;
 static uint32_t lastAcceptedAt=0;static HistoryCheckpoint::Stillness imuStill{true,0}; // launcher set down
-struct {bool active=false;bool shown(){return active;}}launchFeedback;
+struct {bool active=false;bool shown(){return active;}bool protects(uint32_t){return active;}}launchFeedback;
 static PowerDiagnostics::Image powerLog;
 static uint32_t powerLogTick=0,lastPowerSample=0,lastPowerSave=0,lastPowerSaveTry=0;
 static uint8_t powerFlags(){return 0;}

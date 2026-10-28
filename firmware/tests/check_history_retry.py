@@ -72,7 +72,7 @@ static HistoryCheckpoint::Stillness imuStill{true,0}; // launcher set down unles
 static uint64_t motionStart=0,motionEnd=0;
 static void cancelSettingEdit(){}
 static bool saveWakeNavigation(){return true;}
-struct Feedback {void show(uint32_t){}bool shown(){return false;}bool replayStarted(){return false;}uint32_t replayElapsed(uint32_t){return 0;}uint32_t lastReplayElapsed(){return 0;}} launchFeedback;
+struct Feedback {template<typename... T>void show(T...){}template<typename... T>void toggle(T...){}int replay(){return 0;}bool shown(){return false;}bool protects(uint32_t){return false;}bool replayStarted(){return false;}uint32_t replayElapsed(uint32_t){return 0;}uint32_t lastReplayElapsed(){return 0;}} launchFeedback;
 struct HWCDC {static bool isPlugged(){return false;}};
 struct SerialFake {void println(const char*){};void flush(){};template<class... Args>void printf(const char*,Args...){}} Serial;
 // USB output is drained (never Serial.flush(), which discards it): usb_tx.h.
@@ -80,6 +80,8 @@ namespace UsbTx {inline unsigned drains=0;inline bool drain(uint32_t){++drains;r
 
 enum class Action {IdleCheckpointBegin,CheckpointBegin,CheckpointEnd,HistoryIdleCheckpointBegin,ShutdownBegin,Pin};
 struct Snapshot {AnalogTachometer::Phase phase;uint32_t launches;bool valid=true,signalFault=false;float resultRpm=6000;uint64_t burstStartHostUs=0,burstEndHostUs=0;uint8_t pin=1;StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;RpmEstimator::Mode estimator=RpmEstimator::DEFAULT_MODE;};
+// The RPM curve's copy and log (takeCurve) is not exercised here.
+static AnalogTachometer::Curve latestCurve;static void takeCurve(const Snapshot&){}
 struct Acquisition {
   AnalogTachometer detector;HistoryCheckpoint saved;unsigned begins=0,lagUs=0,deliveryLagUs=0;bool suspended=false;
   Snapshot snapshot(){Snapshot s{detector.phase,detector.launches};s.resultRpm=detector.resultRpm;
