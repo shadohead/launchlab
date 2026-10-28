@@ -133,6 +133,7 @@ static Controls::State controls;
 static PracticeHistory practice;
 static LaunchMotion::Trace latestMotion;
 static LaunchFeedback launchFeedback;
+namespace MotionReplay {template<typename T>static uint32_t playbackDurationMs(const T &){return 0;}}
 static bool dirty=false,motionPending=false,celebrationSound=false,soundPreview=false;
 static constexpr uint64_t MOTION_CAPTURE_RETRY_US=3000000;static uint32_t motionCaptureRetries=0;
 static bool tournamentMode=false,historyPage=false,diagnostics=false,motionDemo=false,demo=false;
@@ -148,6 +149,8 @@ struct Snapshot {
   float resultRpm=6100;
   uint64_t burstStartHostUs=0,burstEndHostUs=0;
 };
+// The RPM curve's copy and log (takeCurve) is not exercised here.
+static AnalogTachometer::Curve latestCurve;static void takeCurve(const Snapshot&){}
 static void cancelSettingEdit(){controls.page=Controls::Page::Settings;}
 static void syncNavigation(){}
 static Appearance::Effect celebrationEffect();

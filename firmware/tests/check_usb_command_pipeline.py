@@ -144,7 +144,9 @@ static Appearance::Effect celebrationEffect(){return Appearance::Effect::Orbit;}
 static void previewBestEffect(Appearance::Effect){act("effect");}
 struct Motion {};static Motion demoMotion;
 namespace MotionUI {inline void makeDemo(Motion&,bool){act("demo");}}
-static struct {void show(uint32_t){}}launchFeedback;
+struct LaunchFeedback {enum class Replay {Twice,Loop};};
+namespace MotionReplay {template<typename T>static uint32_t playbackDurationMs(const T &){return 0;}}
+static struct {template<typename... T>void show(T...){}}launchFeedback;
 // Exports print for tens of milliseconds while input keeps queuing.
 static void status(){act("status");clockMs+=40;}static void exportPowerLog(){act("power_log");clockMs+=60;}
 static void exportCpuPower(){act("cpu_power");clockMs+=40;}

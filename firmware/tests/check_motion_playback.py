@@ -79,7 +79,7 @@ def main():
         executable = build / "motion-playback"
         compiler = os.environ.get("CXX", "c++")
         subprocess.run([compiler, "-std=c++17", "-O1", "-g", "-fsanitize=address,undefined",
-                        "-fno-omit-frame-pointer", "-I" + str(build),
+                        "-fno-omit-frame-pointer", "-I" + str(build), "-I" + str(root / "firmware/LaunchLabRpm"),
                         str(root / "firmware/tests/test_motion_playback.cpp"), "-o", str(executable)], check=True)
         result = subprocess.run([str(executable)], cwd=root)
         return result.returncode

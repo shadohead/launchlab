@@ -142,7 +142,7 @@ LOOP_HELPER static void hilFxCommand(const char *cmd,const char *a1,const char *
     // The demo recap as ui_render draws it (tools/ui_render/ui_catalog.h).
     auto scene=[&](uint32_t elapsed) {
       ControlsUI::colors=c;screen.fillScreen(c.background);screen.setTextDatum(top_center);screen.setTextColor(c.text,c.background);
-      MotionUI::feedback(screen,trace,false,false,MotionReplay::playbackProgress(trace,elapsed),false,c,"NEW BEST");
+      MotionUI::feedback(screen,trace,false,false,MotionReplay::playbackProgress(trace,elapsed),false,c,"NEW BEST",MotionUI::demoCurve(trace.rpm));
       ControlsUI::footer(screen,"A Main  B Menu");
     };
     for(unsigned n=0;n<FxSpike::COUNT;++n) {

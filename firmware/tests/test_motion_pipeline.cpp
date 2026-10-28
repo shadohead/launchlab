@@ -70,6 +70,8 @@ struct StoreFake {
   bool save(const PracticeFake&){if(!attempts)firstSaveUs=hostUs;++attempts;advance(saveCostUs);pending_=false;return true;}
 }practiceStore;
 static LaunchMotion::Trace completedTrace,latestMotion,referenceMotion,demoMotion,demoReference;
+// The RPM curve's copy and log (takeCurve) is not exercised here.
+static AnalogTachometer::Curve latestCurve;static void takeCurve(const Snapshot&){}
 struct ImuFake {
   struct State {uint64_t fusedUs;};
   State snapshot(){return {hostUs};}
@@ -152,7 +154,11 @@ static void checkTimeline() {
   const uint64_t firstPresentedUs=shown.front().presentedUs;
   for(unsigned i=1;i<shown.size();++i) {
     const int elapsed=int((shown[i].drawnUs-firstPresentedUs)/1000);
-    require(shown[i].sourceMs==std::min(last,first+elapsed),"each frame must select actual full-context milliseconds since first presented frame");
+    // Two passes after a pull, each holding its end 500 ms, or a loop when
+    // opened with A (0.20.5).
+    const bool twice=launchFeedback.replay()==LaunchFeedback::Replay::Twice;
+    const int span=last-first,cycle=span+500,at=twice && elapsed>=cycle+span?span:std::min(elapsed%cycle,span);
+    require(shown[i].sourceMs==first+at,"each frame must select actual full-context milliseconds since first presented frame");
   }
 }
 static void completeReplay() {for(unsigned i=0;i<250;++i){advance(50000);productionStep();}}
@@ -186,7 +192,7 @@ int main() {
   // Different draw/transfer costs change frame availability, never playback
   // speed. Keep the first presentation timestamp separate from later costs.
   reset();readyAfter(300,false);const unsigned costs[]={1000,7000,24000,80000,180000};
-  for(unsigned i=0;i<20;++i){drawCostUs=costs[i%5];advance(50000);productionStep();}
+  for(unsigned i=0;i<60;++i){drawCostUs=costs[i%5];advance(50000);productionStep();}
   checkTimeline();require(replayFrames().back().sourceMs==latestMotion.points[latestMotion.count-1].ms,"variable drawing cost must still deliver the recorded endpoint");++cases;
   // Manual A recall begins a new visible epoch, including after a write is due.
   reset();readyAfter(300,false);completeReplay();frames.clear();toggleFeedback();makeSaveDue();productionStep();

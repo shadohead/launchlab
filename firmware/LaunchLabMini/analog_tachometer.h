@@ -73,6 +73,42 @@ public:
   // spins the gear from rest like a pull, and one optical channel cannot tell
   // its direction, so while this is set every strong turn in REARM extends it.
   bool rewindPending=false;
+  // Every strong turn of the current or last launch as RPM against time
+  // (0.20.5, the recap's graph): up to LEAD slower turns just before it,
+  // the turns that started it, through its peak, to the slow turns that
+  // ended it. Each point is one turn: its end, in ms after the first turn
+  // began, and its RPM. A pull longer than POINTS turns
+  // folds its points in pairs, each keeping the faster turn so the peak
+  // survives, and later points then span `stride` turns. Nothing in the
+  // detector reads it.
+  struct Curve {
+    static constexpr unsigned POINTS=96;
+    uint16_t ms[POINTS]={},rpm[POINTS]={};
+    uint16_t count=0,stride=1;
+    // Turns gathered toward the next point while stride>1.
+    uint16_t pendingTurns=0,pendingRpm=0;
+    void clear(){count=pendingTurns=pendingRpm=0;stride=1;}
+    void add(uint32_t endMs,uint32_t period) {
+      const uint16_t turn=uint16_t(std::min<uint32_t>(65535,(60000000u+period/2)/period));
+      pendingRpm=std::max(pendingRpm,turn);
+      if(++pendingTurns<stride)return;
+      if(count==POINTS) {
+        for(unsigned i=0;i<POINTS/2;++i){ms[i]=ms[2*i+1];rpm[i]=std::max(rpm[2*i],rpm[2*i+1]);}
+        count=POINTS/2;stride*=2;
+      }
+      ms[count]=uint16_t(std::min<uint32_t>(65535,endMs));rpm[count++]=pendingRpm;
+      pendingTurns=pendingRpm=0;
+    }
+    // A partial point at the end of a folded pull.
+    void flush(uint32_t endMs) {
+      if(!pendingTurns)return;
+      if(count==POINTS){ms[POINTS-1]=uint16_t(std::min<uint32_t>(65535,endMs));rpm[POINTS-1]=std::max(rpm[POINTS-1],pendingRpm);}
+      else{ms[count]=uint16_t(std::min<uint32_t>(65535,endMs));rpm[count++]=pendingRpm;}
+      pendingTurns=pendingRpm=0;
+    }
+    uint16_t peak() const {uint16_t best=0;for(unsigned i=0;i<count;++i)best=std::max(best,rpm[i]);return best;}
+  };
+  Curve curve;
   uint64_t nowUs=0, resultUs=0, burstStartUs=0, burstEndUs=0;
   uint32_t quietMs() const {return uint32_t((nowUs-quietSince)/1000);}
   uint64_t servedQuietUs() const {return nowUs-quietSince;}
@@ -103,7 +139,7 @@ public:
     phase=enabled?Phase::Settling:Phase::Paused;quietSince=nowUs;
     clearSequence();rise=fall=0;initialized=false;sum=0;count=index=group=0;
     diffCount=diffIndex=0;clearMotion();railSince=0;signalFault=false;swingCount=swingNext=0;
-    rewindPending=false;lastStrongEdge=0;resumeUntil=0;edgeWarmup=true;
+    rewindPending=false;lastStrongEdge=0;resumeUntil=0;edgeWarmup=true;curve.clear();leadCount=0;
   }
   void feed(uint16_t raw) {
     nowUs+=20;
@@ -244,6 +280,35 @@ private:
   bool riseSettled=true,edgeWarmup=false;
   uint64_t gapBoundary=0;uint32_t gapPeriod=0,slowPeriod=0,strongPeriod=0;uint8_t gapStage=0;
   uint32_t evictedPeriod=0;float evictedAmplitude=0;
+  // Where the curve's first turn began, and the end of its last turn.
+  uint64_t curveOriginUs=0,lastCurveTurn=0;
+  void addCurveTurn(uint64_t stamp,uint32_t period) {
+    if(stamp<=curveOriginUs)return;
+    curve.add(uint32_t((stamp-curveOriginUs)/1000),period);lastCurveTurn=stamp;
+  }
+  // The strong turns in Ready, each beginning where the one before ended:
+  // the launch's three confirming turns and up to LEAD before them. A lead
+  // turn slower than LEAD_MIN_RPM is the gear still at rest, not the rise.
+  static constexpr unsigned LEAD=3,LEAD_TURNS=LEAD+3;
+  static constexpr uint32_t LEAD_MAX_PERIOD_US=200000;
+  uint64_t leadEnd[LEAD_TURNS]={};uint32_t leadPeriod[LEAD_TURNS]={};unsigned leadCount=0;
+  void noteLead(uint64_t stamp,uint32_t period) {
+    if(leadCount && stamp-period!=leadEnd[leadCount-1])leadCount=0;
+    if(leadCount==LEAD_TURNS){std::copy(leadEnd+1,leadEnd+LEAD_TURNS,leadEnd);std::copy(leadPeriod+1,leadPeriod+LEAD_TURNS,leadPeriod);--leadCount;}
+    leadEnd[leadCount]=stamp;leadPeriod[leadCount++]=period;
+  }
+  void startCurve(uint64_t stamp) {
+    curve.clear();curveOriginUs=burstStartUs;lastCurveTurn=0;
+    // The lead turns end where the confirming window begins.
+    unsigned first=leadCount,last=leadCount;
+    for(unsigned i=0;i<leadCount;++i)if(leadEnd[i]==burstStartUs){first=last=i+1;break;}
+    while(first && last-first<LEAD && leadPeriod[first-1]<=LEAD_MAX_PERIOD_US)--first;
+    if(first<last)curveOriginUs=leadEnd[first]-leadPeriod[first];
+    for(unsigned i=first;i<last;++i)addCurveTurn(leadEnd[i],leadPeriod[i]);
+    const uint32_t a=periods[nPeriods%3],b=periods[(nPeriods+1)%3];
+    addCurveTurn(burstStartUs+a,a);addCurveTurn(burstStartUs+a+b,b);addCurveTurn(stamp,periods[(nPeriods+2)%3]);
+    leadCount=0;
+  }
   uint64_t blankFrom=0,blankUntil=0;
   uint32_t periods[3]={},nPeriods=0,lastPeriod=0,slowCount=0,motionPeriod=0,motionPreviousPeriod=0;
   float motionDuty=0,motionAmplitude=0;
@@ -325,6 +390,7 @@ private:
     // Commit before revision/launch publication; never revise a saved result.
     if(splitPending){singlePeakRejected++;clearSinglePending();}
     commitSinglePending();
+    if(lastCurveTurn>curveOriginUs)curve.flush(uint32_t((lastCurveTurn-curveOriginUs)/1000));
     burstEndUs=boundary?boundary:reason==End::Slowdown?slowStartUs:lastCycle;
     ended=reason;phase=Phase::Hold;resultUs=nowUs;
     resultValid=peakRpm>0;resultRpm=peakRpm;resultRevision++;
@@ -460,6 +526,12 @@ private:
       gapStage=0;
       if((stamp-lastCycle)*3>uint64_t(gapPeriod)*4){finish(End::Gap,gapBoundary);return;}
     }
+    // A weak mark sets neither the peak nor the end, and its turn is not
+    // drawn: only strong turns trace the pull.
+    if(minMark<=0 || signalContrast>=minMark) {
+      if(phase==Phase::Launch)addCurveTurn(stamp,period);
+      else if(phase==Phase::Ready)noteLead(stamp,period);
+    }
     if(lastCycle && stamp-lastCycle>uint64_t(period)*3/2) {
       const uint64_t strongCycle=lastStrongCycle;
       clearSequence();
@@ -539,6 +611,7 @@ private:
       phase=Phase::Launch;attempts++;peakRpm=sustainedPeakRpm=singlePeakRpm=sustainedPeakAmplitude=singlePeakAmplitude=0;cycles=0;revolutions=3;startNoiseBand=noiseBand;
       lastStrongCycle=stamp;
       resultValid=false;resultRpm=0;ended=End::None;
+      startCurve(stamp);
     }
     // Weak windows never set the peak. Inside a confirmed burst the window is
     // judged by its middle mark (the weakest still at least half the floor):

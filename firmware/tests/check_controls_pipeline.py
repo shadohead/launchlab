@@ -73,6 +73,8 @@ static const char *tournamentViewName(){return tournamentView==TournamentView::R
 static PracticeUI::View historyView=PracticeUI::View::Recent;
 static PracticeHistory practice,demoPractice;
 static struct {uint32_t number=1;} latestMotion;
+// The recap's replay length does not matter to navigation.
+namespace MotionReplay {template<typename T>static uint32_t playbackDurationMs(const T &){return 0;}}
 static LaunchFeedback launchFeedback;
 static InactivityTimer inactivity;
 static RpmEstimator::Mode rpmEstimator=RpmEstimator::DEFAULT_MODE;

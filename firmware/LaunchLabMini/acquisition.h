@@ -103,6 +103,13 @@ public:
     portENTER_CRITICAL(&snapshotMux_);Snapshot copy=snapshot_;portEXIT_CRITICAL(&snapshotMux_);return copy;
   }
   bool takeEvent(Snapshot &event){return events_ && xQueueReceive(events_,&event,0)==pdTRUE;}
+  // The last valid launch's RPM curve, when `revision` is that launch's
+  // result (an event's Snapshot::revision). Kept apart from the snapshot,
+  // which every event copies.
+  bool curve(uint32_t revision,AnalogTachometer::Curve &out) {
+    portENTER_CRITICAL(&curveMux_);const bool match=curveRevision_==revision;if(match)out=curve_;portEXIT_CRITICAL(&curveMux_);
+    return match;
+  }
   const uint16_t *storage() const{return storage_;}
   // Recorder markers describe the first acquired batch consumed after each UI
   // boundary (about 5 ms resolution). They do not invoke the Waveshare's
@@ -137,6 +144,8 @@ private:
   portMUX_TYPE snapshotMux_=portMUX_INITIALIZER_UNLOCKED;
   portMUX_TYPE overflowMux_=portMUX_INITIALIZER_UNLOCKED;
   portMUX_TYPE marksMux_=portMUX_INITIALIZER_UNLOCKED;
+  portMUX_TYPE curveMux_=portMUX_INITIALIZER_UNLOCKED;
+  AnalogTachometer::Curve curve_;uint32_t curveRevision_=0;
   Snapshot snapshot_;
   uint32_t requestId_=0,overflows_=0,seenOverflows_=0,readErrors_=0,invalidFrames_=0,lostEvents_=0,stalls_=0;
   alignas(4) uint8_t frame_[FRAME_BYTES]={};
@@ -283,6 +292,9 @@ private:
       burstStartHostUs_=uint64_t(lastRead_)-(detector_.nowUs-detector_.burstStartUs);
     if(detector_.resultRevision!=revision && detector_.nowUs>=detector_.burstEndUs)
       burstEndHostUs_=uint64_t(lastRead_)-(detector_.nowUs-detector_.burstEndUs);
+    if(detector_.resultRevision!=revision && detector_.resultValid) {
+      portENTER_CRITICAL(&curveMux_);curve_=detector_.curve;curveRevision_=detector_.resultRevision;portEXIT_CRITICAL(&curveMux_);
+    }
     const uint32_t duration=uint32_t(esp_timer_get_time()-started);
     processingUs_+=duration;maxBatchUs_=std::max(maxBatchUs_,duration);
   }

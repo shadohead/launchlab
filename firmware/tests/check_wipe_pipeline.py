@@ -123,10 +123,12 @@ struct {uint32_t magic=123;}sleepReceipt;
 struct Sound {unsigned stops=0;void stop(){++stops;}}soundPlayer;
 static struct {bool active=false;}soundRequest;
 @CELEBRATION_HOLD@
+struct LaunchFeedback {enum class Replay {Twice,Loop};};
 struct Feedback {
-  bool visible=true;void clear(){visible=false;}bool shown()const{return visible;}
-  void show(uint32_t){visible=true;}bool tick(uint32_t){return false;}
+  bool visible=true;void clear(){visible=false;}bool shown()const{return visible;}bool protects(uint32_t)const{return visible;}
+  template<typename... T>void show(T...){visible=true;}bool tick(uint32_t){return false;}int replay()const{return 0;}
   unsigned replayElapsed(uint32_t)const{return 0;}unsigned lastReplayElapsed()const{return 0;}
+  unsigned position(unsigned elapsed)const{return elapsed;}
 }launchFeedback;
 struct Receiver {
   bool receiving=false;unsigned cancellations=0;
@@ -169,7 +171,7 @@ struct Practice {
 }practice;
 static LaunchMotion::Trace latestMotion,demoMotion;
 namespace MotionUI {static void makeDemo(LaunchMotion::Trace &,bool){normal();}}
-namespace MotionReplay {static bool playbackNeedsFrame(const LaunchMotion::Trace &,unsigned,unsigned){return false;}}
+namespace MotionReplay {static bool playbackNeedsFrame(const LaunchMotion::Trace &,unsigned,unsigned){return false;}static unsigned playbackDurationMs(const LaunchMotion::Trace &){return 0;}}
 static bool visibleDisplayFlipped(){return false;}
 struct Prefs {unsigned writes=0;size_t putUChar(const char *,uint8_t){++writes;normal();return 1;}
   bool putBool(const char *,bool){++writes;normal();return true;}}prefs;
