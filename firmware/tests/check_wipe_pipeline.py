@@ -78,7 +78,10 @@ struct SerialFake {
   unsigned available()const{return input.size();}
   char read(){const auto c=input.front();input.pop_front();return c;}
   void println(const char *s){output.emplace_back(s);}void flush(){}
-  template<class... T>void printf(const char *,T...){}
+  std::vector<std::string> lines;
+  template<class... T>void printf(const char *format,T... args){
+    char line[256];snprintf(line,sizeof(line),format,args...);lines.emplace_back(line);
+  }
   explicit operator bool()const{return true;}
   void feed(const std::string &s){for(char c:s)input.push_back(c);}
 }Serial;
@@ -112,7 +115,7 @@ static TournamentView tournamentView=TournamentView::RecordingOnly;
 static const char *tournamentViewName(){return "recording_only";}
 static RpmEstimator::Mode rpmEstimator=RpmEstimator::DEFAULT_MODE;
 static StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;static StartMarkReference::Reference startMarks;static bool startMarksDirty=false;
-static MountOrientation::Mode mountMode=MountOrientation::Mode::Top;
+static MountOrientation::Mode mountMode=MountOrientation::Mode::Top,liveMount=MountOrientation::Mode::Top;
 static Appearance::Config appearance;static Appearance::Celebration bestEffect,editorEffect;static Themes::Library themeLibrary;
 static InactivityTimer inactivity;static StickS3Level level;static StickS3Level::Reading drawnLevel;
 static UsbHostAwake usbAwake;
@@ -135,7 +138,8 @@ struct Snapshot {
   AnalogTachometer::Phase phase=AnalogTachometer::Phase::Ready;
   bool opticalIdle=true;
   uint32_t launches=7,revision=1,revolutions=3;bool valid=true,signalFault=false;
-  float resultRpm=6000,amplitude=1000,startNoise=3,contrast=1000,noise=3;uint64_t detectorUs=1000000;
+  float resultRpm=6000,amplitude=1000,startNoise=3,contrast=1000,noise=3;uint64_t detectorUs=1000000;uint32_t strongTurns=0;
+  bool ready=true,suspended=false;
   uint8_t pin=1;const char *endName()const{return "gap";}const char *stateName()const{return "Ready";}
 };
 struct Acquisition {
@@ -234,7 +238,7 @@ struct NvsStore {
 '''
 
 
-TESTS = r'''
+COMMON = r'''
 using Store=DeviceWipe::NvsStore;
 using Stage=WipeConfirmation::Stage;
 static void reset() {
@@ -254,6 +258,10 @@ static void stepAt(uint32_t now,bool a=false,bool b=false,bool fresh=true) {
 }
 static void step(bool a=false,bool b=false,bool fresh=true){stepAt(clockMs+20,a,b,fresh);}
 static void tapA(){step(true);step(false);step(false);}
+'''
+
+
+TESTS = r'''
 static void open() {
   controls.page=Page::Settings;controls.setting=unsigned(Controls::Setting::WipeAll);
   tapA();assert(controls.page==Page::Wipe && wipeConfirmation.stage()==Stage::Warning);
@@ -430,62 +438,20 @@ static void standbyGuard() {
   controls.page=Page::Main;wipeBlocked=true;autoPowerOff(millis(),acquisition.snapshot());
   assert(normalWrites==writes && !acquisition.begins);
 }
-static void wearCheckIsolation() {
-  reset();
-  controls.page=Page::Menu;controls.menu=5;buttonA();
-  assert(controls.page==Page::WearCheck && historyPage && !controls.wear.complete());
-  auto feedTilt=[&](float gx,float gy,float gz){
-    clockMs+=300;level.feed(gx,gy,gz,clockMs);
-  };
-  auto pushPull=[&](uint32_t id,float rpm){
-    Snapshot e=acquisition.state;e.revision=id;e.launches=id;e.valid=true;e.resultRpm=rpm;
-    acquisition.events.push_back(e);step();
-  };
-  feedTilt(0.0f,0.0f,1.0f);
-  for(unsigned i=1;i<=3;++i)pushPull(i,3250.0f+i*10.0f);
-  assert(controls.wear.stage()==WearCheck::Stage::VerticalUp && !practice.accepted && !motionPreps && !startMarkNotes);
-  feedTilt(0.0f,1.0f,0.0f);
-  for(unsigned i=4;i<=6;++i)pushPull(i,2020.0f+i*5.0f);
-  assert(controls.wear.stage()==WearCheck::Stage::VerticalDown && !practice.accepted && !motionPreps && !startMarkNotes);
-  feedTilt(0.0f,-1.0f,0.0f);
-  for(unsigned i=7;i<=9;++i)pushPull(i,3690.0f+i*5.0f);
-  assert(controls.wear.complete() && controls.wear.totalAccepted()==9 && !practice.accepted && !motionPreps && !startMarkNotes);
-  buttonA();assert(!controls.wear.complete() && controls.wear.totalAccepted()==0 && !practice.accepted);
-  holdB();assert(controls.page==Page::Menu && controls.menu==5);
-  holdB();assert(controls.page==Page::Main && !historyPage);
-  pushPull(10,5500.0f);
-  assert(practice.accepted==1 && motionPreps==1 && startMarkNotes==1);
-}
-// Release recoil: the loop pass that first sees the burst over (Hold) observes
-// the recoiled tilt before it takes the pull's event; the pull is still judged
-// by the tilt held when its burst began.
-static void wearCheckRecoil() {
-  reset();
-  controls.page=Page::Menu;controls.menu=5;buttonA();
-  assert(controls.page==Page::WearCheck);
-  clockMs+=300;level.feed(0.0f,0.0f,1.0f,clockMs);
-  acquisition.state.phase=AnalogTachometer::Phase::Ready;step();
-  acquisition.state.phase=AnalogTachometer::Phase::Launch;step();step();
-  // 15 degrees off level, inside the 18-degree recoil allowance.
-  clockMs+=300;level.feed(0.2588f,0.0f,0.9659f,clockMs);
-  acquisition.state.phase=AnalogTachometer::Phase::Hold;
-  Snapshot e=acquisition.state;e.revision=1;e.launches=1;e.valid=true;e.resultRpm=3250.0f;
-  acquisition.events.push_back(e);step();
-  assert(controls.wear.stageCount(0)==1 && controls.wear.lastOutcome()==WearCheck::Outcome::Accepted);
-  assert(!practice.accepted && !motionPreps && !startMarkNotes);
-}
 int main() {
   physicalAndUsb();pendingUsbPrefix();interruptedHold();busyDoesNotWrite();unseenWarningsDuringLaunch();
-  partialFailureBlocksOldRam();bootRecovery();standbyGuard();wearCheckIsolation();wearCheckRecoil();
+  partialFailureBlocksOldRam();bootRecovery();standbyGuard();
   std::cout<<"PASS: actual wipe sketch/loop/USB flow; physical3s, fresh observations, release restart, "
-              "busy/late-owner gates, partial-failure old-RAM write exclusion, boot recovery and standby guards, "
-              "wear check pulls kept out of history and motion, release recoil judged by the pre-burst tilt\n";
+              "busy/late-owner gates, partial-failure old-RAM write exclusion, boot recovery and standby guards\n";
 }
 '''
 
 
-def main():
-    source = SOURCE.read_text()
+def run(tests, args=(), source=SOURCE):
+    """Build the sketch's loop with the fakes above plus `tests` (after COMMON)
+    and run it with `args`. Helpers a sketch revision lacks are skipped, so an
+    older sketch builds and its tests fail by assertion."""
+    source = source.read_text()
     setup = function(source, "setup", static=False)
     boundary = "if(!recoverWipe())return;"
     recovery = setup.index(boundary)
@@ -497,6 +463,10 @@ def main():
     names = ["exportCpuPower", "syncNavigation", "navigate", "buttonA", "buttonB", "holdA", "holdB",
              "beginWipe", "cancelWipe", "restartAfterWipe", "commitWipe", "pollWipe", "tickDisplayPower"]
     bodies = "\n".join(function(source, name) for name in names)
+    # Wear check helpers called by loop() (0.20.4).
+    for name, result in (("wearDetectorReady", "bool"), ("observeWearMount", "void"), ("noteWearTap", "void"), ("logWearPull", "void")):
+        if f"static {result} {name}(" in source:
+            bodies += "\n" + function(source, name, result=result)
     hold = re.search(r"static constexpr uint32_t CELEBRATION_HOLD_MS=\d+;", source)
     bodies += "\n" + function(source, "recoverWipe", result="bool")
     bodies += "\n" + function(source, "runUsbCommand") + "\n" + function(source, "pollCommands")
@@ -516,15 +486,15 @@ def main():
     with tempfile.TemporaryDirectory(prefix="launchlab-wipe-pipeline-") as temp:
         build = Path(temp)
         cpp = build / "test.cpp"
-        cpp.write_text(PREFIX.replace('@CELEBRATION_HOLD@', hold[0] if hold else '') + bodies + TESTS)
+        cpp.write_text(PREFIX.replace('@CELEBRATION_HOLD@', hold[0] if hold else '') + bodies + COMMON + tests)
         executable = build / "test"
         subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17", "-O1", "-g",
                         "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
                         "-I" + str(ROOT / "tests/fakes"), "-I" + str(ROOT / "LaunchLabMini"),
                         "-I" + str(ROOT / "LaunchLabRpm"), "-I" + str(buttons),
                         str(cpp), "-o", str(executable)], check=True)
-        subprocess.run([str(executable)], check=True)
+        subprocess.run([str(executable), *map(str, args)], check=True)
 
 
 if __name__ == "__main__":
-    main()
+    run(TESTS)

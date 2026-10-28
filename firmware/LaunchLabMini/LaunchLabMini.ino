@@ -66,11 +66,11 @@ namespace Hil{inline bool nvsWrite(const char *key,size_t bytes);}
 #define LOOP_HELPER __attribute__((noinline))
 #if LAUNCHLAB_HIL
 // Test-only hardware-in-the-loop build; never a release. See tools/hil.
-static constexpr char VERSION[] = "0.20.3-sticks3-songs-hil-pm";
+static constexpr char VERSION[] = "0.20.4-sticks3-songs-hil-pm";
 #elif LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = "0.20.3-sticks3-songs-pm";
+static constexpr char VERSION[] = "0.20.4-sticks3-songs-pm";
 #else
-static constexpr char VERSION[] = "0.20.3-sticks3-songs";
+static constexpr char VERSION[] = "0.20.4-sticks3-songs";
 #endif
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ
@@ -721,6 +721,38 @@ LOOP_HELPER static void exportSignal() {
   dirty=true;
 }
 
+// The RPM detector would measure a burst now: not in its rearm second.
+static bool wearDetectorReady(const Snapshot &s) {
+  return s.ready && !s.signalFault && !s.suspended && s.phase==AnalogTachometer::Phase::Ready;
+}
+// Wear check's level, as the other Mounting would read the unit: held off
+// level here but level there, the page suggests the other Mounting.
+LOOP_HELPER static void observeWearMount(const StickS3Level::Reading &tilt) {
+  const auto other=liveMount==MountOrientation::Mode::Sidecar?MountOrientation::Mode::Top:MountOrientation::Mode::Sidecar;
+  const bool hinted=controls.wear.mountHint();
+  controls.wear.observeMount(millis(),WearCheck::Tilt(tilt),WearCheck::Tilt(level.reading(millis(),
+    [other](const float *in,float *out){MountOrientation::remapVector(liveMount,other,in,out);})));
+  if(controls.wear.mountHint()==hinted)return;
+  dirty=true;
+  Serial.printf("WEAR_CHECK_MOUNT_HINT shown=%d mount=%s\n",controls.wear.mountHint(),MountOrientation::label(liveMount));
+}
+// A on the Wear check page starts the check over: say what pressed it.
+LOOP_HELPER static void noteWearTap(const char *source) {
+  if(controls.page!=Controls::Page::WearCheck)return;
+  Serial.printf("WEAR_CHECK_RESET source=%s stage=%s pulls=%u\n",source,
+    WearCheck::stageName(controls.wear.stage()),controls.wear.totalAccepted());
+}
+// Every burst or unmeasured pull on the Wear check page: accepted, completed
+// or rejected retractions, the pull out (extension, never counted), the string
+// let go before LET GO (early_release) and an unmeasured retraction (missed).
+LOOP_HELPER static void logWearPull(WearCheck::Stage stageBefore,WearCheck::Outcome outcome,float rpm) {
+  inactivity.touch(millis());
+  Serial.printf("WEAR_CHECK_PULL stage=%s pull=%u/%u outcome=%s rpm=%.1f tilt_deg=%.2f\n",
+    WearCheck::stageName(stageBefore),
+    stageBefore<WearCheck::Stage::Complete?controls.wear.stageCount(unsigned(stageBefore)):WearCheck::PULLS_PER_STAGE,
+    WearCheck::PULLS_PER_STAGE,WearCheck::outcomeName(outcome),rpm,controls.wear.lastTiltDegrees());
+}
+
 static void drawLiveLevel(lgfx::LGFXBase &view,int cx) {
   drawnLevel=StickS3Level::forDisplay(level.reading(millis()),visibleDisplayFlipped());
   ScreensUI::level(view,ui(),cx,drawnLevel);
@@ -777,8 +809,9 @@ LOOP_HELPER static void draw(const Snapshot &s) {
       case Controls::Page::WearCheck: {
         const auto rawTilt=level.reading(millis());
         drawnLevel=StickS3Level::forDisplay(rawTilt,visibleDisplayFlipped());
-        ControlsUI::wearCheck(view,controls.wear,WearCheck::Tilt(rawTilt),WearCheck::Tilt(drawnLevel),
-          s.ready && !s.signalFault && !s.suspended && s.phase==AnalogTachometer::Phase::Ready);
+        ControlsUI::wearCheck(view,controls.wear,WearCheck::Tilt(rawTilt),WearCheck::Tilt(drawnLevel),wearDetectorReady(s),
+          liveMount==MountOrientation::Mode::Sidecar?"Sidecar mount":"Top mount",
+          liveMount==MountOrientation::Mode::Sidecar?"Top install?":"Sidecar install?");
         break;
       }
       default:PracticeUI::draw(view,demo?demoPractice:practice,historyView,historyOffset,demo,colors);break;
@@ -2611,11 +2644,11 @@ LOOP_HELPER static void runUsbCommand(const char *command,const Snapshot &s) {
       acquisition.request(Action::CheckpointEnd);
     }
   }
-  else if(c=='a')buttonA();
+  else if(c=='a'){noteWearTap("usb_a");buttonA();}
   else if(c=='o')holdA();
   else if(c=='d'){diagnostics=!diagnostics;dirty=true;}
   else if(c=='h')toggleHistory();
-  else if(c=='c')nextView();
+  else if(c=='c'){noteWearTap("usb_c");nextView();}
   else if(c=='e')exportMotion();
   else if(c=='Q'){const bool ok=imuAcquisition.quiet(300);Serial.printf("IMU_QUIET_TEST ms=300 ok=%d flash_write=0\n",ok);}
   else if(c=='q') {
@@ -2725,6 +2758,14 @@ void loop() {
   Snapshot s=acquisition.snapshot();
   if(buttonsFresh && (M5.BtnA.isPressed() || M5.BtnB.isPressed() || M5.BtnA.wasReleased() || M5.BtnB.wasReleased()))
     inactivity.touch(millis());
+#if LAUNCHLAB_HIL
+  // Nothing presses the rig's buttons: every physical edge is worth a line
+  // (a Wear check reset with no USB key behind it, 2026-10-27).
+  if(buttonsFresh && (M5.BtnA.wasPressed() || M5.BtnA.wasReleased() || M5.BtnB.wasPressed() || M5.BtnB.wasReleased()))
+    Serial.printf("HIL_BUTTON a=%d b=%d a_pressed=%d a_released=%d b_pressed=%d b_released=%d ms=%lu\n",
+      M5.BtnA.isPressed(),M5.BtnB.isPressed(),M5.BtnA.wasPressed(),M5.BtnA.wasReleased(),
+      M5.BtnB.wasPressed(),M5.BtnB.wasReleased(),(unsigned long)millis());
+#endif
   if(wipeBlocked) {
     pollWipe(millis(),buttonsFresh,s);
     tickDisplayPower(millis(),s);
@@ -2735,6 +2776,16 @@ void loop() {
   if(controls.page==Controls::Page::WearCheck) {
     const auto rawTilt=level.reading(millis());
     controls.wear.observeLevel(rawTilt,s.phase==AnalogTachometer::Phase::Launch);
+    observeWearMount(rawTilt);
+    const auto stepBefore=controls.wear.step();
+    const auto stageBefore=controls.wear.stage();
+    const auto unmeasured=controls.wear.observeOptics(s.detectorUs,s.strongTurns,wearDetectorReady(s),
+      s.ready && !s.suspended && !s.signalFault && s.phase!=AnalogTachometer::Phase::Settling && s.phase!=AnalogTachometer::Phase::Paused);
+    if(unmeasured!=WearCheck::Outcome::None)logWearPull(stageBefore,unmeasured,0.0f);
+    if(controls.wear.step()!=stepBefore) {
+      inactivity.touch(millis());dirty=true;
+      Serial.printf("WEAR_CHECK_STEP step=%s t_us=%llu\n",WearCheck::stepName(controls.wear.step()),(unsigned long long)s.detectorUs);
+    }
     if(!controls.wear.complete() && uint32_t(millis()-lastDraw)>=100) {
       const auto tilt=StickS3Level::forDisplay(rawTilt,visibleDisplayFlipped());
       if(tilt.state!=drawnLevel.state || (tilt.valid() &&
@@ -2750,7 +2801,7 @@ void loop() {
   else if(buttonsFresh) {
     const bool clickedA=gestureA.click(M5.BtnA.wasPressed(),M5.BtnA.wasHold(),M5.BtnA.wasClicked());
     const bool clickedB=gestureB.click(M5.BtnB.wasPressed(),M5.BtnB.wasHold(),M5.BtnB.wasClicked());
-    if(M5.BtnA.wasHold())holdA();else if(clickedA)buttonA();
+    if(M5.BtnA.wasHold())holdA();else if(clickedA){noteWearTap("button");buttonA();}
     if(M5.BtnB.wasHold())holdB();else if(clickedB)buttonB();
   }
   if(wipeBlocked)return;
@@ -2765,13 +2816,12 @@ void loop() {
         (unsigned long)event.launches,event.endName(),(unsigned long long)event.detectorUs);
       if(controls.page==Controls::Page::WearCheck) {
         const auto stageBefore=controls.wear.stage();
-        const auto outcome=controls.wear.observePull(event.launches,event.valid,event.resultRpm,level.reading(millis()));
+        const auto stepBefore=controls.wear.step();
+        const auto outcome=controls.wear.observeBurst(event.launches,event.valid,event.resultRpm,level.reading(millis()));
         if(outcome!=WearCheck::Outcome::None) {
-          inactivity.touch(millis());
-          Serial.printf("WEAR_CHECK_PULL stage=%s pull=%u/%u outcome=%s rpm=%.1f tilt_deg=%.2f\n",
-            WearCheck::stageName(stageBefore),
-            stageBefore<WearCheck::Stage::Complete?controls.wear.stageCount(unsigned(stageBefore)):WearCheck::PULLS_PER_STAGE,
-            WearCheck::PULLS_PER_STAGE,WearCheck::outcomeName(outcome),event.resultRpm,controls.wear.lastTiltDegrees());
+          logWearPull(stageBefore,outcome,event.resultRpm);
+          if(controls.wear.step()!=stepBefore)
+            Serial.printf("WEAR_CHECK_STEP step=%s t_us=%llu\n",WearCheck::stepName(controls.wear.step()),(unsigned long long)event.detectorUs);
           if(outcome==WearCheck::Outcome::Completed) {
             Serial.printf("WEAR_CHECK_RESULT rpm=%.1f median_rpm=%.1f level_rpm=%.1f pull_down_rpm=%.1f pull_up_rpm=%.1f pulls=%u tolerance_deg=%.0f baseline_rpm=%.1f\n",
               controls.wear.overallMean(),controls.wear.overallMedianMean(),

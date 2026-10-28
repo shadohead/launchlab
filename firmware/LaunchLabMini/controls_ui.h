@@ -10,7 +10,7 @@
 #include "wipe_confirmation.h"
 
 namespace ControlsUI {
-static constexpr const char *MENU[]={"History","New session","Battery","Settings","Tournament","Wear check","Back"};
+static constexpr const char *MENU[]={"History","New session","Battery","Settings","Tournament","String wear check","Back"};
 static constexpr const char *HISTORY[]={"Launches","Pull trend","Session trend","Back"};
 // By Controls::Setting value; the list shows them in Controls::ORDER.
 static constexpr const char *SETTINGS[]={"Sleep after","RPM method","Brightness","Flip display","Sensor profile","Theme","Best effect","Celebrate","Sound","Mounting","Shake to wake","Wipe all","Back"};
@@ -186,14 +186,17 @@ inline void wipe(lgfx::LGFXBase &g,const WipeConfirmation &flow,uint32_t now,boo
   }
   if(failed){g.setTextColor(colors.warning,colors.background);g.drawString(blocked?"Wipe needs retry":"Try again when idle",g.width()/2,199,1);}
 }
-// detectorReady: the RPM detector would measure a release now. In its rearm
-// second after a pull (extended by the turns of a slow extension) a release
-// counts as that pull's rewind and is never reported, so READY waits for it.
+// detectorReady: the RPM detector would measure a burst now. In its rearm
+// second after a burst a release counts as that burst's rewind and is never
+// measured, so PULL OUT shows WAIT and LET GO waits for it (0.20.4).
+// mount: the Mounting setting the tilt is read in (Settings, Mounting); a
+// Sidecar install measured as Top reads its level 90 degrees off, and the
+// page then asks about the other one (otherMount).
 inline void wearCheck(lgfx::LGFXBase &g,const WearCheck::Session &wear,const WearCheck::Tilt &rawTilt,const WearCheck::Tilt &displayTilt,
-  bool detectorReady=true) {
+  bool detectorReady=true,const char *mount="Top mount",const char *otherMount="Sidecar install?") {
   const int cx=g.width()/2;
   if(wear.complete()) {
-    heading(g,"Wear check");
+    heading(g,"String wear check");
     g.drawRoundRect(8,31,g.width()-16,58,5,colors.accent);
     char line[28];
     if(WearCheck::FRESH_BASELINE_RPM>0.0f) {
@@ -245,16 +248,19 @@ inline void wearCheck(lgfx::LGFXBase &g,const WearCheck::Session &wear,const Wea
   } else if(outcome==WearCheck::Outcome::RejectedNoImu) {
     g.setTextColor(colors.warning,colors.background);
     g.drawString("Retry: wait for IMU",cx,50,1);
-  } else if(outcome==WearCheck::Outcome::RejectedSignal) {
+  } else if(outcome==WearCheck::Outcome::EarlyRelease) {
     g.setTextColor(colors.warning,colors.background);
-    g.drawString("Retry: slow extend",cx,50,1);
+    g.drawString("Retry: hold longer",cx,50,1);
+  } else if(outcome==WearCheck::Outcome::RejectedSignal || outcome==WearCheck::Outcome::Missed) {
+    g.setTextColor(colors.warning,colors.background);
+    g.drawString("Retry: not measured",cx,50,1);
   } else if(wear.currentStageCount()>0) {
     snprintf(sub,sizeof(sub),"Last: %ld RPM",std::lround(wear.lastRpm()));
     g.setTextColor(colors.ready,colors.background);
     g.drawString(sub,cx,50,1);
   } else {
     g.setTextColor(colors.muted,colors.background);
-    g.drawString("Extend, wait, let go",cx,50,1);
+    g.drawString("Pull, hold, let go",cx,50,1);
   }
   for(unsigned p=0;p<WearCheck::PULLS_PER_STAGE;++p) {
     const int px=9+int(p)*40,pw=37,ph=18;
@@ -286,11 +292,24 @@ inline void wearCheck(lgfx::LGFXBase &g,const WearCheck::Session &wear,const Wea
     g.setTextColor(colors.muted,colors.background);
     g.drawString("--.- deg",cx,166,2);
   }
-  const bool waiting=align==WearCheck::Alignment::Ready && !detectorReady;
+  // On target the label is the pull's step: PULL OUT (WAIT while the
+  // detector rearms), HOLD, then LET GO.
+  const bool aligned=align==WearCheck::Alignment::Ready;
+  const char *label=aligned?WearCheck::stepLabel(wear.step(),detectorReady):WearCheck::alignmentLabel(align);
+  const bool waiting=aligned && wear.step()==WearCheck::Step::PullOut && !detectorReady;
   const uint16_t alignColor=waiting || align==WearCheck::Alignment::NoImu?colors.muted:
-    align==WearCheck::Alignment::Ready?colors.ready:colors.warning;
+    !aligned?colors.warning:wear.step()==WearCheck::Step::Hold?colors.accent:colors.ready;
   g.setTextColor(alignColor,colors.background);
-  g.drawString(waiting?"WAIT":WearCheck::alignmentLabel(align),cx,188,2);
+  g.drawString(label,cx,188,2);
+  if(wear.mountHint()) {
+    // Level in the other Mounting, not in this one.
+    g.setTextColor(colors.warning,colors.background);
+    g.drawString(otherMount,cx,207,1);
+    g.drawString("Settings > Mounting",cx,217,1);
+  } else {
+    g.setTextColor(colors.muted,colors.background);
+    g.drawString(mount,cx,210,1);
+  }
   footer(g,"A Reset  Hold B Back");
 }
 }

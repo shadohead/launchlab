@@ -41,11 +41,18 @@ public:
     initialized_=usable_=true;
   }
   Reading reading(uint32_t now) const {
+    return reading(now,[](const float *in,float *out){out[0]=in[0];out[1]=in[1];out[2]=in[2];});
+  }
+  // The reading of the same gravity carried into another frame by `remap`
+  // (Wear check asks how the other Mounting would read the unit).
+  template<class Remap>
+  Reading reading(uint32_t now,Remap remap) const {
     if(!seen_ || now-lastSample_>STALE_MS)return {};
     if(!usable_)return {State::Moving};
-    const float horizontal=std::hypot(gravity_[0],gravity_[1]);
-    if(std::hypot(horizontal,gravity_[2])<0.5f)return {State::Moving};
-    const float angle=std::atan2(horizontal,std::fabs(gravity_[2]))*57.2957795f;
+    float g[3];remap(gravity_,g);
+    const float horizontal=std::hypot(g[0],g[1]);
+    if(std::hypot(horizontal,g[2])<0.5f)return {State::Moving};
+    const float angle=std::atan2(horizontal,std::fabs(g[2]))*57.2957795f;
     const float radius=std::min(angle/RIM_DEGREES,1.0f);
     const float scale=horizontal>0.0001f?radius/horizontal:0;
     // Native portrait (rotation 0), USB-C down. The BMI270 diagram has raw
@@ -53,7 +60,7 @@ public:
     // board +X toward screen-right and +Y toward screen-top (X=rawY,Y=-rawX).
     // Reverse both screen directions per the user's mounted-device check.
     // The angle and rim scale stay unchanged.
-    return {State::Valid,angle,gravity_[0]*scale,-gravity_[1]*scale};
+    return {State::Valid,angle,g[0]*scale,-g[1]*scale};
   }
   uint32_t samples() const{return samples_;}
   uint32_t rejected() const{return rejected_;}

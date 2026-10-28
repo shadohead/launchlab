@@ -42,6 +42,8 @@ public:
     esp_err_t error=ESP_OK;
     uint64_t samples=0,detectorUs=0,ringFirst=0;
     uint64_t burstStartHostUs=0,burstEndHostUs=0;
+    // The detector's strong turns so far (AnalogTachometer::strongTurns).
+    uint32_t strongTurns=0;
     uint32_t ringCount=0,revision=0,launches=0,revolutions=0,edges=0;
     uint32_t weak=0,slow=0,shape=0,inconsistent=0,rearmExtensions=0,rearmMs=0;
     uint32_t singlePeakUpdates=0,singlePeakRejected=0;
@@ -376,7 +378,7 @@ private:
     s.phase=detector_.phase;s.ended=detector_.ended;s.ready=ready_;s.suspended=suspended_;s.resting=idlePaused_;
     s.enabled=detector_.enabled;s.valid=detector_.resultValid;s.signalFault=detector_.signalFault;
     s.opticalIdle=detector_.historyCheckpointIdle();
-    s.pin=pin_;s.error=error_;s.samples=samples_;s.detectorUs=detector_.nowUs;
+    s.pin=pin_;s.error=error_;s.samples=samples_;s.detectorUs=detector_.nowUs;s.strongTurns=detector_.strongTurns;
     s.ringCount=ring_.count();s.ringFirst=ring_.first();
     s.burstStartHostUs=burstStartHostUs_;s.burstEndHostUs=burstEndHostUs_;
     s.revision=detector_.resultRevision;s.launches=detector_.launches;s.revolutions=detector_.revolutions;

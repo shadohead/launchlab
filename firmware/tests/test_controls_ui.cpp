@@ -27,9 +27,18 @@ struct LGFXBase {
   void fillRect(int x,int y,int w,int h,uint16_t){assert(x>=0 && y>=0 && x+w<=135 && y+h<=240);}
   void drawRoundRect(int x,int y,int w,int h,int,uint16_t){fillRect(x,y,w,h,0);}
   int textWidth(const char *text,const int *font){return int(std::strlen(text))*(*font==4?18:8);}
+  // Font 2 is proportional: 8 px a glyph, but 5 for i, l, space and narrow
+  // punctuation. Every glyph's estimate is at or above M5GFX Font2's own
+  // width: "String wear check" draws 110 px and estimates 127, "Tournament"
+  // 69 and 80. check_ui_render pins the real pixels.
+  static int font2Width(const char *text) {
+    int width=0;
+    for(const char *c=text;*c;++c)width+=std::strchr("il .,:;'!|",*c)?5:8;
+    return width;
+  }
   void drawString(const char *text,int x,int y,int font) {
-    const int glyph=font==4?18:font==2?8:6,height=font==4?26:font==2?16:8;
-    const int width=int(std::strlen(text))*glyph;
+    const int glyph=font==4?18:6,height=font==4?26:font==2?16:8;
+    const int width=font==2?font2Width(text):int(std::strlen(text))*glyph;
     const int left=datum==top_left?x:datum==top_right?x-width:x-width/2;
     const int right=datum==top_left?x+width:datum==top_right?x:x+(width+1)/2;
     assert(left>=0 && right<=135 && y>=0 && y+height<=240);
@@ -120,14 +129,34 @@ int main() {
       {true,88.4f,0.0f,-1.0f}
     };
     for(const auto &t:tilts){lgfx::LGFXBase g;ControlsUI::wearCheck(g,wear,t,t);assert(g.footers==1);++renders;}
-    // On target, READY asks for the release only while the detector would
-    // measure it: in its rearm second after a pull, a release is taken as
-    // that pull's rewind and never reported.
+    // On target the label is the pull's step (0.20.4): PULL OUT only while
+    // the detector would measure (WAIT in its rearm second), HOLD with the
+    // string out, then LET GO.
     for(bool detectorReady:{true,false}) {
       lgfx::LGFXBase g;ControlsUI::wearCheck(g,wear,tilts[1],tilts[1],detectorReady);assert(g.footers==1);++renders;
-      assert(g.drew("READY - PULL")==detectorReady && g.drew("WAIT")==!detectorReady && g.drew("Extend, wait, let go"));
+      assert(g.drew("PULL OUT")==detectorReady && g.drew("WAIT")==!detectorReady && g.drew("Pull, hold, let go"));
     }
     {lgfx::LGFXBase g;ControlsUI::wearCheck(g,wear,tilts[2],tilts[2],false);assert(g.drew("TILT TO 0 DEG") && !g.drew("WAIT"));++renders;}
+    {
+      WearCheck::Session steps;uint64_t t=1000000;uint32_t turns=0;
+      steps.observeOptics(t,turns,true);
+      steps.observeOptics(t+=WearCheck::STILL_US,turns+=WearCheck::RUN_TURNS,true);
+      for(bool detectorReady:{true,false}) {
+        lgfx::LGFXBase g;ControlsUI::wearCheck(g,steps,tilts[1],tilts[1],detectorReady);++renders;
+        assert(g.drew("HOLD") && !g.drew("WAIT") && !g.drew("PULL OUT"));
+      }
+      steps.observeOptics(t+=WearCheck::HOLD_US,turns,true);
+      {lgfx::LGFXBase g;ControlsUI::wearCheck(g,steps,tilts[1],tilts[1],true);assert(g.drew("LET GO"));++renders;}
+      {lgfx::LGFXBase g;ControlsUI::wearCheck(g,steps,tilts[2],tilts[2],true);assert(g.drew("TILT TO 0 DEG") && !g.drew("LET GO"));++renders;}
+      // Marks after LET GO that never become a result: not measured.
+      steps.observeOptics(t+=WearCheck::STILL_US,turns+=WearCheck::RUN_TURNS,true);
+      assert(steps.observeOptics(t+=WearCheck::MISSED_US,turns,true)==WearCheck::Outcome::Missed);
+      {lgfx::LGFXBase g;ControlsUI::wearCheck(g,steps,tilts[1],tilts[1],true);assert(g.drew("Retry: not measured") && g.drew("PULL OUT"));++renders;}
+      steps.observeOptics(t+=WearCheck::STILL_US,turns+=WearCheck::RUN_TURNS,true);
+      steps.observeOptics(t+=WearCheck::STILL_US,turns,false);
+      assert(steps.observeOptics(t+=20000,turns+=WearCheck::RUN_TURNS,false)==WearCheck::Outcome::EarlyRelease);
+      {lgfx::LGFXBase g;ControlsUI::wearCheck(g,steps,tilts[1],tilts[1],false);assert(g.drew("Retry: hold longer") && g.drew("WAIT"));++renders;}
+    }
     uint32_t launches=0;
     // Rejections and stage transitions through all 3 stages and summary.
     wear.observePull(++launches,false,0,tilts[1]);

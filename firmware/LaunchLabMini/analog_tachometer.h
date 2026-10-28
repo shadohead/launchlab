@@ -58,6 +58,10 @@ public:
   uint32_t launches=0, attempts=0, resultRevision=0, cycles=0, revolutions=0;
   uint32_t opticalEdges=0, rejectedPeriods=0, rejectedShape=0, inconsistentWindows=0, slowWindows=0, weakWindows=0;
   uint32_t rearmExtensions=0;
+  // Read only (Wear check follows the string by it): complete turns whose
+  // mark reached minMark, counted after the period and shape checks and
+  // whatever the phase. Never reset; nothing in the detector reads it.
+  uint32_t strongTurns=0;
   // While a sound plays the sketch raises the marks a launch must start on
   // (StartMarkReference, 0.20.1; 0 otherwise). It holds only the start: a
   // confirmed launch is measured as ever. soundHeldWindows counts consistent
@@ -400,6 +404,7 @@ private:
       rejectedShape++;nPeriods=0;clearMotion();return;
     }
     const float duty=float(highUs)/period;
+    if(minMark>0 && signalContrast>=minMark)strongTurns++;
     const uint32_t previousPeriod=motionPeriod;
     const uint32_t olderPeriod=motionPreviousPeriod;
     const float previousDuty=motionDuty,previousAmplitude=motionAmplitude;
