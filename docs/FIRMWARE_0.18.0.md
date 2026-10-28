@@ -1,7 +1,7 @@
 # Firmware 0.18.0 build context
 
 Published as a beta on 2026-10-21 and promoted to stable on 2026-10-22 after the owner's hand test.
-Superseded by [0.20.2](FIRMWARE_0.20.2.md); this document describes the preserved 0.18.0 release.
+Superseded by [0.20.4](FIRMWARE_0.20.4.md); this document describes the preserved 0.18.0 release.
 
 The shipping runtime is `0.18.0-sticks3-anime-pm`, application SHA-256 `ec998fc91247f9a2f1a9780a5c493c043f18c7716cf42e32c43396c970ba78b8`. The compiled source snapshot is frozen in the [release directory](../firmware/releases/0.18.0-sticks3-anime-pm/). It uses the same PM SDK, toolchain, bootloader and partition table as [0.13.5](FIRMWARE_0.13.5.md). Use the [USB updater](https://launchlab.beywatch.gg/update) for the shipping image.
 
