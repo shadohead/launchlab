@@ -1,6 +1,6 @@
 # Firmware 0.18.1 build context (beta)
 
-The beta runtime is `0.18.1-sticks3-anime-pm`, application SHA-256 `4fa5060703ebfbe36ae782c550437c0c9f3e14a2439617cb4444cf78d3e83d89`. The compiled source snapshot is frozen in the [release directory](../firmware/releases/0.18.1-sticks3-anime-pm/). It is a beta: the recommended release is now [0.20.4](FIRMWARE_0.20.4.md). It uses the same PM SDK, toolchain, bootloader and partition table as [0.13.5](FIRMWARE_0.13.5.md). Use the [USB updater](https://launchlab.beywatch.gg/update) for the shipping image.
+The beta runtime is `0.18.1-sticks3-anime-pm`, application SHA-256 `4fa5060703ebfbe36ae782c550437c0c9f3e14a2439617cb4444cf78d3e83d89`. The compiled source snapshot is frozen in the [release directory](../firmware/releases/0.18.1-sticks3-anime-pm/). It is a beta: the recommended release is now [0.20.5](FIRMWARE_0.20.5.md). It uses the same PM SDK, toolchain, bootloader and partition table as [0.13.5](FIRMWARE_0.13.5.md). Use the [USB updater](https://launchlab.beywatch.gg/update) for the shipping image.
 
 ## Build from source
 

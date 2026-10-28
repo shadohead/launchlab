@@ -1,8 +1,8 @@
 # LaunchLab for M5StickS3
 
-Current revision: **0.20.4-sticks3-songs-pm**, the recommended stable release, for **M5StickS3 K150 (ESP32-S3, 8 MB flash / 8 MB OPI PSRAM)**.
+Current revision: **0.20.5-sticks3-songs-pm**, the recommended stable release, for **M5StickS3 K150 (ESP32-S3, 8 MB flash / 8 MB OPI PSRAM)**.
 One application supports analog QRE1113 and TCRT5000 through the saved Sensor profile setting.
-See [build context](../../docs/FIRMWARE_0.20.4.md) and [release notes](../releases/0.20.4-sticks3-songs-pm/README.md).
+See [build context](../../docs/FIRMWARE_0.20.5.md) and [release notes](../releases/0.20.5-sticks3-songs-pm/README.md).
 
 Tilt replay is reliable on hard pulls: the accelerometer uses its ±16 g range, and every IMU sample is read from the BMI270 FIFO, so the live level and recordings no longer drop out at rest or during saves. A pull that reaches the gyro's 2000 °/s limit keeps its replay, marked **Tilt approx.**
 A single click of the side power key saves pending pulls and powers off.
@@ -10,6 +10,7 @@ RPM detection treats the cord rewind after a pull as part of that pull, confirms
 
 Filtered movement renews the 30-second unused shake-wake timer. Stillness also enables RESTING, which pauses ADC sampling until movement or a button resumes it. The shared sensor supply remains powered. USB keeps the device awake.
 0.20.4 adds String wear check under Menu: pull out, hold until LET GO, then let go, and it measures the retraction, never the pull out, reading the launcher's tilt in the selected Mounting (Top or Sidecar). 0.20.3 introduced it as Wear check.
+0.20.5's recap graphs each pull's RPM turn by turn, from the gear starting through the peak to the end, in place of the Start/End level dots; after a pull the tilt replay plays twice, and A on Main opens the recap looping until A again or a pull.
 0.20.2 sleeps after 1 minute by default on a unit that never chose (a chosen Sleep after time is kept) and adds a Shake to wake setting: On, the default, wakes on a shake as before; Off sleeps more deeply and only the side key wakes it.
 0.20.1 reads RPM accurately at high speed, plays songs for at most 6 s like a celebration, and while a sound plays a pull must start with marks at least half as strong as your recent pulls, so speaker noise cannot start one.
 0.20.0 lets an added celebration effect carry a song made from a MIDI file in the [website effects library](https://launchlab.beywatch.gg/effects), with new voices and a drum bank; a song fades out when a pull starts.
@@ -54,7 +55,7 @@ Measurement runs on every screen while active. After 30 seconds of stillness, RE
   - Flip display: rotates the screen 180°. Brightness and flip preview immediately and revert if you cancel. Physical A/B buttons keep their roles when flipped.
 - **Tournament:** starts in Recording Only; B cycles Recording Only / RPM; hold A exits. The selected view resumes after shake wake.
 
-Accepted pulls show a five-second recap from Main. Menus, history and setting drafts stay open while launches keep recording. The battery page shows percentage, icon, voltage and charging status; the voltage-based percentage is not a calibrated capacity measurement.
+Accepted pulls show a recap from Main: its tilt replay plays twice and it closes after five seconds (longer for a long recording). A on Main opens the latest recap and loops its replay until A again or the next pull. Menus, history and setting drafts stay open while launches keep recording. The battery page shows percentage, icon, voltage and charging status; the voltage-based percentage is not a calibrated capacity measurement.
 
 ## Acquisition and replay
 
@@ -62,7 +63,7 @@ A dedicated core-0 task owns continuous ADC1 DMA acquisition at **50,000 samples
 
 The release enables CPU power management at **40–80 MHz**, holding 80 MHz during acquisition. Automatic light sleep is disabled. Startup verifies fresh paired accelerometer/gyro data and the FIFO axis mapping, makes up to three attempts, and retries a missing IMU owner every five seconds while idle.
 
-After a pull, the recap shows RPM, frozen Start/End level dots and a rotation replay. With the display flipped, the live level, the Start/End dots and the 3D recap all follow the flipped screen; recorded data is unchanged. The IMU measures gravity-relative tilt and relative rotation, not travel distance or compass heading. RPM describes launcher-shaft speed, not stadium/release RPM.
+After a pull, the recap shows RPM, a rotation replay with its progress down the right edge, and a graph of the pull's RPM turn by turn (one dot per turn, the peak on the top line in thousands; from 0.20.5, in place of the Start/End level dots). The graph is kept until the next pull; after a restart the recap shows no curve. With the display flipped, the live level and the 3D recap follow the flipped screen; recorded data is unchanged. The IMU measures gravity-relative tilt and relative rotation, not travel distance or compass heading. RPM describes launcher-shaft speed, not stadium/release RPM.
 
 History retains up to 128 launches and 24 sessions. Automatic checkpoints wait for ten quiet seconds after the last accepted pull once the launcher is set down, or a minute while it is handheld; pulls left unsaved for three minutes are written at the next idle moment. Standby flushes pending history; abrupt power loss can lose the pending bout.
 

@@ -1,6 +1,6 @@
 # Update, repair and rollback
 
-Use the [LaunchLab USB updater](https://launchlab.beywatch.gg/update). It is the only maintained browser updater; the former GitHub Pages address redirects there. Check the selected target version and release notes before installing. This repository preserves the [0.20.4 release notes](../firmware/releases/0.20.4-sticks3-songs-pm/README.md), [build context](FIRMWARE_0.20.4.md) and [firmware catalog](../site/public/firmware/versions.json) as source and artifact references.
+Use the [LaunchLab USB updater](https://launchlab.beywatch.gg/update). It is the only maintained browser updater; the former GitHub Pages address redirects there. Check the selected target version and release notes before installing. This repository preserves the [0.20.5 release notes](../firmware/releases/0.20.5-sticks3-songs-pm/README.md), [build context](FIRMWARE_0.20.5.md) and [firmware catalog](../site/public/firmware/versions.json) as source and artifact references.
 
 Ordinary Update blocks downgrades and unknown or incomplete applications. Repair / rollback and First install require their own explicit confirmations. Current byte verification does not establish physical rollback, stock reinstall or reliable pull measurement. Follow the procedures below and keep private backups.
 

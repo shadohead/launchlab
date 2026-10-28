@@ -1,38 +1,38 @@
 {
-  "version": "0.20.4",
-  "runtime": "0.20.4-sticks3-songs-pm",
+  "version": "0.20.5",
+  "runtime": "0.20.5-sticks3-songs-pm",
   "board": "M5StickS3 K150",
   "chip": "ESP32-S3",
   "flashBytes": 8388608,
   "applicationOffset": 65536,
   "files": [
     {
-      "path": "firmware/0.20.4/bootloader.bin",
+      "path": "firmware/0.20.5/bootloader.bin",
       "offset": 0,
       "size": 20256,
       "sha256": "8581a3fb98309f261482327b5ff51a2fabca0ec513f9ba38595ed04479794e58"
     },
     {
-      "path": "firmware/0.20.4/partitions.bin",
+      "path": "firmware/0.20.5/partitions.bin",
       "offset": 32768,
       "size": 3072,
       "sha256": "1d9cca96de0fe07ad7fc0648b9878ddecd9ce565e38b589ad20fea698ed4c80c"
     },
     {
-      "path": "firmware/0.20.4/boot_app0.bin",
+      "path": "firmware/0.20.5/boot_app0.bin",
       "offset": 57344,
       "size": 8192,
       "sha256": "f94c5d786a7a8fab06ac5d10e33bf37711a6697636dc037559ea19cc410a17f0"
     },
     {
-      "path": "firmware/0.20.4/application.bin",
+      "path": "firmware/0.20.5/application.bin",
       "offset": 65536,
-      "size": 1856096,
-      "sha256": "db6fb35985db2587a8ad572afd431fbdab2c9101175a3b06699d7f4b516fcb28"
+      "size": 1859872,
+      "sha256": "fac73207078db878a7eef0450cff063b6be498cc3c153697c85ec1d4c41ab730"
     }
   ],
   "validation": "Beta: exact shipping application installed and read back; software checks, pinned target compilation and the hardware-in-the-loop release gate on the exact source passed. Not yet hand-tested for stable.",
-  "release": "0.20.4-sticks3-songs-pm",
+  "release": "0.20.5-sticks3-songs-pm",
   "profiles": [
     "qre1113",
     "tcrt5000"
