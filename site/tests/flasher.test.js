@@ -6,10 +6,10 @@ import {APP_OFFSET, APP_IDENTITY_BYTES, compareVersions, validateCatalog, verifi
 import {catalog,oldCatalog,base,localFetch,images,oldImages,fake,opts} from './helpers.js';
 const archivedCatalog=JSON.parse(await readFile(new URL('../public/firmware/0.12.1/catalog.json',import.meta.url)));
 const archivedImages=await Promise.all(archivedCatalog.files.map(file=>verifiedDownload(file,base,localFetch)));
-test('default catalog selects exact 0.20.2 while withdrawn 0.12.1 bytes are preserved',()=>{
-  assert.equal(catalog.version,'0.20.2');assert.equal(images[3].data.length,1848688);
+test('default catalog selects exact 0.20.4 while withdrawn 0.12.1 bytes are preserved',()=>{
+  assert.equal(catalog.version,'0.20.4');assert.equal(images[3].data.length,1856096);
   assert.equal(oldCatalog.version,'0.10.1');assert.equal(oldImages[3].data.length,731728);
-  assert.equal(catalog.files[3].sha256,'d8dd23138fdf0b720c4abfb7bc497a30902c89d0ceb7c9b6dc43fcd449d12b70');
+  assert.equal(catalog.files[3].sha256,'db6fb35985db2587a8ad572afd431fbdab2c9101175a3b06699d7f4b516fcb28');
   assert.equal(archivedImages[3].data.length,808064);
   assert.equal(archivedCatalog.files[3].sha256,'a13d590f11c3c8e8f8ab84a0b8ebd8d69761cf1046e2a0f9fd1d9c162d01ad41');
 });
@@ -26,7 +26,7 @@ test('older verified application updates app only and never erases all',async()=
 });
 test('known newer installed application blocks an older selected target',async()=>{
   const l=fake({app:images[3].data});
-  await assert.rejects(flashVerified({...opts(l),catalog:oldCatalog,images:oldImages}),/Downgrade blocked.*0.20.2.*0.10.1/);
+  await assert.rejects(flashVerified({...opts(l),catalog:oldCatalog,images:oldImages}),/Downgrade blocked.*0.20.4.*0.10.1/);
   assert.equal(l.writes.length,0);
 });
 test('already installed exact version is a no-op; repeated update stays a no-op',async()=>{
@@ -37,7 +37,7 @@ test('already installed exact version is a no-op; repeated update stays a no-op'
 test('Arduino descriptor build label is not interpreted as LaunchLab version',async()=>{
   const descriptor=images[3].data.slice(48,80);assert.notEqual(new TextDecoder().decode(descriptor).split('\0')[0],catalog.version);
   const l=fake({app:images[3].data});const found=await inspectInstalledApplication(l,catalog);
-  assert.equal(found.state,'verified');assert.equal(found.application.version,'0.20.2');
+  assert.equal(found.state,'verified');assert.equal(found.application.version,'0.20.4');
 });
 test('complete device image checksum is required beyond matching ELF descriptor',async()=>{
   const app=images[3].data.slice();app[10000]^=1;const l=fake({app});
@@ -177,12 +177,12 @@ test('checksummed bundles cannot move a partition, corrupt its embedded digest o
   }
 });
 
-test('every preserved older catalog recognizes 0.20.2 and blocks its downgrade',async()=>{
-  for(const version of ['0.10.1','0.10.7','0.10.11','0.10.14','0.10.21','0.10.22','0.11.1','0.11.2','0.12.1','0.12.2','0.13.5','0.13.7','0.13.8','0.13.9','0.14.0','0.15.0','0.16.0','0.17.0']){
+test('every preserved older catalog recognizes 0.20.4 and blocks its downgrade',async()=>{
+  for(const version of ['0.10.1','0.10.7','0.10.11','0.10.14','0.10.21','0.10.22','0.11.1','0.11.2','0.12.1','0.12.2','0.13.5','0.13.7','0.13.8','0.13.9','0.14.0','0.15.0','0.16.0','0.17.0','0.18.0','0.18.1','0.19.0','0.20.0','0.20.1','0.20.2','0.20.3']){
     const previous=JSON.parse(await readFile(new URL('../public/firmware/'+version+'/catalog.json',import.meta.url)));
     const previousImages=await Promise.all(previous.files.map(file=>verifiedDownload(file,base,localFetch)));
     const loader=fake({app:images[3].data});
-    await assert.rejects(flashVerified({...opts(loader),catalog:previous,images:previousImages}),/Downgrade blocked.*0.20.2/);
+    await assert.rejects(flashVerified({...opts(loader),catalog:previous,images:previousImages}),/Downgrade blocked.*0.20.4/);
     assert.equal(loader.writes.length,0);
   }
 });

@@ -1,14 +1,15 @@
 # LaunchLab for M5StickS3
 
-Current revision: **0.20.2-sticks3-songs-pm**, the recommended stable release, for **M5StickS3 K150 (ESP32-S3, 8 MB flash / 8 MB OPI PSRAM)**.
+Current revision: **0.20.4-sticks3-songs-pm**, the recommended stable release, for **M5StickS3 K150 (ESP32-S3, 8 MB flash / 8 MB OPI PSRAM)**.
 One application supports analog QRE1113 and TCRT5000 through the saved Sensor profile setting.
-See [build context](../../docs/FIRMWARE_0.20.2.md) and [release notes](../releases/0.20.2-sticks3-songs-pm/README.md).
+See [build context](../../docs/FIRMWARE_0.20.4.md) and [release notes](../releases/0.20.4-sticks3-songs-pm/README.md).
 
 Tilt replay is reliable on hard pulls: the accelerometer uses its ±16 g range, and every IMU sample is read from the BMI270 FIFO, so the live level and recordings no longer drop out at rest or during saves. A pull that reaches the gyro's 2000 °/s limit keeps its replay, marked **Tilt approx.**
 A single click of the side power key saves pending pulls and powers off.
 RPM detection treats the cord rewind after a pull as part of that pull, confirms sharp pulls and rides through a missed mark. State-changing USB letters run only when sent on their own, so stray serial data cannot power off the device or change settings; backup and restore work as before.
 
 Filtered movement renews the 30-second unused shake-wake timer. Stillness also enables RESTING, which pauses ADC sampling until movement or a button resumes it. The shared sensor supply remains powered. USB keeps the device awake.
+0.20.4 adds String wear check under Menu: pull out, hold until LET GO, then let go, and it measures the retraction, never the pull out, reading the launcher's tilt in the selected Mounting (Top or Sidecar). 0.20.3 introduced it as Wear check.
 0.20.2 sleeps after 1 minute by default on a unit that never chose (a chosen Sleep after time is kept) and adds a Shake to wake setting: On, the default, wakes on a shake as before; Off sleeps more deeply and only the side key wakes it.
 0.20.1 reads RPM accurately at high speed, plays songs for at most 6 s like a celebration, and while a sound plays a pull must start with marks at least half as strong as your recent pulls, so speaker noise cannot start one.
 0.20.0 lets an added celebration effect carry a song made from a MIDI file in the [website effects library](https://launchlab.beywatch.gg/effects), with new voices and a drum bank; a song fades out when a pull starts.

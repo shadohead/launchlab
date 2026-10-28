@@ -1,6 +1,8 @@
-# Firmware 0.20.4 build context (beta)
+# Firmware 0.20.4 build context
 
-The beta runtime is `0.20.4-sticks3-songs-pm`, application SHA-256 `db6fb35985db2587a8ad572afd431fbdab2c9101175a3b06699d7f4b516fcb28`. The compiled source snapshot is frozen in the [release directory](../firmware/releases/0.20.4-sticks3-songs-pm/). It is a beta: the recommended release remains [0.20.2](FIRMWARE_0.20.2.md). It uses the same PM SDK, toolchain, bootloader and partition table as [0.13.5](FIRMWARE_0.13.5.md). Use the [USB updater](https://launchlab.beywatch.gg/update) for the shipping image.
+Published as a beta on 2026-10-27 and promoted to stable on 2026-10-28 after the owner's String wear check on Top and Sidecar installs, with the rest of the hand-test checklist carried over from 0.20.2 (unchanged since).
+
+The shipping runtime is `0.20.4-sticks3-songs-pm`, application SHA-256 `db6fb35985db2587a8ad572afd431fbdab2c9101175a3b06699d7f4b516fcb28`. The compiled source snapshot is frozen in the [release directory](../firmware/releases/0.20.4-sticks3-songs-pm/). It uses the same PM SDK, toolchain, bootloader and partition table as [0.13.5](FIRMWARE_0.13.5.md). Use the [USB updater](https://launchlab.beywatch.gg/update) for the shipping image.
 
 ## Build from source
 
