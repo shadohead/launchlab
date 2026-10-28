@@ -4,9 +4,14 @@
 #include <cstdint>
 
 // Guided 3-orientation string-launcher retraction wear check:
-//   1. Horizontal (0 deg level): 3 slow extensions and releases
-//   2. Vertical Up-retract (90 deg, pull string down toward floor): 3 releases
-//   3. Vertical Down-retract (90 deg flipped 180, pull string up): 3 releases
+//   1. Horizontal (0 deg level): 3 pulls
+//   2. Vertical Up-retract (90 deg, pull string down toward floor): 3 pulls
+//   3. Vertical Down-retract (90 deg flipped 180, pull string up): 3 pulls
+// Each pull is: pull the string out, hold it still, let go. Only the
+// retraction after the hold is measured (0.20.4). Pulling out spins the gear
+// too, and one optical channel cannot tell its direction, so the steps follow
+// the strong optical marks: the first turns are the pull out, the turns after
+// a still hold are the retraction. A pull out is never reported.
 // Retraction pulls stay out of PracticeHistory, PersonalBests and MotionStore.
 namespace WearCheck {
 static constexpr unsigned STAGES=3;
@@ -21,6 +26,40 @@ static constexpr float MIN_RETRACT_RPM=1000.0f;
 static constexpr float MAX_RETRACT_RPM=30000.0f;
 // Set > 0 once calibrated against a fresh baseline string launcher.
 static constexpr float FRESH_BASELINE_RPM=0.0f;
+// The string moves when the gear turns in a run: RUN_TURNS strong turns
+// (the detector's strongTurns) with no still gap of STILL_US between them.
+// Lone marks and the few swings of handling the unit are not movement, and
+// still time runs from the last strong turn: a held string wiggles its mark
+// without turning the gear. Owner captures (2026-10-27): every pull out and
+// retraction turned the gear 9 times or more; handling gave single marks.
+static constexpr unsigned RUN_TURNS=5;
+// The hold: no strong turn for HOLD_US with the string out, and the detector
+// ready to measure (after a measured pull out, its rearm second). LET GO then.
+// The owner held 1.0-1.4 s; a slow pull out leaves the detector ready.
+static constexpr uint64_t HOLD_US=500000;
+// Movement that starts after the string has been still this long, before
+// LET GO, is the string let go too early (the detector takes it as the
+// pull's rewind). Shorter stops are the pull out continuing.
+static constexpr uint64_t STILL_US=250000;
+// After LET GO: a retraction whose marks stop with no measurement for this
+// long (the detector's quiet second) was too weak or slow to measure.
+static constexpr uint64_t MISSED_US=1000000;
+// Held this long off level in the selected Mounting while level in the other
+// one, the install probably uses the other Mounting: the page says so.
+static constexpr uint32_t MOUNT_HINT_MS=2000;
+
+// Where the current pull is: waiting for the string to come out, holding it
+// out, or ready for it to be let go (and the retraction under way).
+enum class Step:uint8_t {PullOut,Hold,LetGo,Retracting};
+
+inline const char *stepName(Step s) {
+  switch(s) {
+    case Step::Hold:return "hold";
+    case Step::LetGo:return "let_go";
+    case Step::Retracting:return "retracting";
+    default:return "pull_out";
+  }
+}
 
 enum class Stage:uint8_t {
   Horizontal=0,
@@ -45,7 +84,12 @@ enum class Outcome:uint8_t {
   RejectedNoImu,
   RejectedLevel,
   RejectedVert,
-  RejectedFlip
+  RejectedFlip,
+  // Not judged: the pull out (never reported), the string let go before
+  // LET GO, and a retraction the detector could not measure.
+  Extension,
+  EarlyRelease,
+  Missed
 };
 
 struct Tilt {
@@ -71,13 +115,13 @@ inline const char *stageHeader(Stage s) {
     case Stage::Horizontal:return "1/3 Level";
     case Stage::VerticalUp:return "2/3 Pull Down";
     case Stage::VerticalDown:return "3/3 Pull Up";
-    default:return "Wear check";
+    default:return "String wear check";
   }
 }
 
 inline const char *stagePrompt(Stage s) {
   switch(s) {
-    case Stage::Horizontal:return "Hold 0 deg";
+    case Stage::Horizontal:return "Keep level";
     case Stage::VerticalUp:return "Pull down 90";
     case Stage::VerticalDown:return "Pull up 90";
     default:return "Complete";
@@ -86,7 +130,7 @@ inline const char *stagePrompt(Stage s) {
 
 inline const char *alignmentLabel(Alignment a) {
   switch(a) {
-    case Alignment::Ready:return "READY - PULL";
+    case Alignment::Ready:return "PULL OUT";
     case Alignment::HoldLevel:return "TILT TO 0 DEG";
     case Alignment::HoldVert:return "TILT TO 90 DEG";
     case Alignment::FlipVert:return "FLIP 180 DEG";
@@ -103,7 +147,20 @@ inline const char *outcomeName(Outcome o) {
     case Outcome::RejectedLevel:return "rejected_level";
     case Outcome::RejectedVert:return "rejected_vertical";
     case Outcome::RejectedFlip:return "rejected_flip";
+    case Outcome::Extension:return "extension";
+    case Outcome::EarlyRelease:return "early_release";
+    case Outcome::Missed:return "missed";
     default:return "none";
+  }
+}
+
+// What to do now when the tilt is on target. detectorReady: the RPM detector
+// would measure a burst now (not in its rearm second).
+inline const char *stepLabel(Step s,bool detectorReady) {
+  switch(s) {
+    case Step::Hold:return "HOLD";
+    case Step::LetGo:case Step::Retracting:return "LET GO";
+    default:return detectorReady?"PULL OUT":"WAIT";
   }
 }
 
@@ -125,6 +182,12 @@ public:
     inBurst_=false;
     preBurstTilt_=burstTilt_=Tilt{};
     lastLaunchCount_=0;
+    step_=Step::PullOut;
+    lastTurnUs_=0;
+    lastTurns_=0;
+    run_=0;
+    primed_=counted_=false;
+    mountSinceMs_=0;mountSuspect_=mountHint_=false;
     lastOutcome_=Outcome::None;
     lastRpm_=0.0f;
     lastTiltDeg_=0.0f;
@@ -136,6 +199,20 @@ public:
   float lastRpm()const{return lastRpm_;}
   float lastTiltDegrees()const{return lastTiltDeg_;}
   bool hasVerticalAxis()const{return hasVerticalAxis_;}
+  Step step()const{return step_;}
+  bool mountHint()const{return mountHint_;}
+
+  // Called every loop pass with the tilt as the selected Mounting reads it
+  // and as the other one would. Only the level stage asks: the ripcord poses
+  // read alike in both, and a unit held level between vertical stages is
+  // simply not turned yet.
+  void observeMount(uint32_t nowMs,const Tilt &tilt,const Tilt &otherMount) {
+    const bool suspect=stage_==Stage::Horizontal && tilt.valid && otherMount.valid &&
+      evaluate(tilt)!=Alignment::Ready && evaluate(otherMount)==Alignment::Ready;
+    if(!suspect){mountSuspect_=mountHint_=false;return;}
+    if(!mountSuspect_){mountSuspect_=true;mountSinceMs_=nowMs;}
+    if(nowMs-mountSinceMs_>=MOUNT_HINT_MS)mountHint_=true;
+  }
 
   unsigned stageCount(unsigned s)const{return s<STAGES?stageCount_[s]:0u;}
   unsigned currentStageCount()const{return stage_<Stage::Complete?stageCount_[unsigned(stage_)]:PULLS_PER_STAGE;}
@@ -220,6 +297,77 @@ public:
     observeLevel(Tilt(reading),measuring);
   }
 
+  // Called every loop pass, before the pass's events, with the detector's
+  // clock, its strong turns so far, whether it would measure a burst now, and
+  // whether its signal is settled (not starting, paused or faulted). Returns
+  // EarlyRelease or Missed when a pull ends unmeasured (and the step goes
+  // back to PullOut), else None.
+  Outcome observeOptics(uint64_t nowUs,uint32_t strongTurns,bool detectorReady,bool settled=true) {
+    if(stage_==Stage::Complete)return Outcome::None;
+    // The signal swings while the detector starts (at boot, or after a pause
+    // or an export): those marks are not the string, and a pull it interrupts
+    // is lost with the detector's data. Start over once it has settled.
+    if(!settled){primed_=false;step_=Step::PullOut;return Outcome::None;}
+    // Turns from before the check began are old, and so is the rest of their run.
+    if(!primed_ || strongTurns<lastTurns_) {
+      primed_=counted_=true;lastTurnUs_=nowUs;lastTurns_=strongTurns;run_=RUN_TURNS;
+      return Outcome::None;
+    }
+    // A run starts with turns after STILL_US still and is movement once, on
+    // its RUN_TURNS-th turn (so always after a still gap).
+    bool moving=false;
+    if(const uint32_t turns=strongTurns-lastTurns_) {
+      if(nowUs-lastTurnUs_>=STILL_US){run_=0;counted_=false;}
+      run_=uint8_t(std::min<uint32_t>(RUN_TURNS,run_+turns));
+      if(run_>=RUN_TURNS && !counted_)moving=counted_=true;
+      lastTurns_=strongTurns;lastTurnUs_=nowUs;
+    }
+    const uint64_t still=nowUs-lastTurnUs_;
+    switch(step_) {
+      case Step::PullOut:
+        if(moving)step_=Step::Hold;
+        break;
+      case Step::Hold:
+        if(moving)return endPull(Outcome::EarlyRelease);
+        if(still>=HOLD_US && detectorReady)step_=Step::LetGo;
+        break;
+      case Step::LetGo:
+        if(moving)step_=Step::Retracting;
+        break;
+      case Step::Retracting:
+        if(still>=MISSED_US && detectorReady)return endPull(Outcome::Missed);
+        break;
+    }
+    return Outcome::None;
+  }
+
+  // A measured burst (the detector's launch) on this page: before LET GO it
+  // is the pull out and only moves the step on; after it, the retraction.
+  // An invalid result is no pull: the detector publishes one when it loses
+  // data (an export, a sensor pause or fault) without counting a launch.
+  Outcome observeBurst(uint32_t launchCount,bool valid,float rpm,const Tilt &endTilt) {
+    if(stage_==Stage::Complete || !valid || !launchCount || launchCount==lastLaunchCount_)return Outcome::None;
+    if(step_==Step::PullOut || step_==Step::Hold) {
+      lastLaunchCount_=launchCount;
+      burstTilt_=Tilt{};
+      inBurst_=false;
+      // The marks were seen before the burst was confirmed; a burst the loop
+      // never saw move still means the string came out.
+      step_=Step::Hold;
+      counted_=true;
+      return Outcome::Extension;
+    }
+    step_=Step::PullOut;
+    counted_=true;
+    return observePull(launchCount,valid,rpm,endTilt);
+  }
+
+  template<class R>
+  Outcome observeBurst(uint32_t launchCount,bool valid,float rpm,const R &endReading) {
+    return observeBurst(launchCount,valid,rpm,Tilt(endReading));
+  }
+
+  // Judges a retraction: its rpm, and the tilt it was pulled at.
   Outcome observePull(uint32_t launchCount,bool valid,float rpm,const Tilt &endTilt) {
     if(stage_==Stage::Complete || !launchCount || launchCount==lastLaunchCount_)return Outcome::None;
     lastLaunchCount_=launchCount;
@@ -305,6 +453,12 @@ public:
   }
 
 private:
+  Outcome endPull(Outcome why) {
+    step_=Step::PullOut;
+    lastOutcome_=why;
+    return why;
+  }
+
   Stage stage_=Stage::Horizontal;
   uint8_t stageCount_[STAGES]={};
   float rpms_[STAGES][PULLS_PER_STAGE]={};
@@ -316,5 +470,12 @@ private:
   Outcome lastOutcome_=Outcome::None;
   float lastRpm_=0.0f;
   float lastTiltDeg_=0.0f;
+  Step step_=Step::PullOut;
+  uint64_t lastTurnUs_=0;
+  uint32_t lastTurns_=0;
+  uint8_t run_=0;
+  bool primed_=false,counted_=false;
+  uint32_t mountSinceMs_=0;
+  bool mountSuspect_=false,mountHint_=false;
 };
 }

@@ -150,6 +150,7 @@ static void status(){act("status");clockMs+=40;}static void exportPowerLog(){act
 static void exportCpuPower(){act("cpu_power");clockMs+=40;}
 static void exportBackup(){act("backup");clockMs+=60;}static void cancelWipe(){act("cancel_wipe");}
 static void buttonA(){act("button");}static void holdA(){act("button");}static void holdB(){act("button");}
+static void noteWearTap(const char *){}
 static void toggleHistory(){act("history");}static void nextView(){act("view");}static void exportMotion(){act("export");}
 static void cancelSettingEdit(){}static void syncNavigation(){}static void newSession(){act("session");}
 static void exportHistory(){act("export");}static void previewHistory(){act("view");}

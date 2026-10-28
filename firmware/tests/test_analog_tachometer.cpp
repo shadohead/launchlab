@@ -57,12 +57,22 @@ int main() {
     auto retraction=[&](float peak){for(float rpm=700;rpm<peak;rpm*=1.25f)cycles(wear,uint32_t(60e6f/rpm),1);cycles(wear,uint32_t(60e6f/peak),8);};
     retraction(3000);level(wear,250,200000);
     assert(wear.launches==1 && std::fabs(wear.resultRpm-3000)<2 && wear.phase==D::Phase::Hold);
+    // strongTurns (0.20.4, read by Wear check) counts every strong turn in
+    // any phase: the slow extension's turns in REARM too, weak ones never.
+    const uint32_t turns=wear.strongTurns;assert(turns>=12);
     cycles(wear,100000,12);level(wear,250,pauseMs*1000);  // 600 RPM extension, then held out
+    const uint32_t extension=wear.strongTurns-turns;assert(extension>=11 && extension<=12);
+
     const bool armed=wear.phase==D::Phase::Ready;
     assert(armed==(pauseMs>=1100));
     retraction(3200);finish(wear);
     assert(wear.launches==(armed?2u:1u));
     if(armed)assert(std::fabs(wear.resultRpm-3200)<10);
+  }
+  {
+    // Weak turns never count toward strongTurns.
+    D weak=ready();cycles(weak,100000,8,250,300);level(weak,250,200000);assert(weak.strongTurns==0);
+    cycles(weak,100000,8);assert(weak.strongTurns>=7);
   }
   // Regression: rejected pulses must break the rewind-motion history. In
   // 0.4.0, one plausible cycle after rejected noise matched an OLD period and

@@ -17,4 +17,11 @@ inline void mapVector(Mode mode,const float *in,float *out) {
   if(mode==Mode::Sidecar){out[0]=-z;out[1]=y;out[2]=x;}
   else {out[0]=x;out[1]=y;out[2]=z;}
 }
+// The launcher-frame vector `in`, measured in Mounting `from`, as Mounting `to`
+// would have read the same device sample.
+inline void remapVector(Mode from,Mode to,const float *in,float *out) {
+  const float x=in[0],y=in[1],z=in[2];
+  const float device[3]={from==Mode::Sidecar?z:x,y,from==Mode::Sidecar?-x:z};
+  mapVector(to,device,out);
+}
 }
