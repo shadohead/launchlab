@@ -42,6 +42,9 @@ prefix = r'''
 #include "rpm_estimator.h"
 #include "orientation_estimator.h"
 #include "power_status.h"
+#include "power_savers.h"
+#include "frame_rows.h"
+static FrameRows frameRows;
 struct IdleFake {template<class F>bool run(F fn){return fn();}};
 static IdleFake &pm1Idle(){static IdleFake idle;return idle;}
 #include "usb_awake.h"
@@ -78,7 +81,7 @@ struct SerialFake {void println(const char*){};void flush(){};template<class... 
 // USB output is drained (never Serial.flush(), which discards it): usb_tx.h.
 namespace UsbTx {inline unsigned drains=0;inline bool drain(uint32_t){++drains;return true;}}
 
-enum class Action {IdleCheckpointBegin,CheckpointBegin,CheckpointEnd,HistoryIdleCheckpointBegin,ShutdownBegin,Pin};
+enum class Action {IdleCheckpointBegin,CheckpointBegin,CheckpointEnd,HistoryIdleCheckpointBegin,ShutdownBegin,ShutdownForce,Pin};
 struct Snapshot {AnalogTachometer::Phase phase;uint32_t launches;bool valid=true,signalFault=false;float resultRpm=6000;uint64_t burstStartHostUs=0,burstEndHostUs=0;uint8_t pin=1;StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;RpmEstimator::Mode estimator=RpmEstimator::DEFAULT_MODE;};
 // The RPM curve's copy and log (takeCurve) is not exercised here.
 static AnalogTachometer::Curve latestCurve;static void takeCurve(const Snapshot&){}
@@ -92,6 +95,7 @@ struct Acquisition {
     if(action==Action::CheckpointEnd){saved.restore(detector);suspended=false;lagUs=deliveryLagUs;return true;}
     if(action==Action::HistoryIdleCheckpointBegin && !HistoryCheckpoint::allowedIdle(detector,expected))return false;
     if(action==Action::ShutdownBegin && (detector.phase==AnalogTachometer::Phase::Launch || detector.launches!=expected))return false;
+    if(action==Action::ShutdownForce && detector.launches!=expected)return false;
     if(action==Action::CheckpointBegin && !HistoryCheckpoint::allowed(detector))return false;
     ++begins;saved=HistoryCheckpoint(detector);suspended=true;return true;
   }
@@ -104,7 +108,7 @@ struct ImuAcquisition {
   void feed(){LaunchMotion::Sample raw;raw.us=clockUs;raw.a[2]=1;raw.clipped=clipped;
     orientation.feed(raw,[&](const LaunchMotion::Sample &s){ring->feed(s);fused=s.us;});}
 } imuAcquisition;
-static InactivityTimer inactivity;static UsbHostAwake usbAwake;static bool usbAutoOffInhibited=false;
+static InactivityTimer inactivity;static OpticalSleepGuard opticalGuard;static UsbHostAwake usbAwake;static bool usbAutoOffInhibited=false;
 static void pollUsbAwake(uint32_t,const Snapshot&,bool=false){}static PowerDiagnostics::Image powerLog;static bool powerLogDirty=false;
 static bool extPower=false,reachedSleep=false;
 enum class TournamentView:uint8_t {RecordingOnly,Rpm};static TournamentView tournamentView=TournamentView::RecordingOnly;
@@ -115,8 +119,11 @@ struct {size_t putUInt(const char*,uint32_t){return 4;}bool remove(const char*){
 static uint8_t backlightValue(){return 100;}
 static void powerRecord(uint8_t){}static bool savePowerLog(){return true;}
 struct SleepReceipt{uint32_t magic;int64_t atUs;};static SleepReceipt sleepReceipt;
-struct {bool arm(){return true;}bool restore(){return true;}
-  bool sleep(){assert(!practiceStore.pending(practice));reachedSleep=true;return false;}} shakeWake;
+static struct {void shutdown(){}} soundPlayer;
+static UsbStandby usbStandby{};static uint64_t standbyRecheckUs(){return 900000000;}
+static struct {bool configure(){return true;}} keyFake;static auto &powerKey(){return keyFake;}
+struct {bool arm(){return true;}bool restore(){return true;}bool clear(){return true;}
+  bool sleep(uint64_t){assert(!practiceStore.pending(practice));reachedSleep=true;return false;}} shakeWake;
 static bool shakeToWake=true;
 static unsigned restoreFailureNotes=0;static void noteMotionRestoreFailure(){++restoreFailureNotes;}
 static void logLaunchMetrics(const Snapshot&){}static void noteStartMark(const Snapshot&){}static void saveStartMarks(){}

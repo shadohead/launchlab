@@ -9,13 +9,13 @@ public:
   static constexpr uint32_t IDLE_MS=30000,RETRY_MS=1000;
   enum class Action {None,Pause,Resume};
   Action decide(uint32_t now,uint64_t clockUs,const MotionActivity::State &activity,
-                uint32_t idleMs,bool resting,bool opticalIdle,bool blocked)const {
+                uint32_t idleMs,bool resting,bool opticalIdle,bool blocked,uint32_t restMs=IDLE_MS)const {
     const bool responsive=activity.moving || activity.gyroDps>=MotionActivity::GYRO_OFF ||
       activity.accelChangeG>=MotionActivity::ACCEL_OFF;
-    const bool awake=blocked || !activity.fresh(clockUs) || responsive || idleMs<IDLE_MS;
+    const bool awake=blocked || !activity.fresh(clockUs) || responsive || idleMs<restMs;
     if(resting)return awake && (!resumeFailed_ || uint32_t(now-lastTry_)>=RETRY_MS)?Action::Resume:Action::None;
     if(awake || !opticalIdle || (attempted_ && uint32_t(now-lastTry_)<RETRY_MS) ||
-       (armed_ && uint32_t(now-armedAt_)<IDLE_MS))return Action::None;
+       (armed_ && uint32_t(now-armedAt_)<restMs))return Action::None;
     return Action::Pause;
   }
   void attempted(uint32_t now,Action action,bool ok) {

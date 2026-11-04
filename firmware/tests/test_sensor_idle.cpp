@@ -10,6 +10,9 @@ int main() {
     return policy.decide(now,us,activity,idle,resting,optical,blocked);
   };
   assert(decide(29999)==A::None && decide(30000)==A::Pause);
+  // A shorter rest delay (the battery savers' restMs) pauses sooner.
+  assert(policy.decide(now,us,activity,9999,false,true,false,10000)==A::None);
+  assert(policy.decide(now,us,activity,10000,false,true,false,10000)==A::Pause);
   assert(decide(30000,false,false)==A::None && decide(30000,false,true,true)==A::None);
   activity.valid=false;assert(decide(30000)==A::None && decide(30000,true)==A::Resume);
   activity.valid=true;activity.sampleUs=us+1;assert(decide(30000)==A::None);

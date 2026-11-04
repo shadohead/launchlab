@@ -486,6 +486,15 @@ LOOP_HELPER static void hilCommand(char *line) {
   if(!strcmp(cmd,"usbidle")){Hil::usbIdle=num(1)!=0;Hil::reply("HIL_OK usbidle %d\n",Hil::usbIdle);return;}
   if(!strcmp(cmd,"sleepok")){Hil::allowSleep=num(1)!=0;Hil::reply("HIL_OK sleepok %d\n",Hil::allowSleep.load());return;}
   if(!strcmp(cmd,"sleepdry")){Hil::sleepDry=num(1)!=0;Hil::reply("HIL_OK sleepdry %d\n",Hil::sleepDry.load());return;}
+  if(!strcmp(cmd,"usbstandby")) {
+    // A real USB-retained standby by the side key's power-off path; its timer
+    // re-check after <s> seconds boots instead of sleeping again (usb_standby).
+    const long seconds=long(num(0));
+    if(seconds<5 || seconds>600){Hil::replyLine("HIL_ERR usbstandby seconds 5-600");return;}
+    hilStandbyRecheckS=uint32_t(seconds);powerKeyRequested=true;powerKeyRequestedAt=millis();
+    Hil::reply("HIL_OK usbstandby %ld\n",seconds);return;
+  }
+  if(!strcmp(cmd,"standbywake")){Hil::reply("HIL_STANDBY_WAKE %s\n",standbyWakeText);return;}
   if(!strcmp(cmd,"powerlog")) {
     // The next loop pass runs the real 5-minute power-log checkpoint.
     powerRecord(PowerDiagnostics::Sample);lastPowerSaveTry=millis()-300000;

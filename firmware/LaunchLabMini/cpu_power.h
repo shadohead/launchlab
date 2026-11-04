@@ -53,6 +53,19 @@ public:
   ~Guard(){release();}
 };
 inline bool active(){return enabled;}
+// The most any lock raises the CPU to: 80 MHz, or 40 for the battery lab's
+// fixed 40 MHz knob (power_lab.h c2). The ADC must then be re-timed
+// (StickS3Acquisition Retime); the display SPI and I2S need a clock that runs
+// without the PLL, which IDF stops at 40 MHz (power_lab_device.h).
+inline bool setMaxMhz(int mhz) {
+  if(!enabled || (mhz!=80 && mhz!=40))return false;
+  const esp_pm_config_t requested={mhz,40,false};
+  return esp_pm_configure(&requested)==ESP_OK;
+}
+inline int maxMhz() {
+  esp_pm_config_t actual={};
+  return enabled && esp_pm_get_configuration(&actual)==ESP_OK?actual.max_freq_mhz:0;
+}
 inline const char *errorName(){return esp_err_to_name(error);}
 inline int dump(FILE *stream){return esp_pm_dump_locks(stream);}
 #else
@@ -63,6 +76,8 @@ public:
   void release(){}
 };
 inline bool active(){return false;}
+inline bool setMaxMhz(int){return false;}
+inline int maxMhz(){return 0;}
 inline const char *errorName(){return "disabled";}
 #endif
 }

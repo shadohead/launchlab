@@ -33,6 +33,7 @@ prefix = r'''
 #define LOOP_HELPER
 #include "pm1_idle.h"
 #include "power_status.h"
+#include "power_savers.h"
 #include "usb_awake.h"
 #include "analog_tachometer.h"
 #include <cassert>
@@ -108,6 +109,7 @@ static void reset(){
   historyView=PracticeUI::View::Recent;brightnessPercent=40;powerConfig=0;
   lastBatteryPoll=maxBatteryPollUs=0;battery=StickS3Battery{};
   inactivity=InactivityTimer{};inactivity.begin(0);usbAwake=UsbHostAwake{};launchFeedback.visible=false;
+  PowerSavers::settings=PowerSavers::Settings{};
 }
 static Snapshot state;
 static void display(uint32_t ms){at(ms);tickDisplayPower(ms,state);assert(!boundary);}
@@ -120,7 +122,20 @@ int main(){
   display(31001);assert(M5.Display.writes==2); // A button/activity restores once.
   display(61000);assert(M5.Display.brightness==26);
   inactivity.touch(61000);display(61000);assert(M5.Display.brightness==102);
+  // Shipped: movement keeps the screen at its selected brightness.
+  reset();inactivity.motion(20000);display(30000);assert(!M5.Display.writes);
+  display(50000);assert(M5.Display.brightness==26);
   std::cout<<"PASS: 30-second dim and button/accepted-activity restoration; no repeated brightness writes\n";
+  // The battery savers (power_savers.h): a dim that only use undoes, sooner,
+  // and to a lower backlight; movement no longer holds it bright.
+  reset();PowerSavers::settings.dimMs=10000;PowerSavers::settings.dimIgnoresMotion=true;PowerSavers::settings.dimBacklight=5;
+  inactivity.motion(9000);display(9999);assert(!M5.Display.writes);
+  display(10000);assert(M5.Display.brightness==5 && M5.Display.writes==1);
+  inactivity.motion(12000);display(12000);assert(M5.Display.brightness==5 && M5.Display.writes==1);
+  inactivity.touch(13000);display(13000);assert(M5.Display.brightness==102 && M5.Display.writes==2);
+  display(23000);assert(M5.Display.brightness==5);
+  launchFeedback.visible=true;display(24000);assert(M5.Display.brightness==102);  // the recap stays bright
+  std::cout<<"PASS: battery savers: dim after 10 s without use while moving, to a raw backlight of 5, use restores\n";
 
   reset();display(30000);usbAwake.sampleHost(30000,true);display(30000);
   assert(M5.Display.brightness==102);usbAwake.sampleHost(30250,true);usbAwake.samplePower(30250,true,1);

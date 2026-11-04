@@ -40,6 +40,7 @@ fixture = r'''
 #undef private
 #include "sensor_idle.h"
 #include "power_status.h"
+#include "power_savers.h"
 #include "controls.h"
 using Owner=StickS3Acquisition;using Action=Owner::Action;using Snapshot=Owner::Snapshot;using D=AnalogTachometer;
 struct Fixture {
@@ -191,6 +192,16 @@ int main(){
     assert(!tick().resting && acquisition.requests==1); // retry bounded.
   }
   std::cout<<"PASS: exact tickSensorIdle with actual owner covers USB/probation/views/unsaved-data/unsaved-settings/Serial/IMU blockers, lower-threshold motion/stale wake,30s re-entry and stale-snapshot rejection\n";
+  {
+    // The battery savers' rest delay (power_savers.h): 10 s still rests.
+    Fixture f;resetPolicy(f);inactivity.begin(uint32_t(clockUs/1000)-9999);PowerSavers::settings.restMs=10000;
+    assert(!tick().resting);clockUs+=1000;assert(tick().resting);
+    PowerSavers::settings=PowerSavers::Settings{};
+    inactivity.begin(uint32_t(clockUs/1000)-10000);freshMotion(MotionActivity::GYRO_OFF);Snapshot s=acquisition.snapshot();
+    tickSensorIdle(uint32_t(clockUs/1000),s);assert(!s.resting);
+    assert(!tick().resting);  // shipped 30 s again
+  }
+  std::cout<<"PASS: battery savers: the rest delay drives the production tickSensorIdle\n";
   assert(!handles && !failStop && !failStart && !failFlush);
 }
 '''

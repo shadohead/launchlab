@@ -19,7 +19,15 @@ constexpr int ADC_UNIT_1=1,ADC_ATTEN_DB_12=12,ADC_CONV_SINGLE_UNIT_1=1,
   ADC_DIGI_OUTPUT_FORMAT_TYPE2=2,GPIO_MODE_INPUT=1,GPIO_FLOATING=0;
 static int64_t clockUs=1000000;
 static int64_t esp_timer_get_time(){return clockUs;}
-struct FakeAdc {bool active=false;};using adc_continuous_handle_t=FakeAdc*;
+struct FakeAdc {bool active=false;uint32_t configApbHz=0,sampleHz=0;};using adc_continuous_handle_t=FakeAdc*;
+// The APB clock now (DFS moves it between 80 and 40 MHz) and the ADC timing
+// registers, which IDF's start sets from the APB read at configure time.
+static uint32_t fakeApbHz=80000000;
+// The APB the ADC's own power lock holds once started (DFS); 0 leaves it.
+static uint32_t lockedApbHz=0;
+static struct {struct {uint32_t clkm_div_num=15,clkm_div_b=1,clkm_div_a=0;} apb_adc_clkm_conf;
+  struct {uint32_t timer_target=50,timer_en=0,timer_sel=0;} ctrl2;} APB_SARADC;
+static unsigned timerDisables=0;
 struct adc_continuous_evt_data_t {};
 struct adc_continuous_handle_cfg_t {uint32_t max_store_buf_size=0,conv_frame_size=0;};
 struct adc_digi_pattern_config_t {int atten=0,channel=0,unit=0,bit_width=0;};
@@ -31,9 +39,11 @@ static unsigned stops=0,starts=0,flushes=0,handles=0;
 static bool failStop=false,failStart=false,failFlush=false;
 static esp_err_t adc_continuous_io_to_channel(int pin,adc_unit_t *unit,adc_channel_t *channel){*unit=ADC_UNIT_1;*channel=pin-1;return ESP_OK;}
 static esp_err_t adc_continuous_new_handle(const adc_continuous_handle_cfg_t*,adc_continuous_handle_t *out){*out=new FakeAdc;++handles;return ESP_OK;}
-static esp_err_t adc_continuous_config(adc_continuous_handle_t h,const adc_continuous_config_t *c){assert(h && c->sample_freq_hz==50000 && c->pattern_num==1);return ESP_OK;}
+static esp_err_t adc_continuous_config(adc_continuous_handle_t h,const adc_continuous_config_t *c){assert(h && c->sample_freq_hz==50000 && c->pattern_num==1);h->configApbHz=fakeApbHz;h->sampleHz=c->sample_freq_hz;return ESP_OK;}
 static esp_err_t adc_continuous_register_event_callbacks(adc_continuous_handle_t h,const adc_continuous_evt_cbs_t*,void*){assert(h);return ESP_OK;}
-static esp_err_t adc_continuous_start(adc_continuous_handle_t h){assert(h && !h->active);++starts;if(failStart){failStart=false;return ESP_FAIL;}h->active=true;return ESP_OK;}
+static esp_err_t adc_continuous_start(adc_continuous_handle_t h){assert(h && !h->active);++starts;if(failStart){failStart=false;return ESP_FAIL;}h->active=true;
+  if(lockedApbHz)fakeApbHz=lockedApbHz;
+  APB_SARADC.apb_adc_clkm_conf.clkm_div_num=15;APB_SARADC.ctrl2.timer_target=h->configApbHz/16/2/h->sampleHz;APB_SARADC.ctrl2.timer_en=1;return ESP_OK;}
 static esp_err_t adc_continuous_stop(adc_continuous_handle_t h){assert(h && h->active);++stops;if(failStop){failStop=false;return ESP_FAIL;}h->active=false;return ESP_OK;}
 static esp_err_t adc_continuous_flush_pool(adc_continuous_handle_t h){assert(h && !h->active);++flushes;if(failFlush){failFlush=false;return ESP_FAIL;}return ESP_OK;}
 static esp_err_t adc_continuous_deinit(adc_continuous_handle_t h){assert(h && !h->active);delete h;--handles;return ESP_OK;}

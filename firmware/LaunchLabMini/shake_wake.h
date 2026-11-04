@@ -5,6 +5,7 @@
 #include "bmi270_fifo.h"
 #include "pm1_idle.h"
 #include "power_key.h"
+#include "power_status.h"
 
 // Bosch BMI270 API from SparkFun's official M5 wake example driver, commit
 // 21ea234de321da07c552f7a43cb36f7df4f73a27. Uses M5's existing I2C bus;
@@ -13,6 +14,15 @@ class StickS3ShakeWake {
 public:
   static constexpr unsigned THRESHOLD=2047; // Maximum 11-bit value; 0.48 mg/LSB: about 983 mg.
   static constexpr unsigned DURATION=6;    // 20 ms/LSB: 120 ms.
+  // USB keeps 3V3_L2 (the ESP32, the Hat 3V3 and the sensor's emitter) up
+  // through the PM1 power-off, so the unit deep-sleeps instead. Unplugging
+  // must still end in a real power-off: PM1 raises its IRQ (G13) when 5VIN is
+  // removed (0x41 bit 1, unmasked in 0x44), and on a charger the ESP32's
+  // timer re-checks every USB_RECHECK_US in case it does not
+  // (recheckUsbStandby in the sketch). On a computer each re-check would
+  // attach and drop the USB port, so there the IRQ alone ends it.
+  static constexpr uint8_t SYSTEM_IRQ_STATUS=0x41,SYSTEM_IRQ_MASK=0x44,VIN_REMOVED=PM1_VIN_REMOVED_IRQ;
+  static constexpr uint64_t USB_RECHECK_US=15ULL*60*1000000;
   static_assert(THRESHOLD<=BMI2_ANY_NO_MOT_THRES_MASK,"Wake threshold must fit the BMI270 field");
   bool clear() {
     // Manual power off stays manual; only an inactivity sleep arms wake.
@@ -59,7 +69,10 @@ public:
       && masked(0x19,0x10,0)       // GPIO4 falling-edge wake.
       && masked(0x18,0x18,0x10)   // GPIO3/4 share a wake line; only 4 enabled.
       && pm.setLDOOutput(true) && masked(0x07,0x60,0x20) // Hold IMU, never boost.
-      && pm.setLedEnLevel(true) && pm.setExtOutput(false);
+      // LED_EN lights the green LED from the always-on rail (StickS3 V0.6,
+      // STATUS_LED). M5's IMU-wake example sets it before shutdown; through
+      // 0.20.5 this did too, a lit LED for the whole standby.
+      && pm.setLedEnLevel(false) && pm.setExtOutput(false);
     // Also route IMU IRQ to G13 for deep-sleep fallback if USB retains power.
     ok=ok && pm.setGPIOMode(m5::M5PM1_Class::gpio1,m5::M5PM1_Class::output)
       && pm.setGPIODrive(m5::M5PM1_Class::gpio1,m5::M5PM1_Class::push_pull)
@@ -86,14 +99,28 @@ public:
     const bool range=imu && configureMotionSensor(false);
     return cleared && imu && range && key;
   }
-  bool sleep() {
+  bool sleep(uint64_t recheckUs=USB_RECHECK_US) {
     // Battery removes CPU/sensor L2 power; USB may retain it, so keep ext0 fallback.
-    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
-    if(esp_sleep_enable_ext0_wakeup(GPIO_NUM_13,0)!=ESP_OK)return false;
-    if(!pm1Idle().run([](){return M5.Power.M5pm1.powerOff();}))return false;
+    if(!deepSleepWakes(recheckUs))return false;
+    // Only USB removal joins the IMU or side-key IRQ on G13; a failed write
+    // leaves the timer re-check.
+    pm1Idle().write(SYSTEM_IRQ_STATUS,0);
+    pm1Idle().masked(SYSTEM_IRQ_MASK,VIN_REMOVED,0);
+    if(!pm1Idle().run([](){return M5.Power.M5pm1.powerOff();})) {
+      // Still awake: an unplug must not hold the IRQ line (and the side key's click) low.
+      pm1Idle().masked(SYSTEM_IRQ_MASK,VIN_REMOVED,VIN_REMOVED);
+      return false;
+    }
     delay(30);
     esp_deep_sleep_start();
     return false;
+  }
+  // The USB-retained deep sleep's wake sources: the PM1 IRQ line, and the
+  // timer that re-checks the power source (none for recheckUs 0).
+  static bool deepSleepWakes(uint64_t recheckUs=USB_RECHECK_US) {
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+    return esp_sleep_enable_ext0_wakeup(GPIO_NUM_13,0)==ESP_OK &&
+      (!recheckUs || esp_sleep_enable_timer_wakeup(recheckUs)==ESP_OK);
   }
 
 private:

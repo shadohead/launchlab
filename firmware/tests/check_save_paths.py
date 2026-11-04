@@ -721,6 +721,38 @@ static void historyLogSaves() {
   std::cout<<"PASS: with the history log open, a coalesced save writes the log only, the ADC sampling throughout (no checkpoint, no NVS); power-off writes the NVS mirror\n";
 }
 
+// With the history log open, NVS holds a copy of what the log holds. A copy
+// NVS refuses at power-off (full, as one StickS3 was) no longer defers the
+// sleep: through 0.20.5 it deferred every sleep, every minute, a drain until
+// flat. A log that is behind is written first; a reboot reads the pull from
+// the log. With the log closed NVS is the only copy, and a refusal keeps the
+// unit on as before.
+static void historyLogNvsRefused() {
+  using Log=HistoryLog::Store<NorFlash>;
+  for(bool coalesced:{true,false}) {
+    boot();spiffsFlash=NorFlash{};historyLog=Log{};assert(historyLog.open(spiffsFlash)==Log::Log::Open::Formatted);
+    loggedHistory=practice.generation();loggedBests=personalBests.generation();
+    pull();passes(1700);assert(practice.size()==1 && historyUnsaved());
+    if(coalesced){for(unsigned t=0;t<HISTORY_COALESCE_MS+1000;t+=50)passes(50);assert(!historyUnsaved());}
+    Preferences::failWrite=true;
+    const auto flushed=flushForShutdown(millis(),snap());
+    Preferences::failWrite=false;
+    if(flushed!=ShutdownFlush::Ready)std::cout<<"a refused NVS copy kept the unit awake\n";
+    assert(flushed==ShutdownFlush::Ready && practiceStore.pending(practice) && !historyUnsaved() && !bestsUnsaved() && !saveError);
+    assert(acquisition.request(StickS3Acquisition::Action::CheckpointEnd) && running());
+    {Log again;assert(again.open(spiffsFlash)==Log::Log::Open::Ready);PracticeHistory back;uint32_t mirrored=0;
+     assert(again.loadHistory(back,mirrored) && back.size()==1);
+     PracticeHistory nvs;PracticeStore reader;const bool inNvs=reader.begin(nvs) && reader.found();
+     assert(HistoryLog::pick(true,mirrored,inNvs,reader.savedGeneration())==HistoryLog::Source::Log);}
+    historyLog=Log{};  // closed again
+  }
+  boot();pull();passes(1700);assert(practiceStore.pending(practice));
+  Preferences::failWrite=true;
+  assert(flushForShutdown(millis(),snap())==ShutdownFlush::SaveFailed && saveError && running());
+  Preferences::failWrite=false;
+  std::cout<<"PASS: with the history log open, an NVS copy refused at power-off no longer keeps the unit on (the log holds the pull, written first if behind); with the log closed it still does\n";
+}
+
 static void sensorFaultHistory() {
   // After a pull, the sensor signal drops to the low rail (CHECK SENSOR). The
   // detector holds in Hold indefinitely; history still flushes once quiet.
@@ -736,7 +768,7 @@ static void sensorFaultHistory() {
 
 main = r'''
 int main() {
-  freshEdgeAtApply();imuVeto();shakeWakeSave();applyDuringPull();lostReplies();usbDeviceSettings();shutdownFlush();startMarkSaves();themeRequests();milestoneRequests();milestoneImport();effectSetRequests();nvsReserve();historyLogSaves();sensorFaultHistory();
+  freshEdgeAtApply();imuVeto();shakeWakeSave();applyDuringPull();lostReplies();usbDeviceSettings();shutdownFlush();startMarkSaves();themeRequests();milestoneRequests();milestoneImport();effectSetRequests();nvsReserve();historyLogSaves();historyLogNvsRefused();sensorFaultHistory();
 }
 '''
 

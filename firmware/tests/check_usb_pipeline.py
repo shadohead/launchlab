@@ -4,6 +4,7 @@ import argparse
 import pathlib
 import subprocess
 import tempfile
+from history_log_glue import closed
 
 parser=argparse.ArgumentParser()
 location=pathlib.Path(__file__).resolve()
@@ -36,6 +37,9 @@ def shutdown_flush():
 prefix=r'''
 #include "usb_awake.h"
 #include "power_status.h"
+#include "power_savers.h"
+#include "frame_rows.h"
+static FrameRows frameRows;
 #include "history_checkpoint.h"
 #include "practice_store.h"
 #include "appearance_store.h"
@@ -61,20 +65,20 @@ struct SerialFake {void println(const char*){}void flush(){}template<class... A>
 namespace UsbTx {inline unsigned drains=0;inline bool drain(uint32_t){++drains;return true;}}
 
 static UsbHostAwake usbAwake;static bool usbAutoOffInhibited=false;
-static InactivityTimer inactivity;static PracticeHistory practice;static PracticeStore practiceStore;
+static InactivityTimer inactivity;static OpticalSleepGuard opticalGuard;static PracticeHistory practice;static PracticeStore practiceStore;
 static bool motionPending=false,saveError=false,dirty=false,extPower=false,tournamentMode=false,historyPage=false,demo=false,diagnostics=false;
 static uint32_t lastShutdownTry=0,lastSaveTry=0,saveErrors=0,historyPendingSince=0;
 static PowerDiagnostics::Image powerLog;static bool powerLogDirty=false;
 enum class TournamentView:uint8_t {RecordingOnly,Rpm};static TournamentView tournamentView=TournamentView::RecordingOnly;
 namespace PracticeUI {enum class View:uint8_t {Recent};}static PracticeUI::View historyView=PracticeUI::View::Recent;
-enum class Action {ShutdownBegin,CheckpointEnd,Pin};
+enum class Action {ShutdownBegin,ShutdownForce,CheckpointEnd,Pin};
 struct Snapshot {AnalogTachometer::Phase phase=AnalogTachometer::Phase::Ready;uint32_t launches=0;bool valid=true;float resultRpm=6000;uint8_t pin=1;};
 struct Acquisition {
   Snapshot state;bool suspended=false;unsigned begins=0,resumes=0;
   Snapshot snapshot(){return state;}bool takeEvent(Snapshot&){return false;}
   bool request(Action action,uint32_t expected=0){
     if(action==Action::CheckpointEnd || action==Action::Pin){suspended=false;++resumes;return true;}
-    if(state.phase==AnalogTachometer::Phase::Launch || expected!=state.launches)return false;
+    if((action!=Action::ShutdownForce && state.phase==AnalogTachometer::Phase::Launch) || expected!=state.launches)return false;
     suspended=true;++begins;return true;
   }
 } acquisition;
@@ -93,8 +97,8 @@ struct IdleFake {
   template<class F>bool run(F fn){return fn();}
 };
 static IdleFake &pm1Idle(){static IdleFake idle;return idle;}
-struct Settings {std::map<std::string,uint32_t> values;unsigned writes=0;
-  size_t putUInt(const char *key,uint32_t value){++writes;values[key]=value;return 4;}
+struct Settings {std::map<std::string,uint32_t> values;unsigned writes=0;bool full=false;
+  size_t putUInt(const char *key,uint32_t value){++writes;if(full)return 0;values[key]=value;return 4;}
   bool remove(const char *key){return values.erase(key)>0;}
 } prefs;
 static uint8_t backlightValue(){return 100;}
@@ -102,8 +106,15 @@ static void powerRecord(uint8_t event){PowerDiagnostics::append(powerLog,event,3
 static bool savePowerLog(){++powerSaves;powerLog.checksum=PowerDiagnostics::hash(powerLog);powerLogDirty=false;
   if(attachOnPowerSave){hardwareSof=true;clockUs+=100000;}return true;}
 struct Receipt {uint32_t magic=0;int64_t atUs=0;} sleepReceipt;
-struct ShakeWake {unsigned arms=0,sleeps=0,restores=0;bool arm(){++arms;return true;}bool restore(){++restores;return true;}
-  bool sleep(){assert(!practiceStore.pending(practice));++sleeps;return false;}
+static struct {unsigned shutdowns=0;void shutdown(){++shutdowns;}} soundPlayer;
+static UsbStandby usbStandby{};static uint64_t standbyRecheckUs(){return 900000000;}
+static struct {bool configure(){return true;}} keyFake;static auto &powerKey(){return keyFake;}
+struct ShakeWake {unsigned arms=0,sleeps=0,restores=0,clears=0;bool armOk=true,keyOnly=false;
+  bool arm(){++arms;return armOk;}bool restore(){++restores;return true;}bool clear(){++clears;return true;}
+  bool sleep(uint64_t recheckUs){
+    // Silenced first, and the standby's receipt says which wake it has.
+    assert(recheckUs==900000000 && !practiceStore.pending(practice) && soundPlayer.shutdowns && usbStandby.magic==UsbStandby::MAGIC);
+    keyOnly=usbStandby.keyOnly;++sleeps;return false;}
 } shakeWake;
 static bool shakeToWake=true;
 static unsigned restoreFailureNotes=0;static void noteMotionRestoreFailure(){++restoreFailureNotes;}
@@ -122,7 +133,7 @@ static void reset(){
   hostReads=powerReads=locks=unlocks=flashWrites=powerSaves=0;
   usbAwake=UsbHostAwake{};usbAutoOffInhibited=false;inactivity=InactivityTimer{};inactivity.setMinutes(1);inactivity.touch(millis());
   practice=PracticeHistory{};practiceStore=PracticeStore{};acquisition=Acquisition{};M5=M5Fake{};prefs=Settings{};shakeWake=ShakeWake{};
-  motionPending=saveError=dirty=extPower=tournamentMode=historyPage=demo=diagnostics=false;
+  motionPending=saveError=dirty=extPower=tournamentMode=historyPage=demo=diagnostics=false;soundPlayer.shutdowns=0;
   lastShutdownTry=lastSaveTry=saveErrors=historyPendingSince=0;PowerDiagnostics::fresh(powerLog);powerLogDirty=false;sleepReceipt={};
   prefs.values["sleep_min"]=1;prefs.values["ext5v"]=0;prefs.values["bright_pct"]=40;
   Preferences::data.clear();Preferences::zeroLengthKeys.clear();Preferences::failWrite=Preferences::shortRead=false;Preferences::beforeWrite=nullptr;
@@ -139,7 +150,7 @@ int main(){
   poll(1000);poll(1250);assert(usbAwake.remembered() && inactivity.unusedShake());
   hardwareSof=false;poll(1500);
   assert(inactivity.unusedShake() && inactivity.remaining(1500)==29500);
-  at(31000);off();assert(shakeWake.sleeps==1);
+  at(31000);off();assert(shakeWake.sleeps==1 && !shakeWake.keyOnly && !usbStandby.magic);
   // A real host remains inhibited while a failed VIN read is uncertain, but
   // promotion waits for verified input power and then restores normal timeout.
   reset();inactivity.begin(1000,true);hardwareSof=true;powerReadOk=false;
@@ -208,6 +219,18 @@ int main(){
   clockUs+=1000;off();assert(shakeWake.sleeps==1 && inactivity.minutes()==1);
   std::cout<<"PASS: actual polling/standby countdown survives millis wrap\n";
 
+  // A shake wake that cannot be armed still sleeps, for the side key alone
+  // (through 0.20.5 it retried every minute and never slept).
+  reset();shakeWake.armOk=false;at(61000);off();
+  assert(shakeWake.arms==1 && shakeWake.clears==1 && shakeWake.sleeps==1 && shakeWake.keyOnly);
+  std::cout<<"PASS: an IMU that cannot be armed falls back to a side-key sleep\n";
+  // An NVS that refuses the wake markers (full) still sleeps, to wake on
+  // Main (through 0.20.5 it deferred every sleep, every minute).
+  reset();prefs.full=true;at(61000);off();
+  if(!shakeWake.sleeps)std::cout<<"a refused wake marker kept the unit awake\n";
+  assert(shakeWake.sleeps==1 && !prefs.values.count("wake_ui") && !prefs.values.count("wake_nav"));
+  std::cout<<"PASS: a wake marker NVS refuses does not keep the unit awake\n";
+
   reset();poll(1000);at(61000);hardwareSof=true;powerSource=1;
   assert(!usbAwake.inhibited(millis()));off();assert(usbAwake.inhibited(millis()));assertNoStandby();
   std::cout<<"PASS: fresh timer-boundary SOF recheck prevents stale-false shutdown before owner checkpoint\n";
@@ -237,7 +260,7 @@ int main(){
 '''
 with tempfile.TemporaryDirectory() as tmp:
     cpp=pathlib.Path(tmp)/'usb_pipeline.cpp'
-    cpp.write_text(prefix+function('pollUsbAwake')+'\n'+shutdown_flush()+'\n'+function('autoPowerOff')+tests)
+    cpp.write_text(prefix+closed(source)+function('pollUsbAwake')+'\n'+shutdown_flush()+'\n'+function('autoPowerOff')+tests)
     exe=pathlib.Path(tmp)/'usb_pipeline'
     cmd=['c++','-std=c++17','-O1','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer',
          '-I'+str(args.firmware/'tests/fakes'),'-I'+str(args.firmware/'LaunchLabMini'),'-I'+str(args.firmware/'LaunchLabRpm'),str(cpp),'-o',str(exe)]

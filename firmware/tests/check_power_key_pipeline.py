@@ -4,6 +4,7 @@ import pathlib
 import re
 import subprocess
 import tempfile
+from history_log_glue import closed
 
 firmware=pathlib.Path(__file__).resolve().parents[1]
 source=(firmware/'LaunchLabMini/LaunchLabMini.ino').read_text()
@@ -24,6 +25,9 @@ wait=re.search(r'static constexpr uint32_t POWER_KEY_WAIT_MS=\d+;',source).group
 prefix=r'''
 #include "history_checkpoint.h"
 #include "power_status.h"
+#include "power_savers.h"
+#include "frame_rows.h"
+static FrameRows frameRows;
 #include "practice_store.h"
 #include "appearance_store.h"
 #include "power_diagnostics.h"
@@ -42,7 +46,7 @@ struct SerialFake {std::string last;void println(const char *s){last=s;}void flu
 // USB output is drained (never Serial.flush(), which discards it): usb_tx.h.
 namespace UsbTx {inline unsigned drains=0;inline bool drain(uint32_t){++drains;return true;}}
 
-static InactivityTimer inactivity;static PracticeHistory practice;static PracticeStore practiceStore;
+static InactivityTimer inactivity;static OpticalSleepGuard opticalGuard;static PracticeHistory practice;static PracticeStore practiceStore;
 static bool motionPending=false,saveError=false,dirty=false,mutexAvailable=true,irqLine=true;
 static uint32_t lastSaveTry=0,saveErrors=0,historyPendingSince=0;
 static unsigned locks=0,unlocks=0,keyReads=0,wipeCancels=0,editCancels=0,powerSaves=0;
@@ -54,15 +58,17 @@ static constexpr uint8_t POWER_KEY_IRQ_PIN=13;
 static int digitalRead(uint8_t pin){assert(pin==13);return irqLine;}
 struct Key {bool pending=false;bool takeClick(){assert(locks>unlocks);++keyReads;const bool c=pending;pending=false;irqLine=true;return c;}};
 static Key key;static Key &powerKey(){return key;}
-enum class Action {ShutdownBegin,CheckpointEnd,Pin};
+enum class Action {ShutdownBegin,ShutdownForce,CheckpointEnd,Pin};
 struct Snapshot {AnalogTachometer::Phase phase=AnalogTachometer::Phase::Ready;uint32_t launches=0;bool valid=true;float resultRpm=6000;uint8_t pin=1;};
 struct Acquisition {
-  Snapshot state;bool suspended=false;unsigned begins=0,resumes=0;std::deque<Snapshot> events;
+  Snapshot state;bool suspended=false,refuse=false;unsigned begins=0,resumes=0,forced=0;std::deque<Snapshot> events;
   Snapshot snapshot(){return state;}
   bool takeEvent(Snapshot &e){if(events.empty())return false;e=events.front();events.pop_front();return true;}
   bool request(Action action,uint32_t expected=0){
     if(action==Action::CheckpointEnd || action==Action::Pin){suspended=false;++resumes;return true;}
-    if(state.phase==AnalogTachometer::Phase::Launch || expected!=state.launches)return false;
+    // ShutdownForce drops marks that never became a pull (acquisition.h).
+    if(refuse || (action!=Action::ShutdownForce && state.phase==AnalogTachometer::Phase::Launch) || expected!=state.launches)return false;
+    if(action==Action::ShutdownForce)++forced;
     suspended=true;++begins;return true;
   }
 } acquisition;
@@ -73,13 +79,19 @@ static uint8_t backlightValue(){return 100;}
 static void powerRecord(uint8_t event){PowerDiagnostics::append(powerLog,event,3900,PowerDiagnostics::ChargeKnown,40,80);powerLogDirty=true;}
 static bool savePowerLog(){++powerSaves;powerLog.checksum=PowerDiagnostics::hash(powerLog);powerLogDirty=false;return true;}
 struct Receipt {uint32_t magic=0;int64_t atUs=0;} sleepReceipt;
+// Silenced before the IMU gate is taken: the speaker's own power-down takes it.
+static struct {unsigned shutdowns=0;void shutdown(){assert(locks==unlocks);++shutdowns;}} soundPlayer;
+static UsbStandby usbStandby{};static uint64_t standbyRecheckUs(){return 900000000;}
 struct PoweredOff {};
 struct ShakeWake {unsigned arms=0,sleeps=0;bool off=true;
   bool arm(){++arms;return true;}
-  bool sleep(){
+  bool sleep(uint64_t recheckUs){
     // Everything a player would miss is durable and the screen is dark first.
+    assert(recheckUs==900000000);
     assert(locks>unlocks && !practiceStore.pending(practice) && !bestStore.pending(personalBests));
     assert(!M5.Display.brightness && M5.Display.asleep && acquisition.suspended && powerLog.pendingSleep && sleepReceipt.magic);
+    // A USB-retained standby knows it began at the side key.
+    assert(soundPlayer.shutdowns && usbStandby.magic==UsbStandby::MAGIC && usbStandby.keyOnly);
     ++sleeps;if(off)throw PoweredOff{};return false;
   }
 } shakeWake;
@@ -136,10 +148,24 @@ int main(){
   assert(reader.begin(reboot) && reboot.size()==1 && reboot.recent()->rpm==7000);
   std::cout<<"PASS: capture in progress or a pull queued at the click is finished and saved before power-off\n";
 
+  // Marks that never end are not a pull: after the wait the off stops
+  // sampling anyway (through 0.20.5 it gave up and the unit stayed on).
   reset();click();acquisition.state.phase=AnalogTachometer::Phase::Launch;
+  for(uint32_t t=1000;t<1000+POWER_KEY_WAIT_MS;t+=5){at(t);assert(!step());}
+  assert(powerKeyRequested && !acquisition.begins && !shakeWake.sleeps);
+  at(1000+POWER_KEY_WAIT_MS);
+  if(!step())std::cout<<"steady marks kept the side key from powering off\n";
+  assert(shakeWake.sleeps==1 && acquisition.forced==1);
+  std::cout<<"PASS: marks that never end: after the wait the side key stops sampling and powers off\n";
+  // An ADC another owner holds refuses even the forced stop: the request is dropped.
+  reset();click();acquisition.state.phase=AnalogTachometer::Phase::Launch;acquisition.refuse=true;
   for(uint32_t t=1000;t<=1000+POWER_KEY_WAIT_MS;t+=5){at(t);assert(!step());}
   assert(!powerKeyRequested && !shakeWake.sleeps && !acquisition.suspended);
-  std::cout<<"PASS: an acquisition that never becomes idle drops the request instead of powering off later\n";
+  // A motion capture that never finishes drops it too, without stopping sampling.
+  reset();click();motionPending=true;
+  for(uint32_t t=1000;t<=1000+POWER_KEY_WAIT_MS;t+=5){at(t);assert(!step());}
+  assert(!powerKeyRequested && !shakeWake.sleeps && !acquisition.begins);
+  std::cout<<"PASS: an acquisition that refuses even a forced stop drops the request instead of powering off later\n";
 
   reset();unsavedPull();click();Preferences::failWrite=true;
   assert(!step() && !powerKeyRequested && saveError && !acquisition.suspended && !shakeWake.sleeps);
@@ -176,7 +202,7 @@ int main(){
 '''
 with tempfile.TemporaryDirectory() as tmp:
     cpp=pathlib.Path(tmp)/'power_key_pipeline.cpp'
-    cpp.write_text(prefix+function('pollPowerKey')+'\n'+shutdown_flush()+'\n'+function('powerKeyOff')+tests)
+    cpp.write_text(prefix+closed(source)+function('pollPowerKey')+'\n'+shutdown_flush()+'\n'+function('powerKeyOff')+tests)
     exe=pathlib.Path(tmp)/'power_key_pipeline'
     subprocess.run(['c++','-std=c++17','-O1','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer',
         '-I'+str(firmware/'tests/fakes'),'-I'+str(firmware/'LaunchLabMini'),'-I'+str(firmware/'LaunchLabRpm'),str(cpp),'-o',str(exe)],check=True)

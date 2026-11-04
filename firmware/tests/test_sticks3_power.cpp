@@ -31,6 +31,14 @@ int main() {
   assert(IdlePowerPolicy::brightness(5,30000,false,false)==5);
   assert(IdlePowerPolicy::brightness(40,30000,true,false)==40);
   assert(IdlePowerPolicy::brightness(40,30000,false,true)==40);
+  // The battery savers' dim delay (power_savers.h).
+  assert(IdlePowerPolicy::brightness(40,9999,false,false,10000)==40 && IdlePowerPolicy::brightness(40,10000,false,false,10000)==10);
+  // Movement keeps the inactivity window open but is not use: sinceUse()
+  // counts only begin() and touch(), for a dim that ignores motion.
+  timer.begin(1000);timer.motion(20000);
+  assert(timer.elapsed(25000)==5000 && timer.sinceUse(25000)==24000);
+  timer.touch(30000);timer.motion(40000);assert(timer.sinceUse(45000)==15000 && timer.elapsed(45000)==5000);
+  timer.begin(UINT32_MAX-1000);assert(timer.sinceUse(1000)==2001);
 
   StickS3Battery b;
   assert(!b.valid(0) && b.percent==-1);
@@ -56,5 +64,20 @@ int main() {
   smooth.update(3500,true,true,1,66000);assert(smooth.percent==25); // stale samples reset
   smooth.update(0,false,false,0,67000);assert(smooth.percent==-1);
   smooth.update(3700,true,true,1,68000);assert(smooth.percent==50); // error recovery resets
-  std::cout<<"PASS: 1-minute default, all 1–10 minute timeouts, invalid-value rejection, activity reset, active-burst guard, millis wrap, checked battery voltage, estimate limits, stale/error handling and charging GPIO\n";
+  {  // A boot out of a USB-retained standby.
+    const UsbStandby none{},shake{UsbStandby::MAGIC,false},key{UsbStandby::MAGIC,true};
+    const uint8_t removed=PM1_VIN_REMOVED_IRQ;
+    auto w=usbStandbyWake(none,true,false,true,removed,true);assert(!w.finish && !w.keyWake);  // no receipt: an ordinary wake
+    w=usbStandbyWake(shake,true,false,true,removed,true);assert(w.finish && !w.keyWake);       // unplugged
+    w=usbStandbyWake(key,true,false,true,removed|0x01,true);assert(w.finish && !w.keyWake);
+    w=usbStandbyWake(shake,true,false,true,removed,false);assert(!w.finish && !w.keyWake);     // replugged, or PM1's own event: 5 V is there
+    w=usbStandbyWake(key,true,false,true,removed,false);assert(!w.finish && w.keyWake);
+    w=usbStandbyWake(shake,true,false,true,0,true);assert(!w.finish && !w.keyWake);            // a shake
+    w=usbStandbyWake(key,true,false,true,0,false);assert(!w.finish && w.keyWake);              // the side key on USB
+    w=usbStandbyWake(key,true,false,false,removed,true);assert(!w.finish && w.keyWake);        // IRQ unreadable: not proof of unplug
+    w=usbStandbyWake(shake,false,true,false,0,true);assert(w.finish && !w.keyWake);            // the timer found no 5 V
+    w=usbStandbyWake(shake,false,true,false,0,false);assert(!w.finish && !w.keyWake);          // ... but 5 V is there now
+    w=usbStandbyWake(key,false,false,true,removed,true);assert(!w.finish && !w.keyWake);       // not an ext0 wake
+  }
+  std::cout<<"PASS: USB standby wake decisions, 1-minute default, all 1–10 minute timeouts, invalid-value rejection, activity reset, active-burst guard, millis wrap, checked battery voltage, estimate limits, stale/error handling and charging GPIO\n";
 }

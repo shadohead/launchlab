@@ -74,13 +74,15 @@ public:
   // (Timeline), and a capture waits for fused samples past its end, so a
   // longer poll delays data by at most one period and loses none.
   static constexpr uint32_t POLL_MS=20,STACK_POLLS=1000/POLL_MS;
+  // The battery lab (power_lab.h, knob i) polls less often, up to this.
+  static constexpr uint32_t MAX_POLL_MS=40;
   // The longest normal stop of FIFO reads is a flash-write checkpoint's quiet
   // window. On device (0.18) a history log append takes about 16 ms and an
   // NVS write 110-160 ms; this budget leaves room over the slowest. A poll
   // right after it reads POLL_MS+STALL_BUDGET_MS of frames, about half the
   // FIFO. A stop over about a second overflows it and is reported as a gap.
   static constexpr uint32_t STALL_BUDGET_MS=500;
-  static_assert(Bmi270Fifo::fillBytes(POLL_MS+STALL_BUDGET_MS)<Bmi270Fifo::CAPACITY-Bmi270Fifo::FULL_MARGIN,
+  static_assert(Bmi270Fifo::fillBytes(MAX_POLL_MS+STALL_BUDGET_MS)<Bmi270Fifo::CAPACITY-Bmi270Fifo::FULL_MARGIN,
     "A poll after the longest normal stall must find the FIFO short of overflow");
   bool quiet(uint32_t ms=QUIET_MAX_MS) {
     if(gate_ && xSemaphoreTake(gate_,pdMS_TO_TICKS(QUIET_WAIT_MS))!=pdTRUE)return false;
@@ -98,6 +100,12 @@ public:
   bool lock(){return !gate_ || xSemaphoreTake(gate_,pdMS_TO_TICKS(20))==pdTRUE;}
   void unlock(){if(gate_)xSemaphoreGive(gate_);}
   bool running()const{return task_!=nullptr;}
+  // The FIFO poll period, POLL_MS to MAX_POLL_MS; the next poll uses it.
+  bool setPollMs(uint32_t ms) {
+    if(ms<POLL_MS || ms>MAX_POLL_MS)return false;
+    pollMs_.store(ms);return true;
+  }
+  uint32_t pollMs()const{return pollMs_.load();}
   bool setMount(MountOrientation::Mode mode) {
     if(!MountOrientation::valid(unsigned(mode)))return false;
     if(ringGate_ && xSemaphoreTake(ringGate_,pdMS_TO_TICKS(20))!=pdTRUE)return false;
@@ -205,11 +213,11 @@ private:
   // core 0 until the task watchdog resets the chip. The FIFO already holds
   // the samples those polls would have read, so a late poll skips them: the
   // period restarts now, after a one-tick block.
-  static constexpr TickType_t PERIOD=pdMS_TO_TICKS(POLL_MS);
-  static void pace(TickType_t &last,Snapshot &s) {
-    if(xTaskDelayUntil(&last,PERIOD)==pdTRUE)return;
+  void pace(TickType_t &last,Snapshot &s) {
+    const TickType_t period=pdMS_TO_TICKS(pollMs_.load());
+    if(xTaskDelayUntil(&last,period)==pdTRUE)return;
     const TickType_t now=xTaskGetTickCount();
-    ++s.latePolls;s.missedPolls+=(now-last)/PERIOD;
+    ++s.latePolls;s.missedPolls+=(now-last)/period;
     last=now;vTaskDelay(1);
   }
   // Reads every complete FIFO byte. Returns 0 when empty or on a failed
@@ -275,5 +283,5 @@ private:
       const float up[3]={0,0,1};LaunchMotion::inverse(fused.q).rotate(up,s.gravity);
     });
   }
-  Bmi270Fifo::Timeline timeline_;uint8_t fifo_[Bmi270Fifo::CAPACITY];std::atomic<int64_t> quietUntil_{0};std::atomic<uint32_t> quietBeganMs_{0},quietEndedMs_{0};
+  Bmi270Fifo::Timeline timeline_;uint8_t fifo_[Bmi270Fifo::CAPACITY];std::atomic<int64_t> quietUntil_{0};std::atomic<uint32_t> pollMs_{POLL_MS};std::atomic<uint32_t> quietBeganMs_{0},quietEndedMs_{0};
 };

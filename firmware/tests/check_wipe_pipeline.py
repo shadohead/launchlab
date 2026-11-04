@@ -47,6 +47,7 @@ PREFIX = r'''
 #include "display_orientation.h"
 #include "level_indicator.h"
 #include "power_status.h"
+#include "power_savers.h"
 #include "cpu_power.h"
 #include "usb_awake.h"
 #include "rpm_estimator.h"
@@ -117,7 +118,7 @@ static RpmEstimator::Mode rpmEstimator=RpmEstimator::DEFAULT_MODE;
 static StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;static StartMarkReference::Reference startMarks;static bool startMarksDirty=false;
 static MountOrientation::Mode mountMode=MountOrientation::Mode::Top,liveMount=MountOrientation::Mode::Top;
 static Appearance::Config appearance;static Appearance::Celebration bestEffect,editorEffect;static Themes::Library themeLibrary;
-static InactivityTimer inactivity;static StickS3Level level;static StickS3Level::Reading drawnLevel;
+static InactivityTimer inactivity;static OpticalSleepGuard opticalGuard;static HeldButtonUse heldButtons;static StickS3Level level;static StickS3Level::Reading drawnLevel;
 static UsbHostAwake usbAwake;
 struct {uint32_t magic=123;}sleepReceipt;
 struct Sound {unsigned stops=0;void stop(){++stops;}}soundPlayer;
