@@ -8,8 +8,12 @@
 #include <iostream>
 #include <vector>
 
-// Storage as the device takes it from PSRAM (FrameRows::begin).
-static uint32_t *storage(){return new uint32_t[FrameRows::MAX_BANDS]();}
+// Storage as the device takes it from PSRAM (FrameRows::begin), one block
+// per FrameRows, never freed as on the device: static, so no leak to report.
+static uint32_t *storage() {
+  static uint32_t pool[8][FrameRows::MAX_BANDS];static unsigned used=0;
+  assert(used<8);return pool[used++];
+}
 
 int main() {
   constexpr int W=135,H=240;
