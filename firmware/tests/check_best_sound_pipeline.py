@@ -94,7 +94,20 @@ struct SpeakerPeripheral {
   void stop(uint8_t){stop();}
   void setChannelVolume(uint8_t,uint8_t){}
 };
-static struct {SpeakerPeripheral Speaker;} M5;
+// The internal I2C bus: the codec writes the speaker makes after end().
+struct InternalI2C {
+  std::vector<std::pair<uint8_t,uint8_t>> codec;
+  bool writeRegister8(uint8_t address,uint8_t reg,uint8_t value,uint32_t){if(address==0x18)codec.push_back({reg,value});return true;}
+};
+static struct {SpeakerPeripheral Speaker;InternalI2C In_I2C;} M5;
+#include "es8311_power.h"
+// The codec is powered down when its last writes are exactly Es8311Power::DOWN.
+static bool codecDown() {
+  const auto &w=M5.In_I2C.codec;const size_t n=sizeof(Es8311Power::DOWN)/sizeof(Es8311Power::DOWN[0]);
+  if(w.size()<n)return false;
+  for(size_t i=0;i<n;++i)if(w[w.size()-n+i]!=std::make_pair(Es8311Power::DOWN[i].reg,Es8311Power::DOWN[i].value))return false;
+  return true;
+}
 // The music streamer's stand-ins (best_effect_speaker.h defines them for
 // the device above the class this harness takes): a host lock, no task.
 #include "music_stream.h"
@@ -230,7 +243,8 @@ int main() {
     assert(M5.Speaker.plays==1);checkClip(effect);
     tickSound(Snapshot{AnalogTachometer::Phase::Launch});
     assert(!soundPlayer.playing() && soundPlayer.powered());
-    tickSound(Snapshot{});assert(!soundPlayer.powered());
+    M5.In_I2C.codec.clear();
+    tickSound(Snapshot{});assert(!soundPlayer.powered() && !M5.Speaker.powered && codecDown());
   }
   // A queued Random recap keeps its prepared clip while capture is pending,
   // including wrap of the effect's presentation clock.

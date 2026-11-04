@@ -5,6 +5,7 @@
 #include "best_effect_sound.h"
 #include "motion_acquisition.h"
 #include "pm1_idle.h"
+#include "es8311_power.h"
 #include "sound_sync.h"
 #include "music_stream.h"
 #include "freertos/semphr.h"
@@ -43,6 +44,9 @@ struct MusicChannel:MusicOutput {
 
 class BestEffectSpeaker {
 public:
+  // While set the codec never starts: the battery lab's 40 MHz CPU stops the
+  // PLL that clocks I2S (power_lab_device.h).
+  bool blocked=false;
   // A loaded effect's own sound (loaded_effects.h, through the sketch):
   // whether the effect has one, its identity (its file's CRC, so a replaced
   // file renders again) and length, and a resumable render that gives the
@@ -114,6 +118,7 @@ public:
   // Powers the codec if it is off (under the IMU owner's gate).
   bool power() {
     if(begun_)return true;
+    if(blocked)return false;
     if(!imu_.lock()){++lockMisses_;return false;}
     const int64_t started=esp_timer_get_time();
     if(!pm1Idle().ensureAwake()){imu_.unlock();return false;}
@@ -160,10 +165,16 @@ public:
   void tick(bool measuring) {
     if(music_)music_->feed(uint32_t(esp_timer_get_time()/1000),channel_);
     if(!begun_ || measuring || M5.Speaker.isPlaying() || streaming() || !imu_.lock())return;
-    const int64_t started=esp_timer_get_time();
-    if(!pm1Idle().ensureAwake()){imu_.unlock();return;}
-    M5.Speaker.end();endUs_=std::max(endUs_,uint32_t(esp_timer_get_time()-started));
-    imu_.unlock();begun_=false;
+    powerDownLocked();imu_.unlock();
+  }
+  // Before sleep or power-off: silence and power down at once, so neither the
+  // amplifier enable nor the codec stays on through standby. stop() only asks
+  // M5's speaker task to stop (isPlaying() stays true until it has), so this
+  // does not wait for tick(): end() stops the task itself.
+  void shutdown() {
+    stop();
+    if(!begun_ || !imu_.lock())return;
+    powerDownLocked();imu_.unlock();
   }
   bool powered()const{return begun_;}
   bool playing()const{return begun_ && (M5.Speaker.isPlaying() || streaming());}
@@ -174,9 +185,9 @@ public:
       used+=snprintf(rendered+used,sizeof(rendered)-used,"%s%s",used?",":"",Appearance::label(Appearance::drawnEffect(i)));
     for(unsigned i=Appearance::DRAWN;i<SOUNDS;++i)if(rendered_[i])
       usedLoaded+=snprintf(loaded+usedLoaded,sizeof(loaded)-usedLoaded,"%s%u",usedLoaded?",":"",Appearance::FIRST_LOADED+i-Appearance::DRAWN);
-    Serial.printf("SOUND_STATUS level=%s configured=%d buffers=%u evictions=%lu rendered=%s powered=%d playing=%d plays=%lu stops=%lu lock_misses=%lu render_us=%lu max_slice_us=%lu max_begin_us=%lu max_end_us=%lu loaded_rendered=%s\n",
+    Serial.printf("SOUND_STATUS level=%s configured=%d buffers=%u evictions=%lu rendered=%s powered=%d playing=%d plays=%lu stops=%lu lock_misses=%lu render_us=%lu max_slice_us=%lu max_begin_us=%lu max_end_us=%lu loaded_rendered=%s codec_failures=%lu\n",
       Appearance::label(level),configured_,buffers,(unsigned long)evictions_,rendered,begun_,playing(),
-      (unsigned long)plays_,(unsigned long)stops_,(unsigned long)lockMisses_,(unsigned long)renderUs_,(unsigned long)maxSliceUs_,(unsigned long)beginUs_,(unsigned long)endUs_,loaded);
+      (unsigned long)plays_,(unsigned long)stops_,(unsigned long)lockMisses_,(unsigned long)renderUs_,(unsigned long)maxSliceUs_,(unsigned long)beginUs_,(unsigned long)endUs_,loaded,(unsigned long)codecFailures_);
     Serial.printf("MUSIC_STATUS ready=%d streaming=%d fading=%d plays=%lu underruns=%lu played_blocks=%lu\n",music_!=nullptr,streaming(),
       music_ && music_->fading(),(unsigned long)(music_?music_->plays():0),(unsigned long)(music_?music_->underruns():0),(unsigned long)(music_?music_->played():0));
   }
@@ -185,6 +196,16 @@ public:
   static constexpr unsigned SOUNDS=Appearance::DRAWN+Appearance::LOADED;
 private:
   static constexpr uint8_t LOW_VOLUME=72,HIGH_VOLUME=160;
+  // The speaker off, under the IMU owner's gate: end() only switches the
+  // amplifier off (M5Unified on StickS3), so the codec's own power-down.
+  void powerDownLocked() {
+    const int64_t started=esp_timer_get_time();
+    if(!pm1Idle().ensureAwake())return;
+    M5.Speaker.end();
+    if(!Es8311Power::down(M5.In_I2C))++codecFailures_;
+    endUs_=std::max(endUs_,uint32_t(esp_timer_get_time()-started));
+    begun_=false;
+  }
   // What an effect sounds like: a loaded effect's own sound (its slot's
   // buffer, keyed by its file), else the built-in it stands for.
   struct Source {unsigned index=SOUNDS;Appearance::Effect effect=Appearance::Effect::Off;bool loaded=false,stream=false;uint32_t key=0;size_t samples=0;};
@@ -227,6 +248,6 @@ private:
   BestEffectSound::Synth synth_{Appearance::Effect::Off,0};
   unsigned target_=SOUNDS;uint32_t targetKey_=0;size_t progress_=0;  // the sound being rendered and how far
   bool configured_=false,begun_=false;
-  uint32_t plays_=0,stops_=0,lockMisses_=0,renderUs_=0,maxSliceUs_=0,beginUs_=0,endUs_=0,outputUs_=0;
+  uint32_t plays_=0,stops_=0,lockMisses_=0,renderUs_=0,maxSliceUs_=0,beginUs_=0,endUs_=0,outputUs_=0,codecFailures_=0;
 };
 

@@ -1,5 +1,7 @@
 #pragma once
 #include "esp_adc/adc_continuous.h"
+#include "esp_clk_tree.h"
+#include "hal/adc_ll.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
 #include "soc/soc_caps.h"
@@ -12,6 +14,7 @@
 #include "rpm_estimator.h"
 #include "sample_ring.h"
 #include "history_checkpoint.h"
+#include "adc_clock.h"
 #if LAUNCHLAB_HIL
 #include "hil_optical.h"
 #endif
@@ -31,7 +34,7 @@ public:
   static constexpr uint32_t FRAME_BYTES=4092;
   // No frame for this long while sampling: the DMA stopped; restart it.
   static constexpr int64_t SILENCE_US=250000;
-  enum class Action:uint8_t { Pin, Suspend, Resume, Reset, CheckpointBegin, CheckpointEnd, ShutdownBegin, IdleCheckpointBegin, Estimator, HistoryIdleCheckpointBegin, SensorProfile, IdlePause, IdleResume };
+  enum class Action:uint8_t { Pin, Suspend, Resume, Reset, CheckpointBegin, CheckpointEnd, ShutdownBegin, IdleCheckpointBegin, Estimator, HistoryIdleCheckpointBegin, SensorProfile, IdlePause, IdleResume, Retime, ShutdownForce };
   struct Snapshot {
     AnalogTachometer::Phase phase=AnalogTachometer::Phase::Settling;
     AnalogTachometer::End ended=AnalogTachometer::End::None;
@@ -48,7 +51,7 @@ public:
     uint32_t weak=0,slow=0,shape=0,inconsistent=0,rearmExtensions=0,rearmMs=0;
     uint32_t singlePeakUpdates=0,singlePeakRejected=0;
     uint32_t last=0,minimum=0,maximum=0,overflows=0,readErrors=0,invalidFrames=0;
-    uint32_t lostEvents=0,maxBatchUs=0,maxReadGapUs=0,stackFree=0,stalls=0;
+    uint32_t lostEvents=0,maxBatchUs=0,maxReadGapUs=0,stackFree=0,stalls=0,retimes=0;
     float mean=0,rate=0,processingPercent=0,resultRpm=0,peakRpm=0;
     float sustainedPeakRpm=0,singlePeakRpm=0;
     RpmEstimator::Mode estimator=RpmEstimator::DEFAULT_MODE;
@@ -147,7 +150,7 @@ private:
   portMUX_TYPE curveMux_=portMUX_INITIALIZER_UNLOCKED;
   AnalogTachometer::Curve curve_;uint32_t curveRevision_=0;
   Snapshot snapshot_;
-  uint32_t requestId_=0,overflows_=0,seenOverflows_=0,readErrors_=0,invalidFrames_=0,lostEvents_=0,stalls_=0;
+  uint32_t requestId_=0,overflows_=0,seenOverflows_=0,readErrors_=0,invalidFrames_=0,lostEvents_=0,stalls_=0,retimes_=0;
   alignas(4) uint8_t frame_[FRAME_BYTES]={};
 #if LAUNCHLAB_HIL
   uint16_t hilValues_[FRAME_BYTES/SOC_ADC_DIGI_RESULT_BYTES]={};
@@ -224,6 +227,22 @@ private:
     }
     ready_=false;
   }
+  // IDF times the ADC from the APB clock it read at configure time, but the
+  // ADC samples at the APB its power lock holds once started (adc_clock.h).
+  // Called with the ADC running: re-times it to that clock when they differ.
+  // True when it changed anything, which the caller treats as a sample gap.
+  bool retime() {
+    uint32_t apbHz=0;
+    if(esp_clk_tree_src_get_freq_hz(SOC_MOD_CLK_APB,ESP_CLK_TREE_SRC_FREQ_PRECISION_EXACT,&apbHz)!=ESP_OK)return false;
+    const auto t=AdcClock::timing(apbHz,SAMPLE_HZ);
+    if(!t.valid || (HAL_FORCE_READ_U32_REG_FIELD(APB_SARADC.apb_adc_clkm_conf,clkm_div_num)==t.divider &&
+       APB_SARADC.ctrl2.timer_target==t.interval))return false;
+    adc_ll_digi_trigger_disable();
+    adc_ll_digi_controller_clk_div(t.divider,ADC_LL_CLKM_DIV_B_DEFAULT,ADC_LL_CLKM_DIV_A_DEFAULT);
+    adc_ll_digi_set_trigger_interval(t.interval);
+    adc_ll_digi_trigger_enable();
+    ++retimes_;return true;
+  }
   bool initAdc() {
     adc_unit_t unit;adc_channel_t channel;
     error_=adc_continuous_io_to_channel(pin_,&unit,&channel);
@@ -247,6 +266,7 @@ private:
     if(error_==ESP_OK)error_=adc_continuous_register_event_callbacks(adc_,&callbacks,this);
     if(error_==ESP_OK)error_=adc_continuous_start(adc_);
     ready_=error_==ESP_OK;
+    if(ready_)retime();
     if(!ready_)closeAdc();
     seenOverflows_=overflowCount();resetWindow();return ready_;
   }
@@ -326,19 +346,27 @@ private:
         if(!ready_){ok=false;break;}
         [[fallthrough]];
       case Action::ShutdownBegin:
+      case Action::ShutdownForce: {
         // A verified Ready idle pause already owns a stopped ADC and checkpoint.
         // Convert it into ordinary shutdown ownership without restarting ADC.
-        if(c.action==Action::ShutdownBegin && idlePaused_ && checkpoint_ && adc_ && detector_.launches==c.value) {
+        if(c.action!=Action::IdleCheckpointBegin && idlePaused_ && checkpoint_ && adc_ && detector_.launches==c.value) {
           idlePaused_=false;break;
         }
+        if(suspended_ || detector_.launches!=c.value){ok=false;break;}
+        // A sleep the detector refused again and again (OpticalSleepGuard):
+        // marks that never became a pull, or a Launch long past any pull.
+        // They are dropped as a sample gap drops them (a completed result
+        // is kept), and sampling stops.
+        if(c.action==Action::ShutdownForce)HistoryCheckpoint::sampleGap(detector_);
         // Recheck on the detector's owner: a burst can start after the UI
         // reads its snapshot. Never let an idle shutdown interrupt that burst.
         // Ready can already hold the first strong marks of an unconfirmed pull.
-        if(suspended_ || detector_.phase==AnalogTachometer::Phase::Launch || detector_.launches!=c.value ||
+        else if(detector_.phase==AnalogTachometer::Phase::Launch ||
            (detector_.phase==AnalogTachometer::Phase::Ready && !detector_.historyCheckpointIdle())){ok=false;break;}
         if(ready_){error_=adc_continuous_stop(adc_);ok=error_==ESP_OK;}
         if(ok){checkpointResult_=HistoryCheckpoint(detector_);checkpointAt_=esp_timer_get_time();ready_=false;suspended_=true;checkpoint_=adc_!=nullptr;}
         break;
+      }
       case Action::IdlePause:
       case Action::HistoryIdleCheckpointBegin:
         // Automatic coalesced history saves may flush after Ready. Recheck
@@ -355,6 +383,7 @@ private:
         error_=adc_continuous_flush_pool(adc_);
         if(error_==ESP_OK)error_=adc_continuous_start(adc_);
         ready_=error_==ESP_OK;ok=ready_;seenOverflows_=overflowCount();
+        if(ready_)retime();
         break;
       case Action::CheckpointBegin:
         if(!ready_ || suspended_ || !HistoryCheckpoint::allowed(detector_)){ok=false;break;}
@@ -375,6 +404,12 @@ private:
         error_=adc_continuous_flush_pool(adc_);
         if(error_==ESP_OK)error_=adc_continuous_start(adc_);
         ready_=error_==ESP_OK;ok=ready_;seenOverflows_=overflowCount();
+        if(ready_)retime();
+        break;
+      case Action::Retime:
+        // The CPU's top frequency changed under a running ADC (the battery
+        // lab's 40 MHz knob): the samples since were at the wrong rate.
+        if(ready_ && retime())discontinuity(true);
         break;
     }
     publish(true);
@@ -398,7 +433,7 @@ private:
     s.shape=detector_.rejectedShape;s.inconsistent=detector_.inconsistentWindows;
     s.rearmExtensions=detector_.rearmExtensions;s.rearmMs=detector_.rearmMs();
     s.last=last_;s.mean=mean_;s.rate=idlePaused_?0:rate_;s.minimum=displayMin_;s.maximum=displayMax_;
-    s.processingPercent=idlePaused_?0:processingPercent_;s.overflows=overflowCount();s.readErrors=readErrors_;s.stalls=stalls_;
+    s.processingPercent=idlePaused_?0:processingPercent_;s.overflows=overflowCount();s.readErrors=readErrors_;s.stalls=stalls_;s.retimes=retimes_;
     s.invalidFrames=invalidFrames_;s.lostEvents=lostEvents_;s.maxBatchUs=maxBatchUs_;
     s.maxReadGapUs=maxReadGapUs_;s.stackFree=uxTaskGetStackHighWaterMark(nullptr);
     s.estimator=estimator_;s.sensorProfile=sensorProfile_;

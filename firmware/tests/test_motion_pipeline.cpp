@@ -36,6 +36,7 @@ public:
 #include "../LaunchLabMini/rpm_estimator.h"
 #include "../LaunchLabMini/sensor_profile.h"
 #include "../LaunchLabMini/history_checkpoint.h"
+#include "../LaunchLabMini/power_status.h"
 static LaunchMotion::Trace syntheticPipelineTrace(uint32_t durationMs=75) {
   LaunchMotion::Trace t;t.quality=LaunchMotion::Quality::Valid;t.fused=true;t.number=7;t.rpm=6000;t.durationMs=durationMs;t.count=48;t.gravity[2]=1;
   for(unsigned i=0;i<t.count;++i) {
@@ -81,7 +82,7 @@ struct ImuFake {
     out=completedTrace;out.rpm=rpm;out.number=number;return true;}
 }imuAcquisition;
 struct AcquisitionFake {Snapshot state;Snapshot snapshot(){return state;}bool request(Action,uint32_t=0){return true;}}acquisition;
-struct InactivityFake {void touch(uint32_t){}}inactivity;
+struct InactivityFake {void touch(uint32_t){}}inactivity;static OpticalSleepGuard opticalGuard;
 namespace PracticeUI {enum class View {Other,Battery};}
 static PracticeUI::View historyView=PracticeUI::View::Other;
 static LaunchFeedback launchFeedback;

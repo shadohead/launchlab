@@ -16,6 +16,8 @@ namespace Hil{inline bool nvsWrite(const char *key,size_t bytes);}
 #include "power_status.h"
 #include "sensor_idle.h"
 #include "cpu_power.h"
+#include "power_savers.h"
+#include "frame_rows.h"
 #ifndef LAUNCHLAB_MOTION_ADC_GATE
 #define LAUNCHLAB_MOTION_ADC_GATE 0
 #endif
@@ -24,6 +26,15 @@ namespace Hil{inline bool nvsWrite(const char *key,size_t bytes);}
 #include "usb_tx.h"
 #include "usb_command_guard.h"
 #include "power_diagnostics.h"
+#ifndef LAUNCHLAB_POWER_LAB
+#define LAUNCHLAB_POWER_LAB 0
+#endif
+#if LAUNCHLAB_POWER_LAB
+#include "power_lab.h"
+// Battery lab test builds (power_lab_device.h): the open run's profile; the
+// shipped behaviour (default knobs) when no run is open.
+namespace Lab {inline PowerLab::Knobs knobs;inline bool running=false,displayAsleep=false;inline uint32_t frames=0,rows=0,loops=0;}
+#endif
 #include <sys/time.h>
 #include <esp32-hal-cpu.h>
 #include <esp_heap_caps.h>
@@ -66,11 +77,11 @@ namespace Hil{inline bool nvsWrite(const char *key,size_t bytes);}
 #define LOOP_HELPER __attribute__((noinline))
 #if LAUNCHLAB_HIL
 // Test-only hardware-in-the-loop build; never a release. See tools/hil.
-static constexpr char VERSION[] = "0.20.5-sticks3-songs-hil-pm";
+static constexpr char VERSION[] = "0.20.6-sticks3-songs-hil-pm";
 #elif LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = "0.20.5-sticks3-songs-pm";
+static constexpr char VERSION[] = "0.20.6-sticks3-songs-pm";
 #else
-static constexpr char VERSION[] = "0.20.5-sticks3-songs";
+static constexpr char VERSION[] = "0.20.6-sticks3-songs";
 #endif
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ
@@ -85,6 +96,8 @@ static StickS3Acquisition acquisition;
 static Preferences prefs;
 static StickS3Level level;
 static M5Canvas screen(&M5.Display);
+// What the panel shows, for pushing only the rows that changed (frame_rows.h).
+static FrameRows frameRows;static uint8_t frameRotation=0xff;
 static PracticeHistory practice,demoPractice;
 static PracticeStore practiceStore;
 static Appearance::Config appearance;
@@ -167,7 +180,7 @@ static struct {uint16_t elapsed[64];uint32_t us[64],cycles[64][BestEffectUI::Ren
 #endif
 static uint32_t lastImuPoll=0,maxImuPollUs=0;
 static StickS3Level::Reading drawnLevel;
-static InactivityTimer inactivity;
+static InactivityTimer inactivity;static OpticalSleepGuard opticalGuard;static HeldButtonUse heldButtons;
 static uint64_t lastActivityMotionUs=0;
 // USB letters a stray byte stream sent outside a standalone command.
 static UsbCommandGuard usbCommands;
@@ -209,6 +222,19 @@ static bool powerLogReady=false,powerLogDirty=false;
 static uint32_t powerLogTick=0,lastPowerSample=0,lastPowerSaveTry=0;
 struct SleepReceipt {uint32_t magic;int64_t atUs;};
 RTC_DATA_ATTR static SleepReceipt sleepReceipt={};
+RTC_DATA_ATTR static UsbStandby usbStandby={};
+static bool finishStandby=false;
+// What the timer re-check of a USB-retained standby read before the boot:
+// PM1's power source (0x04) and system IRQ mask (0x44, bit 1 = 5VIN removal).
+static struct {bool ran=false,read=false;uint8_t source=0,mask=0xff;} standbyRecheck;
+#if LAUNCHLAB_HIL
+static char standbyWakeText[224]="none";  // USB_STANDBY_WAKE's fields, for HIL !standbywake (setup writes 224)
+#endif
+#if LAUNCHLAB_HIL
+// !usbstandby <s>: the next USB-retained standby re-checks after s seconds
+// and then boots rather than sleeping again, so the rig gets the unit back.
+RTC_DATA_ATTR static uint32_t hilStandbyRecheckS=0;
+#endif
 static uint8_t pm1WakeFlags=0;
 static bool pm1WakeValid=false;
 static StickS3MotionAcquisition imuAcquisition;
@@ -310,7 +336,7 @@ static bool startMotion() {
 // If no quiet window can be established the checkpoint is vetoed; every
 // caller already treats a refused checkpoint as busy and retries later.
 static bool quietImuForFlash(Action action,bool done,bool ok) {
-  const bool writes=action==Action::IdleCheckpointBegin || action==Action::ShutdownBegin ||
+  const bool writes=action==Action::IdleCheckpointBegin || action==Action::ShutdownBegin || action==Action::ShutdownForce ||
     action==Action::HistoryIdleCheckpointBegin || action==Action::CheckpointBegin;
   if(writes && !done)return imuAcquisition.quiet();
   if((writes && !ok) || action==Action::CheckpointEnd)imuAcquisition.endQuiet();
@@ -515,12 +541,14 @@ LOOP_HELPER static void status() {
   Serial.printf("UI_STATUS page=%u menu=%u history=%u setting=%u draft=%u recording=%s\n",
     unsigned(controls.page),controls.menu,controls.history,controls.setting,controls.draft,
     s.resting?"idle_paused":LAUNCHLAB_MOTION_ADC_GATE?"motion_gated":"always");
-  Serial.printf("PERF acquisition_core=0 ui_core=%d processing_pct=%.2f max_batch_us=%lu frame_budget_us=%lu max_read_gap_us=%lu stack_free=%lu invalid_frames=%lu lost_events=%lu adc_stalls=%lu max_draw_us=%lu max_effect_us=%lu ui_stalls=%lu stress=%d heap_free=%lu psram_free=%lu usb_drain_timeouts=%lu usb_rejected_commands=%lu\n",
+  Serial.printf("PERF acquisition_core=0 ui_core=%d processing_pct=%.2f max_batch_us=%lu frame_budget_us=%lu max_read_gap_us=%lu stack_free=%lu invalid_frames=%lu lost_events=%lu adc_stalls=%lu max_draw_us=%lu max_effect_us=%lu ui_stalls=%lu stress=%d heap_free=%lu psram_free=%lu usb_drain_timeouts=%lu usb_rejected_commands=%lu frames=%lu whole_frames=%lu unchanged_frames=%lu pushed_rows=%lu row_hashes=%d adc_retimes=%lu\n",
     xPortGetCoreID(),s.processingPercent,(unsigned long)s.maxBatchUs,
     (unsigned long)(uint64_t(StickS3Acquisition::FRAME_BYTES/SOC_ADC_DIGI_RESULT_BYTES)*1000000/StickS3Acquisition::SAMPLE_HZ),(unsigned long)s.maxReadGapUs,
     (unsigned long)s.stackFree,(unsigned long)s.invalidFrames,(unsigned long)s.lostEvents,(unsigned long)s.stalls,
     (unsigned long)maxDrawUs,(unsigned long)maxEffectUs,(unsigned long)uiStalls,stress,
-    (unsigned long)ESP.getFreeHeap(),(unsigned long)ESP.getFreePsram(),(unsigned long)UsbTx::drainTimeouts,(unsigned long)usbCommands.rejected);
+    (unsigned long)ESP.getFreeHeap(),(unsigned long)ESP.getFreePsram(),(unsigned long)UsbTx::drainTimeouts,(unsigned long)usbCommands.rejected,
+    (unsigned long)frameRows.frames(),(unsigned long)frameRows.wholeFrames(),(unsigned long)frameRows.unchanged(),
+    (unsigned long)frameRows.rows(),frameRows.ready(),(unsigned long)s.retimes);
   heapStatus();nvsStatus();
   const auto tilt=level.reading(millis());const float *acc=level.lastAccel();
   Serial.printf("LEVEL_STATUS imu_ready=%d imu_type=%d state=%s degrees=%.2f accel_g=%.3f,%.3f,%.3f samples=%lu rejected=%lu max_poll_us=%lu draw_buffer=%d\n",
@@ -556,11 +584,13 @@ LOOP_HELPER static void status() {
     powerConfigValid,powerConfig,powerConfigValid?int(bool(powerConfig&0x10)):-1);
   Serial.printf("POWER_KEY single_click=%s pending=%d clear_failures=%lu\n",
     powerKey().configured()?"firmware_power_off":"pm1_reset",powerKeyRequested,(unsigned long)powerKey().clearFailures());
-  Serial.printf("CPU_PM requested=%d enabled=%d min_mhz=%u max_mhz=80 light_sleep=0 error=%s\n",
-    LAUNCHLAB_CPU_PM,CpuPower::active(),CpuPower::active()?40u:80u,CpuPower::errorName());
-  Serial.printf("POWER_POLICY effective_timeout_s=%lu unused_shake=%d dim_after_ms=%lu level_poll_ms=%lu ui_poll_ms=%lu battery_estimate_mv=%u battery_estimate=voltage_median5\n",
+  Serial.printf("CPU_PM requested=%d enabled=%d min_mhz=%u max_mhz=%d light_sleep=0 error=%s\n",
+    LAUNCHLAB_CPU_PM,CpuPower::active(),CpuPower::active()?40u:80u,CpuPower::active()?CpuPower::maxMhz():80,CpuPower::errorName());
+  const auto &savers=PowerSavers::settings;
+  Serial.printf("POWER_POLICY effective_timeout_s=%lu unused_shake=%d dim_after_ms=%lu dim_ignores_motion=%d dim_backlight=%u rest_after_ms=%lu changed_rows_only=%d imu_poll_ms=%lu level_poll_ms=%lu ui_poll_ms=%lu battery_estimate_mv=%u battery_estimate=voltage_median5\n",
     (unsigned long)(inactivity.activeTimeout()/1000),inactivity.unusedShake(),
-    (unsigned long)IdlePowerPolicy::DIM_MS,(unsigned long)IdlePowerPolicy::LEVEL_POLL_MS,
+    (unsigned long)savers.dimMs,savers.dimIgnoresMotion,unsigned(savers.dimBacklight),(unsigned long)savers.restMs,
+    savers.changedRowsOnly,(unsigned long)imuAcquisition.pollMs(),(unsigned long)IdlePowerPolicy::LEVEL_POLL_MS,
     (unsigned long)IdlePowerPolicy::UI_POLL_MS,unsigned(battery.estimateMillivolts));
   // PM1 statistics are written under the shared gate. Do not block status
   // waiting on the IMU owner or sample them concurrently with a PM1 operation.
@@ -668,15 +698,30 @@ LOOP_HELPER static void tickDisplayPower(uint32_t now,const Snapshot &s) {
   // dimmed restores its feedback brightness only after measurement completes.
   if(s.phase==AnalogTachometer::Phase::Launch ||
      (s.phase==AnalogTachometer::Phase::Ready && !s.opticalIdle))return;
+#if LAUNCHLAB_POWER_LAB
+  // A fixed lab backlight, never dimmed; 0 puts the panel to sleep.
+  if(Lab::running && Lab::knobs.backlight>=0) {
+    const uint8_t target=(unsigned(Lab::knobs.backlight)*255+50)/100;
+    if(M5.Display.getBrightness()==target && Lab::displayAsleep==!target)return;
+    acquisition.displayBoundary(true);
+    if(!target){M5.Display.setBrightness(0);M5.Display.sleep();Lab::displayAsleep=true;}
+    else{if(Lab::displayAsleep){M5.Display.wakeup();frameRows.invalidate();Lab::displayAsleep=false;}M5.Display.setBrightness(target);}
+    acquisition.displayBoundary(false);
+    Serial.printf("LAB_DISPLAY backlight_pct=%d asleep=%d\n",Lab::knobs.backlight,Lab::displayAsleep);
+    return;
+  }
+  if(Lab::displayAsleep){M5.Display.wakeup();frameRows.invalidate();Lab::displayAsleep=false;dirty=true;}
+#endif
+  const auto &savers=PowerSavers::settings;
   const uint8_t selected=controls.page==Controls::Page::Edit && controls.setting==2?
     controls.draft:brightnessPercent;
-  const uint8_t percent=IdlePowerPolicy::brightness(selected,inactivity.elapsed(now),
-    usbAwake.inhibited(now),launchFeedback.shown());
-  const uint8_t target=(unsigned(percent)*255+50)/100;
+  const uint32_t idle=savers.dimIgnoresMotion?inactivity.sinceUse(now):inactivity.elapsed(now);
+  const uint8_t percent=IdlePowerPolicy::brightness(selected,idle,usbAwake.inhibited(now),launchFeedback.shown(),savers.dimMs);
+  const uint8_t target=percent<selected && savers.dimBacklight?savers.dimBacklight:(unsigned(percent)*255+50)/100;
   if(M5.Display.getBrightness()==target)return;
   acquisition.displayBoundary(true);M5.Display.setBrightness(target);acquisition.displayBoundary(false);
-  Serial.printf("DISPLAY_POWER selected_pct=%u actual_pct=%u idle_ms=%lu dimmed=%d\n",
-    selected,percent,(unsigned long)inactivity.elapsed(now),percent<selected);
+  Serial.printf("DISPLAY_POWER selected_pct=%u actual_pct=%u backlight=%u idle_ms=%lu dimmed=%d\n",
+    selected,percent,unsigned(target),(unsigned long)idle,percent<selected);
 }
 
 static void drawBattery(lgfx::LGFXBase &g,uint32_t now) {
@@ -866,7 +911,24 @@ LOOP_HELPER static void draw(const Snapshot &s) {
   // An internal canvas is pushed by DMA, which endWrite does not wait for.
   // Wait so the transfer stays inside the boundary marks and the next frame
   // cannot overwrite pixels still being sent.
-  if(screenReady){acquisition.displayBoundary(true);M5.Display.startWrite();screen.pushSprite(0,0);M5.Display.waitDMA();}
+  if(screenReady) {
+    acquisition.displayBoundary(true);M5.Display.startWrite();
+    // Only the rows that changed since the panel's last frame, nothing when
+    // none did (frame_rows.h); whole after a rotation.
+    if(M5.Display.getRotation()!=frameRotation){frameRotation=M5.Display.getRotation();frameRows.invalidate();}
+    FrameRows::Span rows;rows.count=screen.height();rows.whole=true;
+    if(PowerSavers::settings.changedRowsOnly)rows=frameRows.changed(screen.getBuffer(),screen.width(),screen.height(),millis());
+    else frameRows.invalidate();
+    if(rows.whole)screen.pushSprite(0,0);
+    else if(rows.any()){M5.Display.setClipRect(0,rows.first,screen.width(),rows.count);screen.pushSprite(0,0);M5.Display.clearClipRect();}
+    M5.Display.waitDMA();
+#if LAUNCHLAB_POWER_LAB
+    Lab::rows+=uint32_t(rows.count);
+#endif
+  }
+#if LAUNCHLAB_POWER_LAB
+  ++Lab::frames;
+#endif
   M5.Display.endWrite();
   if(effectReadUs){presentLagUs=uint32_t(esp_timer_get_time()-effectReadUs);effectReadUs=0;}
   acquisition.displayBoundary(false);
@@ -1571,8 +1633,9 @@ LOOP_HELPER static void saveHistory(uint32_t now,const Snapshot &s) {
 // Stops sampling, accepts queued pulls and saves history/bests before power
 // down. Only Ready leaves acquisition stopped; otherwise sampling continues
 // and the caller retries. A new pull is recorded but restarts the decision.
-LOOP_HELPER static ShutdownFlush flushForShutdown(uint32_t now,const Snapshot &s) {
-  if(!acquisition.request(Action::ShutdownBegin,s.launches))return ShutdownFlush::Busy;
+// force: stop even with optical marks pending (OpticalSleepGuard).
+LOOP_HELPER static ShutdownFlush flushForShutdown(uint32_t now,const Snapshot &s,bool force=false) {
+  if(!acquisition.request(force?Action::ShutdownForce:Action::ShutdownBegin,s.launches))return ShutdownFlush::Busy;
   // Finish any queued accepted result before saving; the owner is now stopped.
   Snapshot event;
   bool newPull=false;
@@ -1586,8 +1649,21 @@ LOOP_HELPER static ShutdownFlush flushForShutdown(uint32_t now,const Snapshot &s
   // and is retried if the device stays on.
   writeSettings();
   saveStartMarks();
-  const bool historyFailed=practiceStore.pending(practice) && (!practiceStore.ready() || !practiceStore.save(practice));
-  if(historyFailed || (bestStore.pending(personalBests) && (!bestStore.ready() || !bestStore.save(personalBests)))) {
+  bool historyFailed=practiceStore.pending(practice) && (!practiceStore.ready() || !practiceStore.save(practice));
+  bool bestFailed=bestStore.pending(personalBests) && (!bestStore.ready() || !bestStore.save(personalBests));
+  // With the history log open, NVS holds only a copy of what the log holds.
+  // A copy NVS refuses (full, as one StickS3 was) is retried at the next
+  // sleep once the log has it; through 0.20.5 it deferred every sleep, every
+  // minute, a drain until flat.
+  if((historyFailed || bestFailed) && historyLog.isOpen()) {
+    const bool historyLogged=!historyUnsaved() || logHistory(),bestLogged=!bestsUnsaved() || logBests();
+    if(historyLogged && bestLogged) {
+      ++saveErrors;
+      Serial.printf("POWER_OFF_NOTICE nvs_copy_failed history=%d best=%d store=log\n",historyFailed,bestFailed);
+      historyFailed=bestFailed=false;
+    } else {historyFailed=!historyLogged;bestFailed=!bestLogged;}
+  }
+  if(historyFailed || bestFailed) {
     saveError=true;++saveErrors;dirty=true;
     Serial.printf("POWER_OFF_DEFERRED %s_save_failed\n",historyFailed?"history":"best");
     if(!acquisition.request(Action::CheckpointEnd))acquisition.request(Action::Pin,s.pin);
@@ -1598,20 +1674,33 @@ LOOP_HELPER static ShutdownFlush flushForShutdown(uint32_t now,const Snapshot &s
   return ShutdownFlush::Ready;
 }
 
+// The USB-retained standby's timer re-check (shake_wake.h): on a charger
+// only; with a computer attached the PM1 IRQ alone ends it.
+static uint64_t standbyRecheckUs() {
+#if LAUNCHLAB_HIL
+  if(hilStandbyRecheckS)return uint64_t(hilStandbyRecheckS)*1000000;
+#endif
+  return usbAwake.sof() || usbAwake.remembered()?0:StickS3ShakeWake::USB_RECHECK_US;
+}
 #if LAUNCHLAB_HIL
 // !sleepdry: the wake state the sleep set up, read back where it would have
 // powered off (the caller holds the IMU/I2C gate): PM1's wake enables (0x18,
 // GPIO4 = the IMU's interrupt), its hold (0x07, bit 5 holds the IMU supply)
 // and the IMU's power control (bit 2 accelerometer, bit 1 gyroscope).
 static void hilSleepDryReport(const SleepPlan &plan) {
-  uint8_t wake=0xff,hold=0xff,imu=0xff;
-  const bool ok=pm1Idle().read(0x18,&wake,1) && pm1Idle().read(0x07,&hold,1) && M5.In_I2C.readRegister(0x68,0x7D,&imu,1,400000);
-  Serial.printf("SLEEP_DRY_RUN ok=%d shake_wake=%d arm_imu=%d wake=%s mode=%s pm1_wake=0x%02x pm1_hold=0x%02x imu_power=0x%02x imu_wake_armed=%d\n",
-    ok,shakeToWake,plan.armImu,plan.wake,plan.mode,wake,hold,imu,ok && (wake&0x18)==0x10 && (hold&0x60)==0x20);
+  uint8_t wake=0xff,hold=0xff,imu=0xff,cfg=0xff;
+  const bool ok=pm1Idle().read(0x18,&wake,1) && pm1Idle().read(0x07,&hold,1) && M5.In_I2C.readRegister(0x68,0x7D,&imu,1,400000) &&
+    pm1Idle().read(0x06,&cfg,1);
+  // pm1_cfg bit 4 is LED_EN (the green LED, off for standby from 0.20.6).
+  Serial.printf("SLEEP_DRY_RUN ok=%d shake_wake=%d arm_imu=%d wake=%s mode=%s pm1_wake=0x%02x pm1_hold=0x%02x imu_power=0x%02x imu_wake_armed=%d pm1_cfg=0x%02x led=%d speaker_powered=%d\n",
+    ok,shakeToWake,plan.armImu,plan.wake,plan.mode,wake,hold,imu,ok && (wake&0x18)==0x10 && (hold&0x60)==0x20,cfg,ok?int(bool(cfg&0x10)):-1,soundPlayer.powered());
 }
 #endif
 LOOP_HELPER static void autoPowerOff(uint32_t now,const Snapshot &s) {
   if(wipeBlocked || controls.page==Controls::Page::Wipe)return;
+#if LAUNCHLAB_POWER_LAB
+  if(Lab::running)return;  // A lab run measures screen-on time: never sleep.
+#endif
 #if LAUNCHLAB_HIL
   if(!Hil::allowSleep.load())return;
   const bool dry=Hil::sleepDry.load();  // The rig's host is attached: never really sleep.
@@ -1619,35 +1708,56 @@ LOOP_HELPER static void autoPowerOff(uint32_t now,const Snapshot &s) {
   constexpr bool dry=false;
 #endif
   if(usbAwake.inhibited(now) && !dry)return;
-  if(motionPending || !inactivity.due(now,s.phase==AnalogTachometer::Phase::Launch) ||
-     (lastShutdownTry && now-lastShutdownTry<60000))return;
+  const bool measuring=opticalGuard.measuring(now,s.phase==AnalogTachometer::Phase::Launch);
+  if(!inactivity.due(now,measuring))opticalGuard.clear();
+  if(motionPending || !inactivity.due(now,measuring) || (lastShutdownTry && now-lastShutdownTry<60000))return;
   // Recheck immediately at the timer boundary; periodic polling alone could
   // leave a just-attached computer unnoticed for up to 250ms.
   pollUsbAwake(now,s,true);
-  if((usbAwake.inhibited(now) && !dry) || !inactivity.due(now,s.phase==AnalogTachometer::Phase::Launch))return;
+  if((usbAwake.inhibited(now) && !dry) || !inactivity.due(now,measuring))return;
   lastShutdownTry=now;
   // A failed save retries after 60 s; a new pull restarts the full timeout.
-  const auto flushed=flushForShutdown(now,s);
+  const bool force=opticalGuard.force();
+  const auto flushed=flushForShutdown(now,s,force);
   if(flushed==ShutdownFlush::NewPull)lastShutdownTry=0;
+  if(flushed==ShutdownFlush::Busy) {
+    opticalGuard.refused();
+    Serial.printf("POWER_OFF_DEFERRED optical_busy refusals=%u launch=%d force_next=%d retry_s=60\n",
+      unsigned(opticalGuard.refusals()),s.phase==AnalogTachometer::Phase::Launch,opticalGuard.force());
+  }
   if(flushed!=ShutdownFlush::Ready)return;
+  opticalGuard.clear();
   // A host may attach while the forced history flush is blocking.
   pollUsbAwake(millis(),acquisition.snapshot(),true);
   if(usbAwake.inhibited(millis()) && !dry) {
     if(!acquisition.request(Action::CheckpointEnd))acquisition.request(Action::Pin,s.pin);
     return;
   }
-  Serial.printf("POWER_OFF reason=inactivity idle_ms=%lu records=%u saved=1\n",
-    (unsigned long)inactivity.elapsed(now),practice.size());
+  Serial.printf("POWER_OFF reason=inactivity idle_ms=%lu since_use_ms=%lu records=%u saved=1 forced=%d\n",
+    (unsigned long)inactivity.elapsed(now),(unsigned long)inactivity.sinceUse(now),practice.size(),force);
   cancelSettingEdit(); // Wake into the settings list, never an unfinished edit.
   UsbTx::drain(200);
+  soundPlayer.shutdown();  // Neither the amplifier nor the codec stays on through standby.
   if(imuAcquisition.lock()) {
     bool usbCancelled=false;
     // Shake to wake Off sleeps as the side key's power-off does: no IMU arm.
-    const auto plan=sleepPlan(shakeToWake);
-    if(!plan.armImu || shakeWake.arm()) {
+    auto plan=sleepPlan(shakeToWake);
+    // An IMU that cannot be armed must not keep the unit awake (through 0.20.5
+    // it retried every minute, forever): sleep for the side key alone.
+    if(plan.armImu && !shakeWake.arm()) {
+      plan=sleepPlan(false);
+      const bool keyOnly=shakeWake.clear() && powerKey().configure();
+      Serial.printf("SHAKE_WAKE_NOTICE arm_failed fallback=side_key ok=%d\n",keyOnly);
+    }
+    {
       const WakeUi::State state{tournamentMode,historyPage && !demo && !diagnostics,
         uint8_t(tournamentView),uint8_t(historyView)};
-      if(prefs.putUInt("wake_ui",WakeUi::encode(state))==sizeof(uint32_t) && saveWakeNavigation()) {
+      // The wake markers only pick the page the unit wakes on. One NVS
+      // refuses (full) leaves the unit to wake on Main instead: through
+      // 0.20.5 it deferred every sleep, every minute.
+      const bool marked=prefs.putUInt("wake_ui",WakeUi::encode(state))==sizeof(uint32_t) && saveWakeNavigation();
+      if(!marked){prefs.remove("wake_ui");prefs.remove("wake_nav");Serial.println("POWER_OFF_NOTICE wake_mode_save_failed");}
+      {
         // Keep the overwritten ring entry so a USB-cancelled attempt is not
         // counted or exported as an actual standby.
         const uint32_t previousPowerNext=powerLog.next,previousPowerCount=powerLog.count;
@@ -1669,15 +1779,12 @@ LOOP_HELPER static void autoPowerOff(uint32_t now,const Snapshot &s) {
           if(dry)hilSleepDryReport(plan);
 #endif
           Serial.println(dry?"POWER_OFF_DEFERRED sleep_dry_run":"POWER_OFF_DEFERRED usb_host_attached_before_sleep");
-        } else shakeWake.sleep();
+        } else {usbStandby={UsbStandby::MAGIC,!plan.armImu};shakeWake.sleep(standbyRecheckUs());usbStandby.magic=0;}
         sleepReceipt.magic=0;powerLog.pendingSleep=0;
         savePowerLog();
-        M5.Display.wakeup();M5.Display.setBrightness(backlightValue());
-        if(!prefs.remove("wake_ui"))Serial.println("WAKE_UI_NOTICE failed_sleep_marker_clear");
+        M5.Display.wakeup();frameRows.invalidate();M5.Display.setBrightness(backlightValue());
+        if(marked && !prefs.remove("wake_ui"))Serial.println("WAKE_UI_NOTICE failed_sleep_marker_clear");
         prefs.remove("wake_nav");
-      } else {
-        prefs.remove("wake_ui");prefs.remove("wake_nav");
-        Serial.println("POWER_OFF_DEFERRED wake_mode_save_failed");
       }
     }
     const bool restored=shakeWake.restore();
@@ -1711,26 +1818,34 @@ LOOP_HELPER static void pollPowerKey(uint32_t now) {
 LOOP_HELPER static void powerKeyOff(uint32_t now,const Snapshot &s) {
   if(!powerKeyRequested)return;
   if(wipeBlocked){powerKeyRequested=false;Serial.println("POWER_KEY_IGNORED wipe_in_progress");return;}
-  if(now-powerKeyRequestedAt>=POWER_KEY_WAIT_MS) {
-    powerKeyRequested=false;Serial.println("POWER_KEY_OFF_DEFERRED acquisition_busy");return;
+  // The burst being measured finishes first. Marks still there after
+  // POWER_KEY_WAIT_MS are not a pull, so the off then stops sampling anyway
+  // (through 0.20.5 it gave up, and steady marks kept the unit on).
+  const bool late=now-powerKeyRequestedAt>=POWER_KEY_WAIT_MS;
+  if(motionPending) {
+    if(late){powerKeyRequested=false;Serial.println("POWER_KEY_OFF_DEFERRED motion_capture_busy");}
+    return;
   }
-  if(motionPending)return;
-  const auto flushed=flushForShutdown(now,s);
-  if(flushed==ShutdownFlush::Busy || flushed==ShutdownFlush::NewPull)return;
+  const auto flushed=flushForShutdown(now,s,late);
+  if(flushed==ShutdownFlush::Busy || flushed==ShutdownFlush::NewPull) {
+    if(late){powerKeyRequested=false;Serial.println("POWER_KEY_OFF_DEFERRED acquisition_busy");}
+    return;
+  }
   powerKeyRequested=false;
   if(flushed==ShutdownFlush::SaveFailed)return; // Stay on; the save error is shown.
   if(controls.page==Controls::Page::Wipe)cancelWipe();
   cancelSettingEdit();
-  Serial.printf("POWER_OFF reason=power_key records=%u saved=1\n",practice.size());
+  Serial.printf("POWER_OFF reason=power_key records=%u saved=1 forced=%d\n",practice.size(),late);
   ++powerLog.sleeps;powerLog.pendingSleep=1;powerRecord(PowerDiagnostics::Sleep);
   if(!savePowerLog())Serial.println("POWER_LOG_NOTICE sleep_checkpoint_failed");
   sleepReceipt={PowerDiagnostics::MAGIC,wallUs()};
   M5.Display.setBrightness(0);M5.Display.sleep();UsbTx::drain(200);
+  soundPlayer.shutdown();
   // PM1 removes battery power. USB can keep the ESP32 powered, so it deep
   // sleeps until the next click asserts the IRQ line; the IMU is not armed.
-  if(imuAcquisition.lock()){shakeWake.sleep();imuAcquisition.unlock();}
+  if(imuAcquisition.lock()){usbStandby={UsbStandby::MAGIC,true};shakeWake.sleep(standbyRecheckUs());usbStandby.magic=0;imuAcquisition.unlock();}
   sleepReceipt.magic=0;powerLog.pendingSleep=0;savePowerLog();
-  M5.Display.wakeup();M5.Display.setBrightness(backlightValue());dirty=true;
+  M5.Display.wakeup();frameRows.invalidate();M5.Display.setBrightness(backlightValue());dirty=true;
   Serial.println("POWER_KEY_OFF_FAILED pm1_power_off_refused");
   if(!acquisition.request(Action::CheckpointEnd))acquisition.request(Action::Pin,s.pin);
 }
@@ -2321,14 +2436,37 @@ LOOP_HELPER static void releaseOrphanCheckpoint(uint32_t now,const Snapshot &s) 
 #if LAUNCHLAB_HIL
 #include "hil.h"
 #endif
+#if LAUNCHLAB_POWER_LAB
+#include "power_lab_device.h"
+#endif
 // The longest request lines (a v3 milestone request, a theme request, a
 // restore line) fit the RX queue twice over.
 static_assert(USB_RX_BUFFER_BYTES>=2*((Milestones::Request::BYTES+2)/3*4+2) &&
               USB_RX_BUFFER_BYTES>=2*((Themes::Request::BYTES+2)/3*4+2) && USB_RX_BUFFER_BYTES>=2*(96+2),
               "a request line must fit the USB RX queue");
+// A timer wake from a USB-retained standby (shake_wake.h): while USB is still
+// there, sleep again before anything starts or lights; unplugged, or the PM1
+// unreadable, boot and finish the power-off on battery (finishStandby).
+static void recheckUsbStandby(esp_sleep_wakeup_cause_t cause) {
+  if(usbStandby.magic!=UsbStandby::MAGIC || cause!=ESP_SLEEP_WAKEUP_TIMER)return;
+  uint8_t source=0,mask=0xff;bool read=false;
+  M5.In_I2C.begin(I2C_NUM_1,GPIO_NUM_47,GPIO_NUM_48);
+  // An idle PM1 fails its first transaction by design (pm1_idle.h).
+  for(unsigned attempt=0;attempt<3 && !read;++attempt){read=M5.In_I2C.readRegister(0x6E,0x04,&source,1,100000);if(!read)delay(1);}
+  if(read)M5.In_I2C.readRegister(0x6E,StickS3ShakeWake::SYSTEM_IRQ_MASK,&mask,1,100000);
+  M5.In_I2C.release();
+  standbyRecheck={true,read,source,mask};
+#if LAUNCHLAB_HIL
+  if(hilStandbyRecheckS){hilStandbyRecheckS=0;return;}  // boot, still in standby: the rig checks the re-check
+#endif
+  if(read && (source&UsbHostAwake::VIN_MASK) && StickS3ShakeWake::deepSleepWakes(standbyRecheckUs()))esp_deep_sleep_start();
+  finishStandby=true;
+}
+
 void setup() {
   const auto wakeCause=esp_sleep_get_wakeup_cause();
   const int64_t sleepEnded=wallUs();
+  recheckUsbStandby(wakeCause);
   Serial.setRxBufferSize(USB_RX_BUFFER_BYTES); // Before begin.
   // The core's 256-byte USB TX ring cannot hold one status block, so with the
   // 10 ms timeout below whole lines were dropped while the host was reading
@@ -2359,9 +2497,33 @@ void setup() {
   // PM1's physical power-key/reset operation remains a hardware function.
   cfg.pmic_button=false;
   M5.begin(cfg);
+  // The changed-row hashes go in PSRAM: without them every frame is pushed whole.
+  frameRows.begin(static_cast<uint32_t *>(heap_caps_malloc(FrameRows::BYTES,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT)));
   soundPlayer.configure();
   M5.Ex_I2C.release();
   pm1WakeValid=pm1Idle().read(0x05,&pm1WakeFlags,1);
+  // USB removed during a USB-retained standby: finish its power-off below.
+  uint8_t systemIrq=0;
+  const bool systemIrqRead=pm1Idle().read(StickS3ShakeWake::SYSTEM_IRQ_STATUS,&systemIrq,1);
+  const bool inUsbStandby=usbStandby.magic==UsbStandby::MAGIC,standbyKeyOnly=inUsbStandby && usbStandby.keyOnly;
+  uint8_t powerSource=0;
+  const bool vinAbsent=pm1Idle().read(0x04,&powerSource,1) && !(powerSource&UsbHostAwake::VIN_MASK);
+  const auto standbyWake=usbStandbyWake(usbStandby,wakeCause==ESP_SLEEP_WAKEUP_EXT0,finishStandby,systemIrqRead,systemIrq,vinAbsent);
+  finishStandby=standbyWake.finish;
+  if(systemIrqRead && systemIrq)pm1Idle().write(StickS3ShakeWake::SYSTEM_IRQ_STATUS,0);
+  usbStandby.magic=0;
+  const bool keyWake=standbyWake.keyWake;
+#if LAUNCHLAB_HIL
+  char *const wakeText=standbyWakeText;
+#else
+  char wakeText[224];  // on setup's stack: the songs need every byte of the internal heap
+#endif
+  snprintf(wakeText,224,"esp_cause=%d in_standby=%d key_only=%d finish=%d key_wake=%d vin_absent=%d system_irq_valid=%d system_irq=0x%02x recheck=%d recheck_read=%d recheck_source=0x%02x recheck_irq_mask=0x%02x",
+    int(wakeCause),inUsbStandby,standbyKeyOnly,finishStandby,keyWake,vinAbsent,systemIrqRead,systemIrq,standbyRecheck.ran,standbyRecheck.read,standbyRecheck.source,standbyRecheck.mask);
+  Serial.printf("USB_STANDBY_WAKE %s\n",wakeText);
+  // PM1 keeps PWR_CFG through an ESP32 reset (a flash, a crash, a restart):
+  // charging stays on whatever ran before.
+  if(!pm1Idle().masked(0x06,0x01,0x01))Serial.println("PM1_NOTICE charge_enable_failed");
   if(!pm1Idle().run([](){return M5.Power.M5pm1.clearWakeSource();}))Serial.println("PM1_NOTICE wake_clear_failed");
   if(!shakeWake.clear())Serial.println("SHAKE_WAKE_NOTICE startup_disarm_failed");
   pinMode(POWER_KEY_IRQ_PIN,INPUT_PULLUP);
@@ -2389,7 +2551,9 @@ void setup() {
   ++powerLog.boots;
   const bool wakingFromStandby=powerLog.pendingSleep;
   uint8_t loggedWake=pm1WakeValid?pm1WakeFlags:0;
-  if(wakingFromStandby && ((pm1WakeValid && (pm1WakeFlags&0x20)) || wakeCause==ESP_SLEEP_WAKEUP_EXT0))++powerLog.shakeWakes;
+  if(finishStandby)++powerLog.otherWakes;
+  else if(keyWake)++powerLog.powerButtonWakes;
+  else if(wakingFromStandby && ((pm1WakeValid && (pm1WakeFlags&0x20)) || wakeCause==ESP_SLEEP_WAKEUP_EXT0))++powerLog.shakeWakes;
   else if(pm1WakeValid && (pm1WakeFlags&0x0c))++powerLog.powerButtonWakes;
   else ++powerLog.otherWakes;
   if(wakingFromStandby) {
@@ -2507,7 +2671,15 @@ void setup() {
   Serial.printf("POWER_WAKE esp_cause=%d pm1_flags_valid=%d pm1_flags=0x%02x pending_standby=%d\n",int(wakeCause),pm1WakeValid,pm1WakeFlags,wakingFromStandby);
   // Use hardware wake evidence; the optional diagnostic log can fail to save
   // and must not determine the battery policy.
-  inactivity.begin(millis(),(pm1WakeValid && (pm1WakeFlags&0x20)) || wakeCause==ESP_SLEEP_WAKEUP_EXT0);
+  inactivity.begin(millis(),!keyWake && ((pm1WakeValid && (pm1WakeFlags&0x20)) || wakeCause==ESP_SLEEP_WAKEUP_EXT0));
+  if(finishStandby) {
+    // Unplugged during a USB-retained standby: the same power-off, on battery now.
+    Serial.printf("USB_STANDBY_FINISH key_only=%d\n",standbyKeyOnly);
+    if(standbyKeyOnly){powerKeyRequested=true;powerKeyRequestedAt=millis();}
+    // Due at once, and like an unused shake wake past its limit, so handling
+    // the unit as it is unplugged cannot keep it awake; a button still can.
+    else inactivity.begin(millis()-InactivityTimer::UNUSED_SHAKE_LIMIT_MS,true);
+  }
   Serial.printf("HEAP_BOOT before_adc_dma_free=%u before_adc_dma_largest=%u dma_free=%u dma_largest=%u internal_free=%u usb_rx_bytes=%u\n",
     dmaFreeBeforeAdc,dmaLargestBeforeAdc,unsigned(heap_caps_get_free_size(DMA_HEAP)),unsigned(heap_caps_get_largest_free_block(DMA_HEAP)),
     unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)),unsigned(USB_RX_BUFFER_BYTES));
@@ -2518,6 +2690,9 @@ void setup() {
   Serial.println("READY commands: p status, P power log, C CPU power profiling, a/c tap A, h tap B, o hold A, b hold B, d diagnostics, n new session, u history export, K backup export, R backup restore, L custom themes, T theme request, M milestones, U milestone request, F loaded effects, X loaded-effect request, e motion export, q synthetic recap, E<0-4,7> best effect preview, t synthetic history, y/z storage check, v screen, w recorder export, x ext5V, g<N> GPIO, s stress, j UI stall");
 #if LAUNCHLAB_HIL
   hilBoot();
+#endif
+#if LAUNCHLAB_POWER_LAB
+  labBoot();
 #endif
 }
 
@@ -2732,6 +2907,9 @@ LOOP_HELPER static void pollCommands(const Snapshot &s) {
 #if LAUNCHLAB_HIL
     if(hilFeed(c)){guard.consumed(c,now);continue;}
 #endif
+#if LAUNCHLAB_POWER_LAB
+    if(labFeed(c)){guard.consumed(c,now);continue;}
+#endif
     // Status polling is observational; other explicit USB actions count as use.
     if(c!='p' && c!='P' && c!='C' && c!='\n' && c!='\r')inactivity.touch(now);
     if(guard.due(now,command))runUsbCommand(command,s);
@@ -2742,6 +2920,9 @@ LOOP_HELPER static void pollCommands(const Snapshot &s) {
 }
 
 #if LAUNCHLAB_MOTION_ADC_GATE
+#if LAUNCHLAB_POWER_LAB
+static uint32_t labPauseTryMs=0;
+#endif
 LOOP_HELPER static void tickSensorIdle(uint32_t now,Snapshot &s) {
   const auto imu=imuAcquisition.snapshot();
 #if LAUNCHLAB_HIL
@@ -2749,14 +2930,28 @@ LOOP_HELPER static void tickSensorIdle(uint32_t now,Snapshot &s) {
 #else
   const bool usbBlocks=usbAwake.inhibited(now);
 #endif
-  const bool blocked=usbBlocks || inactivity.unusedShake() || wipeBlocked ||
+#if LAUNCHLAB_POWER_LAB
+  // a1 keeps sampling, as a unit in a moving hand does; a2 pauses whenever the detector allows.
+  const bool labBlocks=Lab::running && Lab::knobs.adc==1;
+  if(Lab::running && Lab::knobs.adc==2) {
+    const bool idle=s.ready && !s.suspended && !s.signalFault && s.opticalIdle && s.phase==AnalogTachometer::Phase::Ready;
+    if(s.resting || !idle || now-labPauseTryMs<1000)return;
+    labPauseTryMs=now;
+    const bool ok=acquisition.request(Action::IdlePause,s.launches);s=acquisition.snapshot();dirty=true;
+    Serial.printf("SENSOR_IDLE_CHANGE pause=1 ok=%d resting=%d state=%s lab=1\n",ok,s.resting,s.stateName());
+    return;
+  }
+#else
+  constexpr bool labBlocks=false;
+#endif
+  const bool blocked=usbBlocks || labBlocks || inactivity.unusedShake() || wipeBlocked ||
     controls.page!=Controls::Page::Main || historyPage || diagnostics || tournamentMode ||
     motionPending || launchFeedback.shown() || historyUnsaved() ||
     bestsUnsaved() || settingsSave.pending() || !imuAcquisition.running() || Serial.available();
   const bool opticalIdle=s.ready && !s.suspended && !s.signalFault && s.opticalIdle &&
     s.phase==AnalogTachometer::Phase::Ready;
   const auto action=sensorIdle.decide(now,esp_timer_get_time(),imu.activity,inactivity.elapsed(now),
-    s.resting,opticalIdle,blocked);
+    s.resting,opticalIdle,blocked,PowerSavers::settings.restMs);
   if(action==SensorIdle::Action::None)return;
   const bool pause=action==SensorIdle::Action::Pause;
   const bool ok=acquisition.request(pause?Action::IdlePause:Action::IdleResume,s.launches);
@@ -2771,7 +2966,7 @@ void loop() {
   bool buttonsFresh=false;
   if(imuAcquisition.lock()){M5.update();imuAcquisition.unlock();buttonsFresh=true;}
   Snapshot s=acquisition.snapshot();
-  if(buttonsFresh && (M5.BtnA.isPressed() || M5.BtnB.isPressed() || M5.BtnA.wasReleased() || M5.BtnB.wasReleased()))
+  if(buttonsFresh && heldButtons.use(millis(),M5.BtnA.isPressed() || M5.BtnB.isPressed(),M5.BtnA.wasReleased() || M5.BtnB.wasReleased()))
     inactivity.touch(millis());
 #if LAUNCHLAB_HIL
   // Nothing presses the rig's buttons: every physical edge is worth a line
@@ -2870,7 +3065,8 @@ void loop() {
     bestEffect.elapsed(now)<Appearance::duration(bestEffect.effect())+CELEBRATION_HOLD_MS;
   if(!celebrationHolds && launchFeedback.tick(now)){dirty=true;motionDemo=false;Serial.printf("MAIN_FEEDBACK shown=0 reason=timeout t_ms=%lu\n",(unsigned long)now);}
   if(!launchFeedback.shown())bestEffect.clear();
-  if(s.phase==AnalogTachometer::Phase::Launch)inactivity.touch(now);
+  // A pull being measured is use; marks that go on far longer are not.
+  if(opticalGuard.measuring(now,s.phase==AnalogTachometer::Phase::Launch))inactivity.touch(now);
   finishMotion();
   retryMotion(now,s);
   saveHistory(now,s);s=acquisition.snapshot();
@@ -2907,9 +3103,16 @@ void loop() {
       (std::fabs(tilt.degrees-drawnLevel.degrees)>=0.15f ||
        std::fabs(tilt.right-drawnLevel.right)>=0.02f || std::fabs(tilt.down-drawnLevel.down)>=0.02f)))dirty=true;
   }
+#if LAUNCHLAB_POWER_LAB
+  labTick(now);
+  // A sleeping panel draws nothing; a frame cap holds ordinary redraws back.
+  const bool labDraw=!Lab::displayAsleep && (!Lab::running || !Lab::knobs.frameMs || now-lastDraw>=Lab::knobs.frameMs*10u);
+#else
+  constexpr bool labDraw=true;
+#endif
   // Avoid electrical display changes through an ordinary measured burst.
   // Stress mode intentionally exercises the screen even during a burst.
-  if(dirty && (stress || s.phase!=AnalogTachometer::Phase::Launch)) {
+  if(dirty && labDraw && (stress || s.phase!=AnalogTachometer::Phase::Launch)) {
     draw(s);lastDraw=millis();dirty=false;
   }
   if(Serial && now-lastStatus>=2000){lastStatus=now;status();}

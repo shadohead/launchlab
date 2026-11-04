@@ -993,5 +993,20 @@
     ],
     "published_channel": "beta",
     "channel_note": "published as beta, promoted to stable 2026-10-28"
+  },
+  {
+    "release": "0.20.6-sticks3-songs-pm",
+    "runtime_version": "0.20.6-sticks3-songs-pm",
+    "board": "M5StickS3 K150",
+    "date": "2026-11-04",
+    "binary": "LaunchLabMini.ino.bin",
+    "binary_bytes": 1863936,
+    "sha256": "2a26b884909a36aac44b8985b425189f1ed44fbf296b3d4c75f3188e725bbc60",
+    "application_offset": "0x10000",
+    "profiles": [
+      "qre1113",
+      "tcrt5000"
+    ],
+    "published_channel": "beta"
   }
 ]

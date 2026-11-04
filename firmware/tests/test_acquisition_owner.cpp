@@ -117,5 +117,63 @@ int main() {
     assert(results==7);
   }
   std::puts("PASS: a completed result is kept until the queue takes it, in order");
+  {
+    // ---- ADC timing (adc_clock.h). IDF times the ADC from the APB read at
+    // configure, but it samples at the APB its power lock holds once started.
+    // A recovery configured while DFS had the CPU at 40 MHz and started at 80
+    // got interval 25 at a 5 MHz controller: 100 kS/s, read as 50. Every
+    // start re-times it to the clock it runs at.
+    auto timed=[](uint32_t divider){return APB_SARADC.apb_adc_clkm_conf.clkm_div_num==divider &&
+      APB_SARADC.ctrl2.timer_target==50 && APB_SARADC.ctrl2.timer_en;};
+    owner.closeAdc();fakeApbHz=40000000;lockedApbHz=80000000;
+    assert(owner.initAdc() && fakeApbHz==80000000 && timed(15));
+    owner.publish(true);assert(owner.snapshot().retimes==1);
+    // The battery lab's 40 MHz CPU: the 5 MHz controller kept (IDF alone
+    // would give 2.5 MHz and interval 25).
+    owner.closeAdc();lockedApbHz=40000000;
+    assert(owner.initAdc() && timed(7));
+    // The CPU's top frequency changed under a running ADC: Retime re-times it
+    // as a sample gap, once, and the detector stays Ready.
+    optical(1200000);drain();
+    const unsigned disables=timerDisables;fakeApbHz=80000000;
+    command(Action::Retime);assert(timed(15) && timerDisables==disables+1);
+    command(Action::Retime);assert(timed(15) && timerDisables==disables+1);
+    fakeApbHz=40000000;command(Action::Retime);assert(timed(7) && timerDisables==disables+2);
+    optical(1200000);assert(owner.snapshot().phase==D::Phase::Ready);
+    // A resume after an idle pause re-times too.
+    lockedApbHz=80000000;command(Action::IdlePause,owner.snapshot().launches);assert(!owner.ready_);
+    command(Action::IdleResume);assert(owner.ready_ && timed(15));
+    lockedApbHz=0;
+  }
+  std::puts("PASS: the ADC is re-timed to the APB it runs at after every start and on Retime");
+  {
+    // ---- Optical marks that never become a pull (OpticalSleepGuard). Strong
+    // marks in Ready, or a Launch that never ends, refuse ShutdownBegin for as
+    // long as they last: through 0.20.5 a steady signal kept the unit awake
+    // until flat. ShutdownForce drops them as a sample gap and stops sampling.
+    optical(1200000);drain();
+    const uint32_t launches=owner.snapshot().launches;
+    const float kept=owner.snapshot().resultRpm;assert(owner.snapshot().valid);
+    turns(8000,2);assert(owner.detector_.phase==D::Phase::Ready && !owner.detector_.historyCheckpointIdle());
+    command(Action::ShutdownBegin,launches);assert(owner.ready_ && !owner.suspended_);
+    command(Action::ShutdownForce,launches+1);assert(owner.ready_ && !owner.suspended_);  // a pull it has not seen
+    command(Action::ShutdownForce,launches);assert(!owner.ready_ && owner.suspended_ && owner.checkpoint_);
+    Snapshot s=owner.snapshot();
+    if(!s.valid)std::puts("a forced shutdown in Ready erased the completed result");
+    assert(s.valid && s.resultRpm==kept && s.launches==launches);
+    command(Action::CheckpointEnd);assert(owner.ready_);
+    optical(1200000);assert(owner.snapshot().phase==D::Phase::Ready);
+    // A Launch held by steady marks: refused, then forced; no pull is counted.
+    turns(8000,40);assert(owner.detector_.phase==D::Phase::Launch);
+    command(Action::ShutdownBegin,launches);assert(owner.ready_);
+    command(Action::ShutdownForce,launches);assert(!owner.ready_ && owner.suspended_);
+    assert(owner.detector_.phase!=D::Phase::Launch && owner.snapshot().launches==launches);
+    command(Action::CheckpointEnd);assert(owner.ready_);
+    optical(1200000);assert(owner.snapshot().phase==D::Phase::Ready);
+    turns(6000,12);optical(1200000);s=owner.snapshot();
+    assert(s.launches==launches+1 && std::fabs(s.resultRpm-10000)<3);
+    drain();
+  }
+  std::puts("PASS: a forced shutdown stops through marks that never become a pull, and a pull after it is measured");
   return 0;
 }
