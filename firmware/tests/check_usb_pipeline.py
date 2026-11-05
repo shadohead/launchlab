@@ -53,6 +53,13 @@ static FrameRows frameRows;
 static Appearance::Config appearance;static Appearance::Bests personalBests;
 static AppearanceStore<Appearance::Bests> bestStore;static AppearanceStore<Appearance::Config> appearanceStore;static Appearance::Celebration bestEffect;
 static Controls::State controls;static bool wipeBlocked=false;
+// The mic is off unless a test says otherwise: leaving its page stops it.
+#include "mic_session.h"
+static struct {bool running=false,stuck=false;uint32_t stopAt=0;bool off()const{return !running;}
+  bool holdsSleep(uint32_t now)const{return MicSession::holdsSleep(!running?MicSession::State::Off:stopAt?MicSession::State::Stopping:MicSession::State::On,now-stopAt);}
+  void dump(){}void askBench(){}void armTape(){}void sendTape(){}void launch(uint32_t,bool,float,uint64_t,uint64_t){}}micListener;
+static uint32_t millis();
+static unsigned micPageLeaves=0;static void leaveMicPage(){++micPageLeaves;if(!micListener.stuck)micListener.running=false;else if(!micListener.stopAt)micListener.stopAt=millis();}
 static uint64_t clockUs=1000000;
 static uint32_t millis(){return uint32_t(clockUs/1000);}
 static int64_t wallUs(){return clockUs;}
@@ -60,7 +67,7 @@ static bool hardwareSof=false,powerReadOk=true,mutexAvailable=true,attachOnPower
 static uint8_t powerSource=4;
 static unsigned hostReads=0,powerReads=0,locks=0,unlocks=0,flashWrites=0,powerSaves=0;
 struct HWCDC {static bool isPlugged(){++hostReads;return hardwareSof;}};
-struct SerialFake {void println(const char*){}void flush(){}template<class... A>void printf(const char*,A...){}} Serial;
+struct SerialFake {std::string lines;void println(const char *s){lines+=s;lines+='\n';}void flush(){}template<class... A>void printf(const char*,A...){}} Serial;
 // USB output is drained (never Serial.flush(), which discards it): usb_tx.h.
 namespace UsbTx {inline unsigned drains=0;inline bool drain(uint32_t){++drains;return true;}}
 
@@ -151,6 +158,18 @@ int main(){
   hardwareSof=false;poll(1500);
   assert(inactivity.unusedShake() && inactivity.remaining(1500)==29500);
   at(31000);off();assert(shakeWake.sleeps==1 && !shakeWake.keyOnly && !usbStandby.magic);
+  // A timeout on the Mic RPM page leaves it and sleeps once the mic has stopped.
+  reset();inactivity.begin(1000,true);micListener.running=true;
+  at(31000);off();assert(micPageLeaves==1 && !shakeWake.sleeps && !acquisition.begins);
+  off();assert(shakeWake.sleeps==1);
+  // A mic whose stop never ends holds the sleep MicSession::STOP_LIMIT_MS at
+  // most after the page closed, then the unit sleeps without it.
+  reset();inactivity.begin(1000,true);micListener=decltype(micListener){};micListener.running=micListener.stuck=true;micPageLeaves=0;Serial.lines.clear();
+  at(31000);off();assert(micPageLeaves==1 && micListener.stopAt==31000 && !acquisition.begins);
+  at(31000+MicSession::STOP_LIMIT_MS-1);off();assert(!shakeWake.sleeps && !acquisition.begins && Serial.lines.empty());
+  at(31000+MicSession::STOP_LIMIT_MS);off();
+  assert(shakeWake.sleeps==1 && Serial.lines.find("POWER_OFF_NOTICE mic_stop_timeout\n")!=std::string::npos);
+  micListener=decltype(micListener){};
   // A real host remains inhibited while a failed VIN read is uncertain, but
   // promotion waits for verified input power and then restores normal timeout.
   reset();inactivity.begin(1000,true);hardwareSof=true;powerReadOk=false;

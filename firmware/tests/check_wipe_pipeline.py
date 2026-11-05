@@ -100,6 +100,10 @@ struct IdleFake {template<class F>bool run(F fn){return fn();}};
 static IdleFake &pm1Idle(){static IdleFake idle;return idle;}
 struct {bool available=true;bool lock(){return available;}void unlock(){}bool quiet(uint32_t){return true;}}imuAcquisition;
 static Controls::State controls;static Controls::Gesture gestureA,gestureB;
+// The mic is off unless a test says otherwise: leaving its page stops it.
+static struct {bool running=false;bool off()const{return !running;}bool holdsSleep(uint32_t)const{return running;}void dump(){}void askBench(){}void armTape(){}void sendTape(){}void launch(uint32_t,bool,float,uint64_t,uint64_t){}}micListener;
+static unsigned micPageLeaves=0;static void leaveMicPage(){++micPageLeaves;micListener.running=false;}
+static void tickMicPage(){}
 static WipeConfirmation wipeConfirmation;
 static bool wipeFailed=false,wipeBlocked=false,wipeComplete=false;
 static bool wipeCheckpointHeld=false,wipeBootRecovery=false,wipeRestartRequested=false;
@@ -138,6 +142,7 @@ struct Receiver {
 }restoreRx,themeRx,milestoneRx,effectRx;
 enum class Action{IdleCheckpointBegin,CheckpointEnd,Pin,Reset};
 struct Snapshot {
+  uint64_t burstStartHostUs=0,burstEndHostUs=0;
   AnalogTachometer::Phase phase=AnalogTachometer::Phase::Ready;
   bool opticalIdle=true;
   uint32_t launches=7,revision=1,revolutions=3;bool valid=true,signalFault=false;

@@ -196,6 +196,51 @@ esp_err_t __wrap_nvs_set_u32(nvs_handle_t handle,const char *key,uint32_t value)
 
 // Holds the shared IMU/I2C gate from another task, as a long FIFO catch-up
 // read or PM1 transfer would. Exercises the checkpoint veto and FIFO overflow.
+struct HilHeapBlock {uintptr_t ptr;uint32_t size;bool used;uint32_t words[8];};
+struct HilHeapWalk {HilHeapBlock *blocks;unsigned count,capacity;};
+static bool hilHeapBlock(walker_heap_into_t,walker_block_info_t block,void *user) {
+  auto &w=*static_cast<HilHeapWalk *>(user);
+  if(w.count>=w.capacity)return false;
+  HilHeapBlock &b=w.blocks[w.count++];
+  b.ptr=uintptr_t(block.ptr);b.size=uint32_t(block.size);b.used=block.used;
+  for(unsigned i=0;i<8;++i)b.words[i]=block.used && block.size>=4*(i+1)?static_cast<const uint32_t *>(block.ptr)[i]:0;
+  return true;
+}
+static void hilHeapWalk() {
+  static constexpr unsigned CAPACITY=1024,TASKS=24;
+  HilHeapWalk w{static_cast<HilHeapBlock *>(heap_caps_malloc(CAPACITY*sizeof(HilHeapBlock),MALLOC_CAP_SPIRAM)),0,CAPACITY};
+  auto *tasks=static_cast<TaskStatus_t *>(heap_caps_malloc(TASKS*sizeof(TaskStatus_t),MALLOC_CAP_SPIRAM));
+  if(!w.blocks || !tasks){heap_caps_free(w.blocks);heap_caps_free(tasks);Serial.println("HEAP_WALK error=memory");return;}
+  const unsigned taskCount=unsigned(uxTaskGetSystemState(tasks,TASKS,nullptr));
+  heap_caps_walk(MALLOC_CAP_INTERNAL|MALLOC_CAP_DMA,hilHeapBlock,&w);
+  Serial.printf("HEAP_WALK blocks=%u dma_free=%u dma_largest=%u tasks=%u\n",w.count,unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_DMA)),
+    unsigned(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_DMA)),taskCount);
+  for(unsigned i=0;i<taskCount;++i)
+    Serial.printf("HEAP_TASK name=%s tcb=%08x stack=%08x\n",tasks[i].pcTaskName,unsigned(uintptr_t(tasks[i].xHandle)),unsigned(uintptr_t(tasks[i].pxStackBase)));
+  for(unsigned i=0;i<w.count;++i) {
+    const auto &b=w.blocks[i];
+    Serial.printf("HEAP_BLOCK p=%08x s=%u u=%d w=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",unsigned(b.ptr),unsigned(b.size),int(b.used),
+      unsigned(b.words[0]),unsigned(b.words[1]),unsigned(b.words[2]),unsigned(b.words[3]),unsigned(b.words[4]),unsigned(b.words[5]),unsigned(b.words[6]),unsigned(b.words[7]));
+  }
+  Serial.println("HEAP_WALK end");
+  heap_caps_free(w.blocks);heap_caps_free(tasks);
+}
+// !feedgaps: a song's blocks reach the speaker once a loop pass, with 64 ms
+// queued (music_stream.h), so a longer pass runs it dry. Each pass of 48 ms or
+// more while a song streams, with what ran in it: a status print, a history
+// save, a frame.
+struct HilFeedGap {uint32_t atMs,gapUs;uint8_t status,save,draw;};
+static HilFeedGap hilFeedGaps[32];static unsigned hilFeedGapCount=0;static uint32_t hilFeedMaxUs=0;
+static void hilFeedProbe(bool streaming,uint32_t statusRuns,uint32_t saves,uint32_t drawn) {
+  static int64_t last=0;static uint32_t lastStatus=0,lastSaves=0,lastDrawn=0;
+  const int64_t now=esp_timer_get_time();
+  if(streaming && last) {
+    const uint32_t gap=uint32_t(now-last);hilFeedMaxUs=std::max(hilFeedMaxUs,gap);
+    if(gap>=48000 && hilFeedGapCount<32)
+      hilFeedGaps[hilFeedGapCount++]={uint32_t(now/1000),gap,uint8_t(statusRuns-lastStatus),uint8_t(saves-lastSaves),uint8_t(drawn!=lastDrawn)};
+  }
+  last=streaming?now:0;lastStatus=statusRuns;lastSaves=saves;lastDrawn=drawn;
+}
 static void hilGateTask(void *arg) {
   const uint32_t ms=uint32_t(uintptr_t(arg));
   while(!imuAcquisition.lock()){}
@@ -228,7 +273,7 @@ LOOP_HELPER static void hilCommand(char *line) {
   if(!strcmp(cmd,"sync")){Hil::reply("HIL_SYNC reason=idle discarded=0\n");return;}
   if(!strcmp(cmd,"reset")) {
     Hil::pullStartUs=0;optical().setMode(Hil::Optical::Mode::Pass);imu().setMode(Hil::Imu::Mode::Pass);
-    imu().faults.clear();Hil::nvs.fail=Hil::nvs.slow=0;Hil::nvs.armed=false;Hil::usbIdle=false;Hil::allowSleep=false;Hil::sleepDry=false;
+    imu().faults.clear();Hil::nvs.fail=Hil::nvs.slow=0;Hil::nvs.armed=false;Hil::usbIdle=false;Hil::allowSleep=false;Hil::sleepDry=false;Hil::micStall=false;
     Hil::replyLine("HIL_OK reset");return;
   }
   if(!strcmp(cmd,"opt")) {
@@ -357,10 +402,32 @@ LOOP_HELPER static void hilCommand(char *line) {
     return;
   }
   if(!strcmp(cmd,"tasks")){Hil::tasks();return;}
+  // !mictone <hz> <fall_hz_per_s> <seconds> [noise_s]: the next pull's sound (hil_mic.h); !mictone off.
+  if(!strcmp(cmd,"mictone")) {
+    const char *first=arg();
+    if(!first || !strcmp(first,"off")){Hil::micTone.off();Hil::replyLine("HIL_OK mictone off");return;}
+    const float hz=strtof(first,nullptr),fall=num(0),seconds=num(10),noise=num(0.5);
+    Hil::micTone.set(hz,fall,seconds,noise);Hil::reply("HIL_OK mictone hz=%.1f fall=%.2f seconds=%.1f noise_s=%.2f\n",hz,fall,seconds,noise);return;
+  }
+  if(!strcmp(cmd,"micfloor")){const int32_t bytes=int32_t(num(MicSession::FLOOR_BYTES));micListener.setFloor(bytes);Hil::reply("HIL_OK micfloor %ld\n",(long)bytes);return;}
+  if(!strcmp(cmd,"miclag")){const uint32_t ms=uint32_t(num(0));micListener.setLag(ms);Hil::reply("HIL_OK miclag %lu\n",(unsigned long)ms);return;}
+  if(!strcmp(cmd,"micstall")){Hil::micStall=num(1)!=0;Hil::reply("HIL_OK micstall %d\n",Hil::micStall.load());return;}
+  if(!strcmp(cmd,"micframe")){micListener.worstFrame();Hil::reply("HIL_OK micframe trace=%d\n",micListener.hasTrace());return;}
   // The heap and the speaker's state alone: a full `p` status prints about
   // forty lines from the UI loop, which also feeds songs, and once a second
   // it could starve the speaker under the worst case (0.20.1 songs scenario).
   if(!strcmp(cmd,"heap")){heapStatus();soundPlayer.status(appearance.sound);Hil::replyLine("HIL_OK heap");return;}
+  // Every block of the internal DMA-capable heap (address, size, used, its
+  // first words) and each task's TCB and stack, to name what a change leaves
+  // behind: the 0.20.7 mic's first session kept 136 bytes. Collected into PSRAM
+  // under the heap lock, printed after it.
+  if(!strcmp(cmd,"heapwalk")){hilHeapWalk();Hil::replyLine("HIL_OK heapwalk");return;}
+  if(!strcmp(cmd,"feedgaps")) {
+    for(unsigned i=0;i<hilFeedGapCount;++i)
+      Serial.printf("FEED_GAP at_ms=%lu gap_us=%lu status=%u save=%u draw=%u\n",(unsigned long)hilFeedGaps[i].atMs,(unsigned long)hilFeedGaps[i].gapUs,
+        unsigned(hilFeedGaps[i].status),unsigned(hilFeedGaps[i].save),unsigned(hilFeedGaps[i].draw));
+    Hil::reply("HIL_OK feedgaps n=%u max_us=%lu\n",hilFeedGapCount,(unsigned long)hilFeedMaxUs);hilFeedGapCount=0;hilFeedMaxUs=0;return;
+  }
   if(!strncmp(cmd,"snd",3)){const char *a1=arg();hilSoundCommand(cmd,a1,a1?arg():nullptr);return;}
   if(!strcmp(cmd,"gate")) {
     const uint32_t ms=uint32_t(num(300));

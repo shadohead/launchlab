@@ -115,10 +115,11 @@ public:
     return ready(s);
   }
   bool prepared(Appearance::Effect e)const{return ready(source(e));}
+  bool muted=false;  // the mic holds the codec and its clock pins (mic_listener.h)
   // Powers the codec if it is off (under the IMU owner's gate).
   bool power() {
     if(begun_)return true;
-    if(blocked)return false;
+    if(blocked || muted)return false;
     if(!imu_.lock()){++lockMisses_;return false;}
     const int64_t started=esp_timer_get_time();
     if(!pm1Idle().ensureAwake()){imu_.unlock();return false;}
@@ -162,8 +163,12 @@ public:
   bool streaming()const{return music_ && music_->active();}
   // Each loop pass: the song's next blocks to the speaker; the codec powers
   // down once silent, but never while a pull is measured.
+  // The song's next blocks to the speaker: every loop pass, and between the
+  // lines of a long print in the same pass (status()), as a song has only
+  // two 32 ms blocks queued.
+  void feedSong(){if(music_)music_->feed(uint32_t(esp_timer_get_time()/1000),channel_);}
   void tick(bool measuring) {
-    if(music_)music_->feed(uint32_t(esp_timer_get_time()/1000),channel_);
+    feedSong();
     if(!begun_ || measuring || M5.Speaker.isPlaying() || streaming() || !imu_.lock())return;
     powerDownLocked();imu_.unlock();
   }
