@@ -10,7 +10,7 @@
 #include "wipe_confirmation.h"
 
 namespace ControlsUI {
-static constexpr const char *MENU[]={"History","New session","Battery","Settings","Tournament","String wear check","Back"};
+static constexpr const char *MENU[]={"History","New session","Battery","Settings","Tournament","String wear check","Mic RPM","Back"};
 static constexpr const char *HISTORY[]={"Launches","Pull trend","Session trend","Back"};
 // By Controls::Setting value; the list shows them in Controls::ORDER.
 static constexpr const char *SETTINGS[]={"Sleep after","RPM method","Brightness","Flip display","Sensor profile","Theme","Best effect","Celebrate","Sound","Mounting","Shake to wake","Wipe all","Back"};
@@ -32,7 +32,7 @@ inline void heading(lgfx::LGFXBase &g,const char *label) {
 inline void list(lgfx::LGFXBase &g,const char *title,const char *const *labels,unsigned count,unsigned selected) {
   heading(g,title);
   for(unsigned i=0;i<count;++i) {
-    const int y=42+int(i)*27;
+    const int y=42+int(i)*(count>7?23:27);  // eight rows clear the footer
     if(i==selected)g.drawRoundRect(4,y-4,g.width()-8,25,4,colors.accent);
     g.setTextColor(i==selected?colors.accent:colors.text,colors.background);
     g.drawString(labels[i],g.width()/2,y,2);

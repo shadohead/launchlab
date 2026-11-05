@@ -38,10 +38,17 @@ static FrameRows frameRows;
 #include <string>
 static Appearance::Bests personalBests;static AppearanceStore<Appearance::Bests> bestStore;
 static Controls::State controls;static bool wipeBlocked=false;
+// The mic is off unless a test says otherwise: leaving its page stops it.
+#include "mic_session.h"
+static struct {bool running=false,stuck=false;uint32_t stopAt=0;bool off()const{return !running;}
+  bool holdsSleep(uint32_t now)const{return MicSession::holdsSleep(!running?MicSession::State::Off:stopAt?MicSession::State::Stopping:MicSession::State::On,now-stopAt);}
+  void dump(){}void askBench(){}void armTape(){}void sendTape(){}void launch(uint32_t,bool,float,uint64_t,uint64_t){}}micListener;
+static uint32_t millis();
+static unsigned micPageLeaves=0;static void leaveMicPage(){++micPageLeaves;if(!micListener.stuck)micListener.running=false;else if(!micListener.stopAt)micListener.stopAt=millis();}
 static uint64_t clockUs=1000000;
 static uint32_t millis(){return uint32_t(clockUs/1000);}
 static int64_t wallUs(){return clockUs;}
-struct SerialFake {std::string last;void println(const char *s){last=s;}void flush(){}
+struct SerialFake {std::string last,lines;void println(const char *s){last=s;lines+=s;lines+='\n';}void flush(){}
   template<class... A>void printf(const char *f,A...){last=f;}} Serial;
 // USB output is drained (never Serial.flush(), which discards it): usb_tx.h.
 namespace UsbTx {inline unsigned drains=0;inline bool drain(uint32_t){++drains;return true;}}
@@ -113,7 +120,7 @@ static void reset(){
   locks=unlocks=keyReads=wipeCancels=editCancels=powerSaves=0;
   PowerDiagnostics::fresh(powerLog);powerLogDirty=false;sleepReceipt={};
   powerKeyIrq=powerKeyRequested=false;powerKeyRequestedAt=lastPowerKeyRead=0;key=Key{};
-  acquisition=Acquisition{};M5=M5Fake{};shakeWake=ShakeWake{};Serial.last.clear();
+  acquisition=Acquisition{};M5=M5Fake{};shakeWake=ShakeWake{};Serial.last.clear();Serial.lines.clear();
   Preferences::data.clear();Preferences::zeroLengthKeys.clear();Preferences::failWrite=Preferences::shortRead=false;Preferences::beforeWrite=nullptr;
   assert(practiceStore.begin(practice) && bestStore.begin(personalBests,"ll-bests","best0","best1"));
 }
@@ -180,6 +187,17 @@ int main(){
   reset();wipeBlocked=true;click();assert(!step() && !powerKeyRequested && !acquisition.begins);
   reset();controls.page=Controls::Page::Wipe;click();assert(step() && wipeCancels==1);
   std::cout<<"PASS: clicks are ignored during an erase; an unconfirmed wipe prompt is cancelled before power-off\n";
+
+  reset();micListener.running=true;click();assert(!step() && micPageLeaves==1 && powerKeyRequested && !acquisition.begins && !shakeWake.sleeps);
+  assert(step() && !micListener.running);
+  std::cout<<"PASS: a click on the Mic RPM page leaves it and powers off only once the mic has stopped\n";
+
+  reset();micListener=decltype(micListener){};micListener.running=micListener.stuck=true;micPageLeaves=0;click();
+  assert(!step() && micPageLeaves==1 && micListener.stopAt==1000 && powerKeyRequested && !acquisition.begins);
+  at(1000+MicSession::STOP_LIMIT_MS-1);assert(!step() && powerKeyRequested && !acquisition.begins && !shakeWake.sleeps);
+  at(1000+MicSession::STOP_LIMIT_MS);assert(step() && Serial.lines.find("POWER_OFF_NOTICE mic_stop_timeout\n")!=std::string::npos);
+  micListener=decltype(micListener){};
+  std::cout<<"PASS: a mic whose stop never ends holds the power key's off MicSession::STOP_LIMIT_MS at most\n";
 
   reset();mutexAvailable=false;click();assert(!step() && powerKeyIrq && !keyReads && !powerKeyRequested);
   mutexAvailable=true;at(1005);assert(step());

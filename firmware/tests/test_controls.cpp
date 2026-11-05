@@ -60,27 +60,33 @@ int main() {
   assert(!gesture.click(true,false,false));assert(!gesture.click(false,true,false));
   assert(!gesture.click(false,false,true));assert(!gesture.click(true,false,false));
   assert(gesture.click(false,false,true));
-  for(unsigned page=0;page<=unsigned(Page::WearCheck);++page)
+  for(unsigned page=0;page<=unsigned(Page::MicRpm);++page)
     for(unsigned menu=0;menu<MENU_COUNT;++menu)for(unsigned setting=0;setting<=SETTING_COUNT;++setting)for(uint8_t view=0;view<2;++view) {
       State before;before.page=Page(page);before.menu=menu;before.setting=setting;before.history=2;
       State after;uint8_t saved=99;
       assert(decodeWake(encodeWake(before,view),after,saved));
-      // Wear check wakes on its Menu row: a fresh check, and no page value
-      // beyond Wipe is ever saved.
-      const bool wear=before.page==Page::WearCheck;
-      assert(after.page==((before.page==Page::Edit || before.page==Page::Wipe)?Page::Settings:wear?Page::Menu:before.page));
-      assert(after.menu==(wear?5:menu) && after.setting==setting && after.history==2 && saved==view);
+      // Wear check and Mic RPM wake on their Menu rows: a fresh check, the mic
+      // off, and no page value beyond Wipe is ever saved.
+      const bool wear=before.page==Page::WearCheck,mic=before.page==Page::MicRpm;
+      assert(after.page==((before.page==Page::Edit || before.page==Page::Wipe)?Page::Settings:wear || mic?Page::Menu:before.page));
+      assert(after.menu==(wear?5:mic?MIC_ROW:menu) && after.setting==setting && after.history==2 && saved==view);
     }
   State out;uint8_t view=0;
   // 0.20.2 and earlier menus had six rows with Back at 5; Wear check (0.20.3)
   // took row 5, so an older Back row still opens Back.
   for(uint32_t magic:{WAKE12_MAGIC,WAKE11_MAGIC,WAKE10_MAGIC,WAKE9_MAGIC,WAKE8_MAGIC,WAKE7_MAGIC,LEGACY_WAKE_MAGIC}) {
-    assert(decodeWake(magic|uint32_t(Page::Menu)|(5u<<4),out,view) && out.page==Page::Menu && out.menu==6);
+    assert(decodeWake(magic|uint32_t(Page::Menu)|(5u<<4),out,view) && out.page==Page::Menu && out.menu==MENU_COUNT-1);
     assert(decodeWake(magic|uint32_t(Page::Menu)|(4u<<4),out,view) && out.menu==4);
     assert(!decodeWake(magic|uint32_t(Page::Menu)|(6u<<4),out,view));
   }
   assert(decodeWake(WAKE_MAGIC|uint32_t(Page::Menu)|(5u<<4),out,view) && out.menu==5);
   assert(decodeWake(WAKE_MAGIC|uint32_t(Page::Menu)|(6u<<4),out,view) && out.menu==6);
+  assert(decodeWake(WAKE_MAGIC|uint32_t(Page::Menu)|(7u<<4),out,view) && out.menu==7);
+  // 0.20.3-0.20.5 saved seven rows: Wear check stays, an old Back (6) stays Back.
+  assert(decodeWake(WAKE13_MAGIC|uint32_t(Page::Menu)|(5u<<4),out,view) && out.menu==5);
+  assert(decodeWake(WAKE13_MAGIC|uint32_t(Page::Menu)|(6u<<4),out,view) && out.menu==MENU_COUNT-1);
+  assert(!decodeWake(WAKE13_MAGIC|uint32_t(Page::Menu)|(7u<<4),out,view));
+  assert(decodeWake(WAKE13_MAGIC|uint32_t(Page::Settings)|(10u<<9),out,view) && out.setting==10);
   // 0.20.2 shares this settings numbering.
   assert(decodeWake(WAKE12_MAGIC|uint32_t(Page::Settings)|(10u<<9),out,view) && out.setting==unsigned(Setting::ShakeWake));
   assert(decodeWake(WAKE12_MAGIC|uint32_t(Page::Settings)|(12u<<9)|(1u<<13),out,view) && out.setting==SETTING_COUNT && view==1);
@@ -103,7 +109,7 @@ int main() {
   assert(decodeWake(WAKE10_MAGIC|uint32_t(Page::Settings)|(9u<<9),out,view) && out.setting==unsigned(Setting::WipeAll));
   assert(decodeWake(WAKE10_MAGIC|uint32_t(Page::Settings)|(10u<<9)|(1u<<13),out,view) && out.setting==SETTING_COUNT && view==1);
   assert(decodeWake(WAKE10_MAGIC|uint32_t(Page::Settings)|(5u<<9),out,view) && out.setting==unsigned(Setting::Theme));
-  for(uint32_t corrupt:{0u,WAKE_MAGIC|15u,WAKE_MAGIC|uint32_t(Page::Edit),WAKE_MAGIC|(7u<<4),LEGACY_WAKE_MAGIC|(7u<<9),
+  for(uint32_t corrupt:{0u,WAKE_MAGIC|15u,WAKE_MAGIC|uint32_t(Page::Edit),WAKE13_MAGIC|(7u<<4),LEGACY_WAKE_MAGIC|(7u<<9),
                         WAKE_MAGIC|0x4000u,WAKE_MAGIC|(13u<<9),WAKE11_MAGIC|(12u<<9),WAKE10_MAGIC|(11u<<9),WAKE8_MAGIC|(9u<<9),WAKE9_MAGIC|(10u<<9),
                         WAKE_MAGIC|uint32_t(Page::Wipe),WAKE9_MAGIC|uint32_t(Page::Wipe),WAKE7_MAGIC|0x2000u,
                         WAKE_MAGIC|uint32_t(Page::WearCheck),WAKE12_MAGIC|uint32_t(Page::WearCheck),WAKE12_MAGIC|(7u<<4)})

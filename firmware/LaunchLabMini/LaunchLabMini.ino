@@ -77,11 +77,11 @@ namespace Lab {inline PowerLab::Knobs knobs;inline bool running=false,displayAsl
 #define LOOP_HELPER __attribute__((noinline))
 #if LAUNCHLAB_HIL
 // Test-only hardware-in-the-loop build; never a release. See tools/hil.
-static constexpr char VERSION[] = "0.20.6-sticks3-songs-hil-pm";
+static constexpr char VERSION[] = "0.20.7-sticks3-songs-hil-pm";
 #elif LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = "0.20.6-sticks3-songs-pm";
+static constexpr char VERSION[] = "0.20.7-sticks3-songs-pm";
 #else
-static constexpr char VERSION[] = "0.20.6-sticks3-songs";
+static constexpr char VERSION[] = "0.20.7-sticks3-songs";
 #endif
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ
@@ -92,13 +92,19 @@ static_assert(LAUNCHLAB_CPU_MHZ==80 || LAUNCHLAB_CPU_MHZ==160 || LAUNCHLAB_CPU_M
 static_assert(!LAUNCHLAB_CPU_PM || LAUNCHLAB_CPU_MHZ==80,"Experimental DFS uses a maximum of 80 MHz");
 static constexpr uint32_t ANALOG_SAMPLE_HZ = StickS3Acquisition::SAMPLE_HZ;
 #include "raw_transfer.h"
+#include "mic_listener.h"
+#include "mic_view_ui.h"
 static StickS3Acquisition acquisition;
 static Preferences prefs;
 static StickS3Level level;
 static M5Canvas screen(&M5.Display);
 // What the panel shows, for pushing only the rows that changed (frame_rows.h).
 static FrameRows frameRows;static uint8_t frameRotation=0xff;
-static PracticeHistory practice,demoPractice;
+static PracticeHistory practice;
+// USB `t`'s synthetic history (2.6 KB), in PSRAM like micListener: only the
+// loop reads it (the History page, its B button and `t`), never a save, the
+// IMU or acquisition tasks, an interrupt or a flash write.
+static PracticeHistory &demoPractice=*new(heap_caps_aligned_alloc(alignof(PracticeHistory),sizeof(PracticeHistory),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT)) PracticeHistory;
 static PracticeStore practiceStore;
 static Appearance::Config appearance;
 static Appearance::Bests personalBests;
@@ -239,6 +245,13 @@ static uint8_t pm1WakeFlags=0;
 static bool pm1WakeValid=false;
 static StickS3MotionAcquisition imuAcquisition;
 static BestEffectSpeaker soundPlayer(imuAcquisition);
+// In PSRAM, made before setup() (the IDF adds PSRAM to the heap before the
+// constructors run): the internal heap keeps every byte for pulls and songs.
+static MicListener &micListener=*new(heap_caps_aligned_alloc(alignof(MicListener),sizeof(MicListener),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT)) MicListener(imuAcquisition);
+// A frame costs 22-43 ms at 80 MHz (the 0.20.5 gate's recaps) and the tracker
+// runs below the UI, so the Mic RPM page redraws at 5 Hz at most.
+static constexpr uint32_t MIC_PAGE_FRAME_MS=200;
+static uint32_t micPageChecked=0;static bool micPageWarm=false,micPageFresh=false;
 // Which sound is playing: a celebration stops when its recap goes, a Settings
 // preview when its editor closes. A requested sound that is not rendered yet
 // waits for the idle slices rather than stalling the UI loop to render it.
@@ -509,7 +522,16 @@ LOOP_HELPER static void nvsStatus() {
     NvsBudget::headroom(unsigned(stats.available_entries),PracticeHistory::IMAGE_BYTES));
 }
 
+#if LAUNCHLAB_HIL
+static uint32_t hilStatusRuns=0;  // !feedgaps: whether a status print starved a song
+#endif
+// About 6 KB at USB speed, 40-62 ms: longer than a song's two queued 32 ms
+// blocks can cover, so it feeds the song between groups of lines (0.20.7,
+// HIL !feedgaps; a Mic RPM session's lines made it underrun).
 LOOP_HELPER static void status() {
+#if LAUNCHLAB_HIL
+  ++hilStatusRuns;
+#endif
   const Snapshot s=acquisition.snapshot();
   // Least free stack the loop task has had since boot; 0.11.0 overflowed its 8 KB.
   Serial.printf("STACK loop_min_free_bytes=%u\n",unsigned(uxTaskGetStackHighWaterMark(nullptr)));
@@ -525,6 +547,7 @@ LOOP_HELPER static void status() {
     (unsigned long)s.rearmExtensions,(unsigned long long)s.detectorUs,
     acquisition.storage()?60ul:0ul,StickS3SensorProfile::minMark(s.sensorProfile),StickS3SensorProfile::EDGE_SWING_FRACTION,
     s.startFloor,s.startMark,(unsigned long)s.soundHeld,unsigned(startMarks.count),startMarks.median());
+  soundPlayer.feedSong();
   Serial.printf("SENSOR_PROFILE_STATUS selected=%s min_mark=%.0f saved_setting=%s\n",
     StickS3SensorProfile::name(s.sensorProfile),StickS3SensorProfile::minMark(s.sensorProfile),StickS3SensorProfile::name(sensorProfile));
   Serial.printf("RPM_ESTIMATORS selected=%s units=rpm three_turn_peak_rpm=%.1f single_turn_peak_rpm=%.1f confirmation_turns=3 max_rpm=30000 single_updates=%lu single_rejected=%lu\n",
@@ -532,15 +555,23 @@ LOOP_HELPER static void status() {
     (unsigned long)s.singlePeakUpdates,(unsigned long)s.singlePeakRejected);
   Serial.printf("SETTINGS_SAVE_STATUS pending=0x%03x failed=%d saves=%lu errors=%lu refusals=%lu\n",unsigned(settingsSave.pending()),
     settingsSave.failed(),(unsigned long)settingsSave.saves(),(unsigned long)settingsSave.errors(),(unsigned long)settingsSave.refusals());
+  soundPlayer.feedSong();
   Serial.printf("TOURNAMENT_STATUS enabled=%d display=%s persistent=wake\n",tournamentMode,tournamentViewName());
   Serial.printf("MILESTONE_STATUS mode=%s rows=%u revision=%lu store=%s\n",Milestones::name(milestones.mode()),milestones.count(),
     (unsigned long)milestones.revision,milestoneStoreName());
   soundPlayer.status(appearance.sound);
+  // Not while the speaker is powered (the mic is off then): this pass also
+  // feeds a song, with 64 ms queued, and the mic's lines (up to 8 spins'
+  // logs) took a status print past it, so songs underran after a Mic RPM
+  // session (0.20.7, HIL !feedgaps). Its counters wait for the next status.
+  if(!soundPlayer.powered())micListener.status();
+  soundPlayer.feedSong();
   Serial.printf("SOUND_SYNC present_lag_us=%lu output_us=%lu clock_shift_ms=%ld skipped_samples=%lu\n",(unsigned long)presentLagUs,
     (unsigned long)soundPlayer.outputUs(),(long)soundShiftMs,(unsigned long)soundSkipped);
   Serial.printf("UI_STATUS page=%u menu=%u history=%u setting=%u draft=%u recording=%s\n",
     unsigned(controls.page),controls.menu,controls.history,controls.setting,controls.draft,
     s.resting?"idle_paused":LAUNCHLAB_MOTION_ADC_GATE?"motion_gated":"always");
+  soundPlayer.feedSong();
   Serial.printf("PERF acquisition_core=0 ui_core=%d processing_pct=%.2f max_batch_us=%lu frame_budget_us=%lu max_read_gap_us=%lu stack_free=%lu invalid_frames=%lu lost_events=%lu adc_stalls=%lu max_draw_us=%lu max_effect_us=%lu ui_stalls=%lu stress=%d heap_free=%lu psram_free=%lu usb_drain_timeouts=%lu usb_rejected_commands=%lu frames=%lu whole_frames=%lu unchanged_frames=%lu pushed_rows=%lu row_hashes=%d adc_retimes=%lu\n",
     xPortGetCoreID(),s.processingPercent,(unsigned long)s.maxBatchUs,
     (unsigned long)(uint64_t(StickS3Acquisition::FRAME_BYTES/SOC_ADC_DIGI_RESULT_BYTES)*1000000/StickS3Acquisition::SAMPLE_HZ),(unsigned long)s.maxReadGapUs,
@@ -551,6 +582,7 @@ LOOP_HELPER static void status() {
     (unsigned long)frameRows.rows(),frameRows.ready(),(unsigned long)s.retimes);
   heapStatus();nvsStatus();
   const auto tilt=level.reading(millis());const float *acc=level.lastAccel();
+  soundPlayer.feedSong();
   Serial.printf("LEVEL_STATUS imu_ready=%d imu_type=%d state=%s degrees=%.2f accel_g=%.3f,%.3f,%.3f samples=%lu rejected=%lu max_poll_us=%lu draw_buffer=%d\n",
     M5.Imu.isEnabled(),int(M5.Imu.getType()),tilt.name(),tilt.degrees,acc[0],acc[1],acc[2],
     (unsigned long)level.samples(),(unsigned long)level.rejected(),(unsigned long)maxImuPollUs,screenReady);
@@ -569,6 +601,7 @@ LOOP_HELPER static void status() {
   const uint32_t coalesceMs=HistoryCheckpoint::automaticQuietMs(now,imuStill,pendingMs,HISTORY_COALESCE_MS);
   const uint32_t flushDue=quietMs>=coalesceMs?0u:coalesceMs-quietMs;
   const uint32_t retryRemaining=saveError && now-lastSaveTry<HISTORY_SAVE_RETRY_MS?HISTORY_SAVE_RETRY_MS-(now-lastSaveTry):0;
+  soundPlayer.feedSong();
   Serial.printf("HISTORY_PENDING unsaved_pulls=%lu pending_ms=%lu flush_due_ms=%lu coalesce_ms=%lu max_pending_ms=%lu retry_remaining_ms=%lu\n",
     (unsigned long)(historyLog.isOpen()?practice.generation()-loggedHistory:practiceStore.pendingCount(practice)),(unsigned long)pendingMs,
     (unsigned long)(pendingHistory?flushDue:0),(unsigned long)coalesceMs,(unsigned long)HistoryCheckpoint::MAX_PENDING_MS,(unsigned long)retryRemaining);
@@ -576,12 +609,14 @@ LOOP_HELPER static void status() {
     (unsigned long)(inactivity.timeout()/1000),shakeToWake,shakeToWake?"shake":"side_key",shakeToWake?"imu_only":"power_off",(unsigned long)(inactivity.elapsed(now)/1000),(unsigned long)((inactivity.remaining(now)+999)/1000),
     battery.valid(now),unsigned(battery.millivolts),battery.valid(now)?battery.percent:-1,
     battery.chargeName(),(unsigned long)maxBatteryPollUs,usbAwake.inhibited(now));
+  soundPlayer.feedSong();
   Serial.printf("USB_POWER host_sof=%d host_seen=%d auto_off_inhibited=%d reason=%s power_known=%d last_power_read_ok=%d source=0x%02x host_poll_ms=%lu power_poll_ms=%lu\n",
     usbAwake.sof(),usbAwake.remembered(),usbAwake.inhibited(now),usbAwake.reason(now),usbAwake.powerKnown(now),usbAwake.lastPowerReadOk(),usbAwake.powerBits(),
     (unsigned long)UsbHostAwake::HOST_POLL_MS,(unsigned long)UsbHostAwake::POWER_POLL_MS);
   Serial.printf("POWER_DETAIL uptime_s=%lu cpu_mhz=%lu backlight=%u pm1_cfg_valid=%d pm1_cfg=0x%02x led_enabled=%d current_measurement=unavailable\n",
     (unsigned long)(now/1000),(unsigned long)ESP.getCpuFreqMHz(),unsigned(M5.Display.getBrightness()),
     powerConfigValid,powerConfig,powerConfigValid?int(bool(powerConfig&0x10)):-1);
+  soundPlayer.feedSong();
   Serial.printf("POWER_KEY single_click=%s pending=%d clear_failures=%lu\n",
     powerKey().configured()?"firmware_power_off":"pm1_reset",powerKeyRequested,(unsigned long)powerKey().clearFailures());
   Serial.printf("CPU_PM requested=%d enabled=%d min_mhz=%u max_mhz=%d light_sleep=0 error=%s\n",
@@ -603,6 +638,7 @@ LOOP_HELPER static void status() {
   }
   const auto imu=imuAcquisition.snapshot();
   const auto &activity=imu.activity;
+  soundPlayer.feedSong();
   Serial.printf("SENSOR_IDLE enabled=%d resting=%d sensor_power=on_shared_rail adc_pause_after_ms=%lu pauses=%lu resumes=%lu experimental=1\n",
     LAUNCHLAB_MOTION_ADC_GATE,s.resting,(unsigned long)SensorIdle::IDLE_MS,
     (unsigned long)sensorIdle.pauses(),(unsigned long)sensorIdle.resumes());
@@ -610,12 +646,14 @@ LOOP_HELPER static void status() {
     activity.valid,activity.fresh(esp_timer_get_time()),activity.moving,activity.gyroDps,activity.accelChangeG,
     MotionActivity::GYRO_ON,MotionActivity::ACCEL_ON,(unsigned long)(MotionActivity::CONFIRM_US/1000),
     (unsigned long)inactivity.elapsed(now),inactivity.unusedShake(),(unsigned long)((inactivity.remaining(now)+999)/1000));
+  soundPlayer.feedSong();
   Serial.printf("MOUNT_STATUS selected=%s imu_frame=%s accel_gyro_frame=launcher raw_imu_frame=device display_flip=%d\n",
     MountOrientation::label(mountMode),MountOrientation::label(imu.mount),displayFlipped);
   Serial.printf("IMU_RESTORE_STATUS needed=%d failures=%lu capture_retries=%lu\n",motionRestoreNeeded,(unsigned long)motionRestoreFailures,(unsigned long)motionCaptureRetries);
   Serial.printf("IMU_STARTUP_STATUS attempts=%lu last_try_ms=%lu last_paired=%d last_success=%d retry_ms=%lu\n",
     (unsigned long)motionInitAttempts,(unsigned long)lastMotionInit,motionInitPaired,motionInitSuccess,
     (unsigned long)MOTION_INIT_RETRY_MS);
+  soundPlayer.feedSong();
   Serial.printf("MOTION_STATUS imu_core=0 imu_task=%d paired_samples=%lu accel_samples=%lu max_gap_us=%lu gaps=%lu max_poll_us=%lu stack_free=%lu gate_misses=%lu late_polls=%lu missed_polls=%lu latest=%lu quality=%s pending=%d ref=%lu ref_rpm=%.1f ref_store_ready=%d ref_load_error=%d dropped=%lu demo=%d feedback=%d\n",
     imuAcquisition.running(),(unsigned long)imu.pairedSamples,(unsigned long)imu.accelSamples,
     (unsigned long)imu.maxGapUs,(unsigned long)imu.gaps,(unsigned long)imu.maxPollUs,(unsigned long)imu.stackFree,(unsigned long)imu.gateMisses,(unsigned long)imu.latePolls,(unsigned long)imu.missedPolls,
@@ -625,6 +663,7 @@ LOOP_HELPER static void status() {
   Serial.printf("ORIENTATION_STATUS algorithm=VQF6D position=disabled absolute_heading=disabled ready=%d rest=%d updates=%lu resets=%lu max_fusion_us=%lu bias_dps=%.4f,%.4f,%.4f bias_sigma_dps=%.4f\n",
     imu.orientationReady,imu.rest,(unsigned long)imu.fusionSamples,(unsigned long)imu.fusionResets,
     (unsigned long)imu.maxFusionUs,imu.bias[0],imu.bias[1],imu.bias[2],imu.biasSigma);
+  soundPlayer.feedSong();
   Serial.printf("I2C_RECOVERY bus=internal result=%s pulses=%u sda_was=%d scl_was=%d\n",I2cBusRecovery::name(i2cRecovery),i2cRecoveryPulses,i2cSdaWas,i2cSclWas);
   Serial.printf("IMU_FIFO_STATUS reads=%lu errors=%lu skipped_frames=%lu anchors=%lu max_bytes=%lu period_us=%.1f gyro_samples=%lu accel_samples=%lu flash_quiet_polls=%lu length_errors=%lu data_errors=%lu parse_errors=%lu oversize=%lu overflows=%lu stalls=%lu last_stall_us=%lu last_stall_ms=%lu last_error_bytes=%lu last_error_offset=%lu last_error_ms=%lu last_quiet_ms=%lu..%lu\n",
     (unsigned long)imu.fifoReads,(unsigned long)imu.fifoErrors,(unsigned long)imu.fifoSkipped,(unsigned long)imu.fifoAnchors,
@@ -633,6 +672,7 @@ LOOP_HELPER static void status() {
     (unsigned long)imu.fifoStalls,(unsigned long)imu.lastStallUs,(unsigned long)imu.lastStallMs,
     (unsigned long)imu.lastErrorBytes,(unsigned long)imu.lastErrorOffset,(unsigned long)imu.lastErrorMs,
     (unsigned long)imuAcquisition.quietBeganMs(),(unsigned long)imuAcquisition.quietEndedMs());
+  soundPlayer.feedSong();
   Serial.printf("MOTION_CLIP accel_range_g=%.0f gyro_range_dps=%.0f samples=%lu max_run=%lu last_run=%lu last_ms=%lu last_axes=0x%02lx\n",
     accelRange().fullScaleG(),StickS3AccelRange::GYRO_FULL_SCALE_DPS,(unsigned long)imu.clipSamples,(unsigned long)imu.maxClipRun,
     (unsigned long)imu.lastClipRun,(unsigned long)imu.lastClipMs,(unsigned long)imu.lastClipAxes);
@@ -853,6 +893,9 @@ LOOP_HELPER static void draw(const Snapshot &s) {
       case Controls::Page::NewSession:ControlsUI::session(view,controls.startSession);break;
       case Controls::Page::Battery:drawBattery(view,millis());break;
       case Controls::Page::Wipe:ControlsUI::wipe(view,wipeConfirmation,millis(),wipeFailed,wipeBlocked,wipeComplete);break;
+      case Controls::Page::MicRpm:
+        MicView::draw(view,micListener.trace(),micPageState(),colors);
+        break;
       case Controls::Page::WearCheck: {
         const auto rawTilt=level.reading(millis());
         drawnLevel=StickS3Level::forDisplay(rawTilt,visibleDisplayFlipped());
@@ -1150,6 +1193,7 @@ LOOP_HELPER static Appearance::Effect soundTarget(){
 // Plays now if the sound is rendered, otherwise once the idle slices finish it.
 LOOP_HELPER static void requestSound(Appearance::Effect effect,Appearance::Sound level,bool celebration) {
   soundRequest={};
+  if(soundPlayer.muted)return;
   if(level==Appearance::Sound::Off){soundPlayer.stop();celebrationSound=soundPreview=false;return;}
   soundRequest.active=true;soundRequest.celebration=celebration;soundRequest.effect=effect;soundRequest.level=level;
   if(soundPlayer.prepared(effect))startSound(false);
@@ -1310,6 +1354,38 @@ LOOP_HELPER static void logLaunchMetrics(const Snapshot &s) {
   Serial.printf("LAUNCH_METRICS number=%lu session=%lu selected_estimator=%s selected_rpm=%.1f three_turn_peak_rpm=%.1f single_turn_peak_rpm=%.1f units=rpm\n",
     (unsigned long)record->number,(unsigned long)record->session,RpmEstimator::name(s.estimator),
     s.resultRpm,s.sustainedPeakRpm,s.singlePeakRpm);
+}
+LOOP_HELPER static MicView::Mic micPageState() {
+  if(micListener.state()==MicSession::State::Refused)return micListener.why()==MicSession::Why::Memory?MicView::Mic::NoMemory:MicView::Mic::Failed;
+  return micListener.warm(millis())?MicView::Mic::On:MicView::Mic::Starting;
+}
+// The Mic RPM page alone runs the mic. Opening it mutes the speaker, which
+// powers down, and then the mic starts; leaving it, however the page changed,
+// stops the mic and gives the speaker back. An owner who never opens the page
+// stops at the first line.
+LOOP_HELPER static void tickMicPage() {
+  const bool open=controls.page==Controls::Page::MicRpm;
+  if(!open && micListener.off())return;
+  const uint32_t now=millis();
+  const auto before=micListener.state();
+  micListener.tick(open,soundPlayer.powered(),now);
+  soundPlayer.muted=micListener.muted();
+  if(soundPlayer.muted) {
+    if(soundRequest.active || soundPlayer.playing())soundPlayer.stop();
+    soundRequest={};celebrationSound=soundPreview=false;
+  }
+  if(micListener.state()!=before)dirty=true;
+  if(open && (micListener.on() && now-micPageChecked>=MIC_PAGE_FRAME_MS)) {
+    micPageChecked=now;
+    if(micListener.warm(now)!=micPageWarm){micPageWarm=!micPageWarm;dirty=true;}  // "warming up" ends without a reading
+  }
+  if(micListener.fresh())micPageFresh=true;
+  if(micPageFresh && now-lastDraw>=MIC_PAGE_FRAME_MS){micPageFresh=false;dirty=true;}
+}
+// Sleep and power-off wait for this, so neither meets a running mic, unless
+// its stop never ends: then they go ahead after MicSession::STOP_LIMIT_MS.
+LOOP_HELPER static void leaveMicPage() {
+  if(controls.page==Controls::Page::MicRpm){controls.page=Controls::Page::Menu;syncNavigation();dirty=true;}
 }
 static void browseOlder() {
   if(tournamentMode || !historyPage)return;
@@ -1715,6 +1791,8 @@ LOOP_HELPER static void autoPowerOff(uint32_t now,const Snapshot &s) {
   // leave a just-attached computer unnoticed for up to 250ms.
   pollUsbAwake(now,s,true);
   if((usbAwake.inhibited(now) && !dry) || !inactivity.due(now,measuring))return;
+  if(micListener.holdsSleep(now)){leaveMicPage();return;}
+  if(!micListener.off())Serial.println("POWER_OFF_NOTICE mic_stop_timeout");
   lastShutdownTry=now;
   // A failed save retries after 60 s; a new pull restarts the full timeout.
   const bool force=opticalGuard.force();
@@ -1826,6 +1904,8 @@ LOOP_HELPER static void powerKeyOff(uint32_t now,const Snapshot &s) {
     if(late){powerKeyRequested=false;Serial.println("POWER_KEY_OFF_DEFERRED motion_capture_busy");}
     return;
   }
+  if(micListener.holdsSleep(now)){leaveMicPage();return;}
+  if(!micListener.off())Serial.println("POWER_OFF_NOTICE mic_stop_timeout");
   const auto flushed=flushForShutdown(now,s,late);
   if(flushed==ShutdownFlush::Busy || flushed==ShutdownFlush::NewPull) {
     if(late){powerKeyRequested=false;Serial.println("POWER_KEY_OFF_DEFERRED acquisition_busy");}
@@ -2714,8 +2794,11 @@ LOOP_HELPER static void tickSound(const Snapshot &s) {
     soundRequest.active=false;
   if(!soundPlayer.playing())celebrationSound=soundPreview=false;
   soundPlayer.tick(measuring || motionPending);
+#if LAUNCHLAB_HIL
+  hilFeedProbe(soundPlayer.streaming(),hilStatusRuns,saveCount,lastDraw);
+#endif
   updateStartFloor();
-  if(measuring || motionPending)return;
+  if(measuring || motionPending || soundPlayer.muted)return;
   // Render a slice per idle pass (1/64 s of audio, a few ms): a waiting
   // request first, else the chosen effect, ready before the next best or the
   // first preview while the Sound editor is open, then every effect the
@@ -2860,6 +2943,17 @@ LOOP_HELPER static void runUsbCommand(const char *command,const Snapshot &s) {
   else if(c=='M')listMilestones();
   else if(c=='F')listEffects();
   else if(c=='X')startEffectRequest();
+  else if(c=='m') {
+    // The Mic RPM page from the Main screen or the Menu, and back: firmware/tools/mic_capture.py.
+    if(controls.page==Controls::Page::MicRpm)controls.page=Controls::Page::Menu;
+    else if(controls.page==Controls::Page::Main || controls.page==Controls::Page::Menu){controls.page=Controls::Page::MicRpm;controls.menu=Controls::MIC_ROW;}
+    else {Serial.println("MIC_STATE error=busy_page");return;}
+    syncNavigation();dirty=true;
+  }
+  else if(c=='A')micListener.dump();
+  else if(c=='Y')micListener.askBench();
+  else if(c=='W')micListener.armTape();
+  else if(c=='V')micListener.sendTape();
   else if(c=='U'){milestoneRx.start(millis());Serial.printf("MILESTONE_READY max_chars=%u\n",unsigned((Milestones::Request::BYTES+2)/3*4));milestoneReply();}
   else if(c=='t')previewHistory();
   else if(c=='y')checkStorage();
@@ -3016,6 +3110,7 @@ void loop() {
   }
   if(wipeBlocked)return;
   pollCommands(s);
+  tickMicPage();
   pollPowerKey(millis());
   Snapshot event;
   while(acquisition.takeEvent(event)) {
@@ -3024,6 +3119,7 @@ void loop() {
       Serial.printf("LAUNCH_RESULT valid=%d peak_rpm=%.1f revs=%lu amplitude=%.1f start_noise=%.1f launches=%lu end=%s t_us=%llu\n",
         event.valid,event.resultRpm,(unsigned long)event.revolutions,event.amplitude,event.startNoise,
         (unsigned long)event.launches,event.endName(),(unsigned long long)event.detectorUs);
+      micListener.launch(event.launches,event.valid,event.resultRpm,event.burstStartHostUs,event.burstEndHostUs);
       if(controls.page==Controls::Page::WearCheck) {
         const auto stageBefore=controls.wear.stage();
         const auto stepBefore=controls.wear.step();

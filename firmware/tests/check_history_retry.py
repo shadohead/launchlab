@@ -55,6 +55,9 @@ static IdleFake &pm1Idle(){static IdleFake idle;return idle;}
 #include <iostream>
 #include <vector>
 static Controls::State controls;
+// The mic is off unless a test says otherwise: leaving its page stops it.
+static struct {bool running=false;bool off()const{return !running;}bool holdsSleep(uint32_t)const{return running;}void dump(){}void askBench(){}void armTape(){}void sendTape(){}void launch(uint32_t,bool,float,uint64_t,uint64_t){}}micListener;
+static unsigned micPageLeaves=0;static void leaveMicPage(){++micPageLeaves;micListener.running=false;}
 static bool wipeBlocked=false;
 static Appearance::Config appearance;static Appearance::Bests personalBests;
 static AppearanceStore<Appearance::Bests> bestStore;static AppearanceStore<Appearance::Config> appearanceStore;static Appearance::Celebration bestEffect;

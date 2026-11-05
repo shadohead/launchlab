@@ -7,9 +7,10 @@
 // Navigation never starts/stops measurement. Effects are handled by the sketch
 // after the visible state changes; setting writes only happen on Apply.
 namespace Controls {
-enum class Page:uint8_t {Main,Menu,HistoryMenu,History,Battery,Settings,Edit,NewSession,Tournament,Wipe,WearCheck};
+enum class Page:uint8_t {Main,Menu,HistoryMenu,History,Battery,Settings,Edit,NewSession,Tournament,Wipe,WearCheck,MicRpm};
 enum class Effect:uint8_t {None,Recap,BeginEdit,Preview,Apply,CancelEdit,Older,NewSession,Tournament,BeginWipe,ConfirmWipe,CancelWipe};
-static constexpr unsigned MENU_COUNT=7;
+static constexpr unsigned MENU_COUNT=8;
+static constexpr uint8_t MIC_ROW=6;  // before Back
 // Values are stable (HIL `!set N`, saved wake navigation); the screen shows
 // them in ORDER. Shake to wake (0.20.2) is listed right after Sleep after.
 enum class Setting:uint8_t {Sleep,Rpm,Brightness,Flip,Sensor,Theme,BestEffect,Celebrate,Sound,Mount,ShakeWake,WipeAll};
@@ -48,6 +49,7 @@ struct State {
           case 3:page=Page::Settings;break;
           case 4:page=Page::Tournament;return Effect::Tournament;
           case 5:page=Page::WearCheck;wear.reset();break;
+          case MIC_ROW:page=Page::MicRpm;break;
           default:page=Page::Main;break;
         }break;
       case Page::HistoryMenu:page=history<3?Page::History:Page::Menu;break;
@@ -62,6 +64,7 @@ struct State {
       case Page::Tournament:break;
       case Page::Wipe:return Effect::ConfirmWipe;
       case Page::WearCheck:wear.reset();break;
+      case Page::MicRpm:page=Page::Menu;break;
     }
     return Effect::None;
   }
@@ -91,6 +94,7 @@ struct State {
       case Page::Battery:break;
       case Page::Wipe:return Effect::CancelWipe;
       case Page::WearCheck:break;
+      case Page::MicRpm:break;
     }
     return Effect::None;
   }
@@ -99,6 +103,7 @@ struct State {
       case Page::Edit:page=Page::Settings;return Effect::CancelEdit;
       case Page::History:page=Page::HistoryMenu;break;
       case Page::HistoryMenu:case Page::Battery:case Page::Settings:case Page::NewSession:case Page::WearCheck:page=Page::Menu;break;
+      case Page::MicRpm:page=Page::Menu;break;
       case Page::Menu:page=Page::Main;break;
       case Page::Main:return recap?Effect::Recap:Effect::None;
       case Page::Tournament:break;
@@ -131,13 +136,15 @@ struct Gesture {
 // down one. 0.20.2 adds Shake to wake as value 10: Wipe all and Back move
 // down one. 0.20.3 inserts Wear check at menu row 5: an older Back row (5)
 // moves down one. Wear check itself wakes on its menu row, so no page value
-// after Wipe is ever saved.
+// after Wipe is ever saved. 0.21 inserts Mic RPM at menu row 6: an older Back
+// row moves down one again, and that page too wakes on its menu row.
 static constexpr uint32_t LEGACY_WAKE_MAGIC=0x4e560000,WAKE7_MAGIC=0x4e570000,
   WAKE8_MAGIC=0x4e580000,WAKE9_MAGIC=0x4e590000,WAKE10_MAGIC=0x4e5a0000,WAKE11_MAGIC=0x4e5b0000,
-  WAKE12_MAGIC=0x4e5c0000,WAKE_MAGIC=0x4e5d0000;
+  WAKE12_MAGIC=0x4e5c0000,WAKE13_MAGIC=0x4e5d0000,WAKE_MAGIC=0x4e5e0000;
 inline uint32_t encodeWake(State state,uint8_t tournamentView) {
   if(state.page==Page::Edit || state.page==Page::Wipe)state.page=Page::Settings;
   if(state.page==Page::WearCheck){state.page=Page::Menu;state.menu=5;}
+  if(state.page==Page::MicRpm){state.page=Page::Menu;state.menu=MIC_ROW;}  // the mic never starts on wake
   return WAKE_MAGIC|uint32_t(state.page)|(uint32_t(state.menu)<<4)|
     (uint32_t(state.history)<<7)|(uint32_t(state.setting)<<9)|(uint32_t(tournamentView)<<13);
 }
@@ -146,7 +153,7 @@ inline bool decodeWake(uint32_t value,State &out,uint8_t &tournamentView) {
   // Each layout's Back row is the one after its last setting.
   unsigned setting=0,back=0;
   const auto wideMagic=value&0xffffc000;
-  if(wideMagic==WAKE_MAGIC || wideMagic==WAKE12_MAGIC || wideMagic==WAKE11_MAGIC || wideMagic==WAKE10_MAGIC || wideMagic==WAKE9_MAGIC || wideMagic==WAKE8_MAGIC) {
+  if(wideMagic==WAKE_MAGIC || wideMagic==WAKE13_MAGIC || wideMagic==WAKE12_MAGIC || wideMagic==WAKE11_MAGIC || wideMagic==WAKE10_MAGIC || wideMagic==WAKE9_MAGIC || wideMagic==WAKE8_MAGIC) {
     setting=(value>>9)&15;tournamentView=(value>>13)&1;
     back=wideMagic==WAKE8_MAGIC?8:wideMagic==WAKE9_MAGIC?9:wideMagic==WAKE10_MAGIC?10:wideMagic==WAKE11_MAGIC?11:SETTING_COUNT;
   }
@@ -158,16 +165,16 @@ inline bool decodeWake(uint32_t value,State &out,uint8_t &tournamentView) {
   }
   if(setting>back)return false;
   if(setting==back)setting=SETTING_COUNT;
-  else if(wideMagic!=WAKE_MAGIC && wideMagic!=WAKE12_MAGIC) {
+  else if(wideMagic!=WAKE_MAGIC && wideMagic!=WAKE13_MAGIC && wideMagic!=WAKE12_MAGIC) {
     // In the 0.15-0.20.1 numbering (WAKE11): Celebrate is 7, Wipe all 10.
     if(wideMagic!=WAKE11_MAGIC && setting>=7)++setting;
     if(setting==10)setting=unsigned(Setting::WipeAll);
   }
   state.setting=uint8_t(setting);
-  const bool sixRows=wideMagic!=WAKE_MAGIC;
+  const unsigned rows=wideMagic==WAKE_MAGIC?MENU_COUNT:wideMagic==WAKE13_MAGIC?7:6;
   if(uint8_t(state.page)>uint8_t(Page::Wipe) || state.page==Page::Edit || state.page==Page::Wipe ||
-     state.menu>=(sixRows?6:MENU_COUNT) || state.setting>SETTING_COUNT)return false;
-  if(sixRows && state.menu==5)state.menu=6;
+     state.menu>=rows || state.setting>SETTING_COUNT)return false;
+  if(state.menu==rows-1)state.menu=MENU_COUNT-1;  // Back
   out=state;return true;
 }
 }
