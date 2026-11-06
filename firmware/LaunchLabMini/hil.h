@@ -543,7 +543,7 @@ LOOP_HELPER static void hilCommand(char *line) {
   if(!strcmp(cmd,"set")) {
     // The real Apply path: checkpoint, NVS write, resume, error state.
     const unsigned row=unsigned(num(-1)),value=unsigned(num(-1));
-    if(row>=Controls::EDITABLE_SETTING_COUNT || value>255){Hil::replyLine("HIL_ERR set row");return;}
+    if(!Controls::editable(row) || value>255){Hil::replyLine("HIL_ERR set row");return;}
     controls.page=Controls::Page::Edit;controls.setting=row;controls.draft=uint8_t(value);settingsSaveError=false;
     const uint32_t started=millis();
     commitSetting();

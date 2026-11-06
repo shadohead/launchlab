@@ -99,6 +99,10 @@ static InactivityTimer inactivity;
 static UsbHostAwake usbAwake;
 static struct {bool visible=false;bool shown(){return visible;}} launchFeedback;
 struct Snapshot {AnalogTachometer::Phase phase=AnalogTachometer::Phase::Ready;bool opticalIdle=true;};
+// The corner battery as drawn (the sketch's cornerBattery): its fill, on pages that show it.
+struct Corner {int fill=0;bool operator!=(const Corner &o)const{return fill!=o.fill;}};
+static bool cornerShown=false;static Corner drawnCornerBattery;
+static Corner cornerBattery(uint32_t now){Corner c;if(cornerShown && battery.valid(now))c.fill=battery.percent;return c;}
 '''
 tests = r'''
 static void at(uint32_t ms){clockUs=uint64_t(ms)*1000;}
@@ -109,6 +113,7 @@ static void reset(){
   historyView=PracticeUI::View::Recent;brightnessPercent=40;powerConfig=0;
   lastBatteryPoll=maxBatteryPollUs=0;battery=StickS3Battery{};
   inactivity=InactivityTimer{};inactivity.begin(0);usbAwake=UsbHostAwake{};launchFeedback.visible=false;
+  cornerShown=false;drawnCornerBattery={};
   PowerSavers::settings=PowerSavers::Settings{};
 }
 static Snapshot state;
@@ -175,6 +180,14 @@ int main(){
   state.phase=AnalogTachometer::Phase::Ready;poll(6000);
   assert(locks==2 && unlocks==2 && bus.reads==9 && dirty);
   std::cout<<"PASS: battery voltage/charge/config serialized under one IMU gate; bounded wake retry; launch/5-second polls defer\n";
+
+  // The corner battery (Battery icon, 0.20.8): a reading that changes what it
+  // draws redraws the page; the same drawing, or a page without it, does not.
+  reset();state={};cornerShown=true;poll(0);assert(dirty);
+  drawnCornerBattery=cornerBattery(0);dirty=false;poll(5000);assert(!dirty);
+  bus.dead=true;poll(10000);assert(dirty && !cornerBattery(10000).fill);
+  reset();state={};poll(0);assert(battery.valid(0) && !dirty);
+  std::cout<<"PASS: a battery reading redraws the page only when the corner battery changes\n";
 
   reset();state={};mutexAvailable=false;poll(0);
   assert(!batteryPolled && !bus.reads && locks==1 && !unlocks);

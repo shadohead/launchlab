@@ -16,7 +16,18 @@ int main() {
   assert(s.tapA()==Effect::None && s.page==Page::Menu);
   s.tapA();s.tapB();assert(s.tapA()==Effect::NewSession && s.page==Page::Menu);
   s.menu=3;s.tapA();assert(s.page==Page::Settings);
-  for(unsigned row=0;row<EDITABLE_SETTING_COUNT;++row) {
+  // Every row but Wipe all and About has an editor, Battery icon (0.20.8) too.
+  assert(!editable(unsigned(Setting::WipeAll)) && !editable(unsigned(Setting::About)) && editable(unsigned(Setting::BatteryIcon)));
+  assert(!editable(SETTING_COUNT));
+  // The corner battery shows on the Menu and Settings pages only, not Main (owner, 2026-11-05).
+  for(unsigned page=0;page<=unsigned(Page::About);++page) {
+    const Page p=Page(page);
+    const bool menus=p==Page::Menu || p==Page::HistoryMenu || p==Page::Settings || p==Page::Edit || p==Page::About;
+    assert(showsCornerBattery(p)==menus);
+  }
+  assert(!showsCornerBattery(Page::Main) && !showsCornerBattery(Page::History) && !showsCornerBattery(Page::Battery));
+  for(unsigned row=0;row<SETTING_COUNT;++row) {
+    if(!editable(row))continue;
     s.setting=row;assert(s.tapA()==Effect::BeginEdit && s.page==Page::Edit);
     assert(s.tapA()==Effect::Apply && s.page==Page::Edit); // Backend must confirm success.
     assert(s.holdA()==Effect::None);assert(s.holdB()==Effect::CancelEdit && s.page==Page::Settings);
@@ -26,6 +37,18 @@ int main() {
   assert(s.tapA()==Effect::ConfirmWipe && s.holdA()==Effect::None);
   assert(s.tapB()==Effect::CancelWipe && s.holdB()==Effect::CancelWipe);
   s.page=Page::Settings; // The sketch consumes CancelWipe before navigating.
+  // Battery icon (0.20.8) follows Mounting. About (0.20.8): after Wipe all and
+  // before Back, it opens a page that edits nothing; A or hold B returns to its
+  // row, B does nothing there.
+  assert(nextRow(unsigned(Setting::Mount))==unsigned(Setting::BatteryIcon) && nextRow(unsigned(Setting::BatteryIcon))==unsigned(Setting::WipeAll));
+  assert(nextRow(unsigned(Setting::WipeAll))==unsigned(Setting::About) && nextRow(unsigned(Setting::About))==SETTING_COUNT);
+  assert(nextRow(SETTING_COUNT)==unsigned(Setting::Sleep) && position(unsigned(Setting::BatteryIcon))==11);
+  assert(position(unsigned(Setting::WipeAll))==12 && position(unsigned(Setting::About))==13);
+  s.setting=unsigned(Setting::About);
+  assert(s.tapA()==Effect::None && s.page==Page::About && !s.autoRecap());
+  assert(s.tapB()==Effect::None && s.holdA()==Effect::None && s.page==Page::About);
+  assert(s.tapA()==Effect::None && s.page==Page::Settings && s.setting==unsigned(Setting::About));
+  s.tapA();assert(s.holdB()==Effect::None && s.page==Page::Settings && s.setting==unsigned(Setting::About));
   s.setting=SETTING_COUNT;s.tapA();assert(s.page==Page::Menu);
   s.menu=5;s.tapA();assert(s.page==Page::WearCheck && !s.autoRecap() && s.wear.totalAccepted()==0);
   assert(s.wear.observePull(1,true,3250,WearCheck::Tilt(true,1.0f,0.0f,0.0f))==WearCheck::Outcome::Accepted && s.wear.totalAccepted()==1);
@@ -40,7 +63,8 @@ int main() {
   assert(s.holdA()==Effect::Tournament && s.page==Page::Main);
   // Best effect cycles Random, the offered effects (the default set: the 16
   // of 0.16) and Off.
-  for(unsigned row=0;row<EDITABLE_SETTING_COUNT;++row) {
+  for(unsigned row=0;row<SETTING_COUNT;++row) {
+    if(!editable(row))continue;
     s.page=Page::Edit;s.setting=row;s.draft=row==0?3:row==2?40:0;
     const unsigned original=s.draft,cycle=row==0 || row==2?10:row==5?Appearance::THEMES:row==6?EffectSet::count(s.offeredEffects)+2:row==7 || row==8?3:2;
     for(unsigned i=0;i<cycle;++i)assert(s.tapB()==Effect::Preview);
@@ -60,16 +84,16 @@ int main() {
   assert(!gesture.click(true,false,false));assert(!gesture.click(false,true,false));
   assert(!gesture.click(false,false,true));assert(!gesture.click(true,false,false));
   assert(gesture.click(false,false,true));
-  for(unsigned page=0;page<=unsigned(Page::MicRpm);++page)
+  for(unsigned page=0;page<=unsigned(Page::About);++page)
     for(unsigned menu=0;menu<MENU_COUNT;++menu)for(unsigned setting=0;setting<=SETTING_COUNT;++setting)for(uint8_t view=0;view<2;++view) {
       State before;before.page=Page(page);before.menu=menu;before.setting=setting;before.history=2;
       State after;uint8_t saved=99;
       assert(decodeWake(encodeWake(before,view),after,saved));
-      // Wear check and Mic RPM wake on their Menu rows: a fresh check, the mic
-      // off, and no page value beyond Wipe is ever saved.
-      const bool wear=before.page==Page::WearCheck,mic=before.page==Page::MicRpm;
-      assert(after.page==((before.page==Page::Edit || before.page==Page::Wipe)?Page::Settings:wear || mic?Page::Menu:before.page));
-      assert(after.menu==(wear?5:mic?MIC_ROW:menu) && after.setting==setting && after.history==2 && saved==view);
+      // Wear check and Mic RPM wake on their Menu rows (a fresh check, the mic
+      // off) and About on its Settings row: no page value beyond Wipe is ever saved.
+      const bool wear=before.page==Page::WearCheck,mic=before.page==Page::MicRpm,about=before.page==Page::About;
+      assert(after.page==((before.page==Page::Edit || before.page==Page::Wipe || about)?Page::Settings:wear || mic?Page::Menu:before.page));
+      assert(after.menu==(wear?5:mic?MIC_ROW:menu) && after.setting==(about?unsigned(Setting::About):setting) && after.history==2 && saved==view);
     }
   State out;uint8_t view=0;
   // 0.20.2 and earlier menus had six rows with Back at 5; Wear check (0.20.3)
@@ -87,6 +111,14 @@ int main() {
   assert(decodeWake(WAKE13_MAGIC|uint32_t(Page::Menu)|(6u<<4),out,view) && out.menu==MENU_COUNT-1);
   assert(!decodeWake(WAKE13_MAGIC|uint32_t(Page::Menu)|(7u<<4),out,view));
   assert(decodeWake(WAKE13_MAGIC|uint32_t(Page::Settings)|(10u<<9),out,view) && out.setting==10);
+  // 0.20.7 (WAKE14): eight menu rows, and Settings Back at 12, where About is
+  // now: it still opens Back.
+  assert(decodeWake(WAKE14_MAGIC|uint32_t(Page::Menu)|(7u<<4),out,view) && out.menu==7);
+  assert(decodeWake(WAKE14_MAGIC|uint32_t(Page::Settings)|(12u<<9)|(1u<<13),out,view) && out.setting==SETTING_COUNT && view==1);
+  assert(decodeWake(WAKE14_MAGIC|uint32_t(Page::Settings)|(11u<<9),out,view) && out.setting==unsigned(Setting::WipeAll));
+  assert(decodeWake(WAKE_MAGIC|uint32_t(Page::Settings)|(12u<<9),out,view) && out.setting==unsigned(Setting::About));
+  assert(decodeWake(WAKE_MAGIC|uint32_t(Page::Settings)|(13u<<9),out,view) && out.setting==unsigned(Setting::BatteryIcon));
+  assert(decodeWake(WAKE_MAGIC|uint32_t(Page::Settings)|(14u<<9),out,view) && out.setting==SETTING_COUNT);
   // 0.20.2 shares this settings numbering.
   assert(decodeWake(WAKE12_MAGIC|uint32_t(Page::Settings)|(10u<<9),out,view) && out.setting==unsigned(Setting::ShakeWake));
   assert(decodeWake(WAKE12_MAGIC|uint32_t(Page::Settings)|(12u<<9)|(1u<<13),out,view) && out.setting==SETTING_COUNT && view==1);
@@ -110,9 +142,10 @@ int main() {
   assert(decodeWake(WAKE10_MAGIC|uint32_t(Page::Settings)|(10u<<9)|(1u<<13),out,view) && out.setting==SETTING_COUNT && view==1);
   assert(decodeWake(WAKE10_MAGIC|uint32_t(Page::Settings)|(5u<<9),out,view) && out.setting==unsigned(Setting::Theme));
   for(uint32_t corrupt:{0u,WAKE_MAGIC|15u,WAKE_MAGIC|uint32_t(Page::Edit),WAKE13_MAGIC|(7u<<4),LEGACY_WAKE_MAGIC|(7u<<9),
-                        WAKE_MAGIC|0x4000u,WAKE_MAGIC|(13u<<9),WAKE11_MAGIC|(12u<<9),WAKE10_MAGIC|(11u<<9),WAKE8_MAGIC|(9u<<9),WAKE9_MAGIC|(10u<<9),
+                        WAKE_MAGIC|0x4000u,WAKE_MAGIC|(15u<<9),WAKE14_MAGIC|(13u<<9),WAKE11_MAGIC|(12u<<9),WAKE10_MAGIC|(11u<<9),WAKE8_MAGIC|(9u<<9),WAKE9_MAGIC|(10u<<9),
                         WAKE_MAGIC|uint32_t(Page::Wipe),WAKE9_MAGIC|uint32_t(Page::Wipe),WAKE7_MAGIC|0x2000u,
-                        WAKE_MAGIC|uint32_t(Page::WearCheck),WAKE12_MAGIC|uint32_t(Page::WearCheck),WAKE12_MAGIC|(7u<<4)})
+                        WAKE_MAGIC|uint32_t(Page::WearCheck),WAKE12_MAGIC|uint32_t(Page::WearCheck),WAKE12_MAGIC|(7u<<4),
+                        WAKE_MAGIC|uint32_t(Page::About),WAKE14_MAGIC|uint32_t(Page::MicRpm)})
     assert(!decodeWake(corrupt,out,view));
   std::cout<<"PASS: consistent actions, visible menu/back, deliberate sessions, staged settings, tournament lock, hold release, wake round trips and corruption\n";
 }

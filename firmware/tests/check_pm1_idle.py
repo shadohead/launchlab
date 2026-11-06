@@ -81,6 +81,7 @@ struct Speaker {
   bool playRaw(const int16_t *,size_t,unsigned,bool,unsigned,unsigned,bool){active=true;return true;}
   void stop(){if(!asyncStop)active=false;}  // M5's task clears the channels later
   void stop(uint8_t){stop();}
+  void setBufferReleaseCallback(void *,void (*)(void *,const void *,uint8_t)){}
 };
 struct PM1 {unsigned offs=0;bool offOK=true;
   bool powerOff(){assert(!asleep && !dead);++offs;return offOK;}
@@ -99,6 +100,7 @@ using Music=MusicStream<HostLock>;
 using TaskHandle_t=void *;
 static void xTaskNotifyGive(TaskHandle_t){}
 struct MusicChannel:MusicOutput {
+  static constexpr uint8_t CHANNEL=1;
   unsigned queued() override{return 0;}
   bool queue(const int16_t *,size_t) override{return true;}
   void volume(uint8_t) override{}
