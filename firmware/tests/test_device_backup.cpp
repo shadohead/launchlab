@@ -31,7 +31,8 @@ static bool same(const DeviceBackup::Contents &a,const DeviceBackup::Contents &b
   for(unsigned i=0;i<4;++i)if(a.bests.rpm[i]!=b.bests.rpm[i])return false;
   if(a.hasMotion!=b.hasMotion || (a.hasMotion && (a.motion.number!=b.motion.number || a.motion.rpm!=b.motion.rpm || a.motion.count!=b.motion.count)))return false;
   const auto &s=a.settings,&t=b.settings;
-  return s.sleepMinutes==t.sleepMinutes && s.brightness==t.brightness && s.rpmMethod==t.rpmMethod && s.sensorProfile==t.sensorProfile && s.flipped==t.flipped && s.mount==t.mount;
+  return s.sleepMinutes==t.sleepMinutes && s.brightness==t.brightness && s.rpmMethod==t.rpmMethod && s.sensorProfile==t.sensorProfile && s.flipped==t.flipped && s.mount==t.mount &&
+    s.shakeWake==t.shakeWake && s.batteryIcon==t.batteryIcon;
 }
 static Palette::Custom custom(const char *name,uint16_t accent) {
   Palette::Custom t;std::strncpy(t.name,name,Palette::Custom::MAX_NAME);
@@ -281,15 +282,24 @@ int main() {
     Buffer encoded;const auto length=encode(trial,"0.12.1-sticks3-test",encoded);
     Contents restored;assert(decode(encoded.data(),length,restored) && same(trial,restored));
   }
-  // The original reserved bytes are zero, so every legacy backup loads Top
-  // and Shake to wake On regardless of the destination's previous choice.
-  // Sidecar uses only byte 5 and Shake to wake Off (0.20.2) only byte 6.
+  // Shake to wake Off (byte 6, 0.20.2) and Battery icon Off (byte 7, 0.20.8)
+  // travel through it too.
+  for(bool shakeWake:{false,true})for(bool batteryIcon:{false,true}) {
+    auto trial=original;trial.settings.shakeWake=shakeWake;trial.settings.batteryIcon=batteryIcon;
+    Buffer encoded;const auto length=encode(trial,"0.20.8-sticks3-test",encoded);
+    Contents restored;assert(decode(encoded.data(),length,restored) && same(trial,restored));
+  }
+  // The original reserved bytes are zero, so every legacy backup loads Top,
+  // Shake to wake On and Battery icon On regardless of the destination's
+  // previous choice. Sidecar uses only byte 5, Shake to wake Off only byte 6
+  // and Battery icon Off only byte 7, each as 1.
   const size_t settingsBody=n-4-SETTINGS_BYTES;
   assert(buffer[settingsBody+5]==0 && buffer[settingsBody+6]==0 && buffer[settingsBody+7]==0);
-  decoded.settings.mount=MountOrientation::Mode::Sidecar;decoded.settings.shakeWake=false;
-  assert(decode(buffer.data(),n,decoded) && decoded.settings.mount==MountOrientation::Mode::Top && decoded.settings.shakeWake);
+  decoded.settings.mount=MountOrientation::Mode::Sidecar;decoded.settings.shakeWake=false;decoded.settings.batteryIcon=false;
+  assert(decode(buffer.data(),n,decoded) && decoded.settings.mount==MountOrientation::Mode::Top && decoded.settings.shakeWake &&
+         decoded.settings.batteryIcon);
   for(unsigned offset:{5u,6u,7u}) {
-    Buffer bad=buffer;bad[settingsBody+offset]=offset==7?1:2;
+    Buffer bad=buffer;bad[settingsBody+offset]=2;
     put32(bad.data()+n-4,checksum(bad.data(),n-4));
     auto retained=decoded;assert(!decode(bad.data(),n,decoded) && same(decoded,retained));
   }

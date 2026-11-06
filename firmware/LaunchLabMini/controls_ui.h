@@ -1,4 +1,5 @@
 #pragma once
+#include <cstring>
 #include "controls.h"
 #include "rpm_estimator.h"
 #include "sensor_profile.h"
@@ -13,13 +14,17 @@ namespace ControlsUI {
 static constexpr const char *MENU[]={"History","New session","Battery","Settings","Tournament","String wear check","Mic RPM","Back"};
 static constexpr const char *HISTORY[]={"Launches","Pull trend","Session trend","Back"};
 // By Controls::Setting value; the list shows them in Controls::ORDER.
-static constexpr const char *SETTINGS[]={"Sleep after","RPM method","Brightness","Flip display","Sensor profile","Theme","Best effect","Celebrate","Sound","Mounting","Shake to wake","Wipe all","Back"};
+static constexpr const char *SETTINGS[]={"Sleep after","RPM method","Brightness","Flip display","Sensor profile","Theme","Best effect","Celebrate","Sound","Mounting","Shake to wake","Wipe all","About","Battery icon","Back"};
 // Set by the UI owner before rendering: the visible theme's colors, the
-// names the Theme row shows (custom themes; the built-in names otherwise)
-// and the milestone table the Celebrate editor summarizes.
+// names the Theme row shows (custom themes; the built-in names otherwise),
+// the milestone table the Celebrate editor summarizes and the firmware's
+// runtime ("0.20.8-sticks3-songs-pm"), whose version the About row shows.
 static Palette::Colors colors=Themes::builtIn(Themes::FALLBACK);
 static const char *(*themeLabel)(Appearance::Theme)=nullptr;
 static const Milestones::Config *milestones=nullptr;
+static const char *runtime="";
+// The release number alone: the runtime up to its build name.
+inline int versionLength(const char *text){return int(strcspn(text,"-"));}
 inline void footer(lgfx::LGFXBase &g,const char *label) {
   g.fillRect(0,229,g.width(),11,colors.background);
   g.setTextDatum(top_center);g.setTextColor(colors.muted,colors.background);
@@ -53,12 +58,14 @@ inline void value(char *out,unsigned length,unsigned setting,unsigned value) {
     case Controls::Setting::Mount:snprintf(out,length,"%s",MountOrientation::label(MountOrientation::Mode(value)));break;
     case Controls::Setting::ShakeWake:snprintf(out,length,"%s",value?"On":"Off");break;
     case Controls::Setting::WipeAll:snprintf(out,length,"Erase device data");break;
+    case Controls::Setting::About:snprintf(out,length,"Firmware %.*s",versionLength(runtime),runtime);break;
+    case Controls::Setting::BatteryIcon:snprintf(out,length,"%s",value?"On":"Off");break;
   }
 }
 inline void settings(lgfx::LGFXBase &g,const Controls::State &state,const uint8_t *values) {
   heading(g,"Settings");char text[24];
   // Pages of five rows (Controls::ORDER): general, appearance, then
-  // Mounting, Wipe all and Back.
+  // Mounting, Battery icon, Wipe all, About and Back.
   const unsigned at=Controls::position(state.setting),first=at<5?0:at<10?5:10,last=std::min(first+4,Controls::SETTING_COUNT);
   for(unsigned p=first;p<=last;++p) {
     const unsigned i=Controls::rowAt(p);
@@ -66,10 +73,11 @@ inline void settings(lgfx::LGFXBase &g,const Controls::State &state,const uint8_
     if(i==state.setting)g.drawRoundRect(4,y-3,g.width()-8,30,4,colors.accent);
     g.setTextColor(i==state.setting?colors.accent:colors.text,colors.background);
     g.drawString(SETTINGS[i],g.width()/2,y,2);
-    if(i<Controls::SETTING_COUNT){value(text,sizeof(text),i,i<Controls::EDITABLE_SETTING_COUNT?values[i]:0);g.drawString(text,g.width()/2,y+18,1);}
+    if(i<Controls::SETTING_COUNT){value(text,sizeof(text),i,values[i]);g.drawString(text,g.width()/2,y+18,1);}
   }
   if(first<10){g.setTextColor(colors.muted,colors.background);g.drawString(first?"B Next: mounting":"B Next: appearance",g.width()/2,194,1);}
-  footer(g,state.setting==unsigned(Controls::Setting::WipeAll)?"A Open  B Next":state.setting<Controls::SETTING_COUNT?"A Edit  B Next":"A Back  B Next");
+  const bool opens=state.setting==unsigned(Controls::Setting::WipeAll) || state.setting==unsigned(Controls::Setting::About);
+  footer(g,opens?"A Open  B Next":state.setting<Controls::SETTING_COUNT?"A Edit  B Next":"A Back  B Next");
 }
 inline void editor(lgfx::LGFXBase &g,const Controls::State &state,bool failed,bool changedMetric) {
   heading(g,SETTINGS[state.setting]);char text[24];value(text,sizeof(text),state.setting,state.draft);
@@ -128,6 +136,33 @@ inline void hold(lgfx::LGFXBase &g,const char *label,unsigned elapsed,unsigned d
   footer(g,label);
   g.fillRect(4,225,int((g.width()-8)*std::min(elapsed,duration)/duration),2,colors.accent);
 }
+// The charge in the top right corner, as a phone shows it (Battery icon,
+// 0.20.8): an outline whose fill follows the charge, no percentage. The fill
+// takes the warning color at 20% or less, as the Battery page does, and the
+// ready color while charging; there is no icon without a fresh reading.
+struct CornerBattery {
+  static constexpr int RIGHT=24,TOP=2,WIDTH=18,HEIGHT=8,FILL=WIDTH-4;
+  enum Tone:uint8_t {Normal,Low,Charging};
+  uint8_t fill=0;  // columns of FILL; 0 draws nothing
+  Tone tone=Normal;
+  bool operator==(const CornerBattery &o)const{return fill==o.fill && tone==o.tone;}
+  bool operator!=(const CornerBattery &o)const{return !(*this==o);}
+};
+inline CornerBattery cornerBattery(bool valid,int percent,bool charging) {
+  CornerBattery b;
+  if(!valid || percent<0)return b;
+  b.fill=uint8_t(std::max(1,(std::min(percent,100)*CornerBattery::FILL+50)/100));
+  b.tone=charging?CornerBattery::Charging:percent<=20?CornerBattery::Low:CornerBattery::Normal;
+  return b;
+}
+inline void cornerBattery(lgfx::LGFXBase &g,CornerBattery b) {
+  using B=CornerBattery;
+  if(!b.fill)return;
+  const int x=g.width()-B::RIGHT;
+  g.drawRoundRect(x,B::TOP,B::WIDTH,B::HEIGHT,2,colors.muted);
+  g.fillRect(x+B::WIDTH,B::TOP+2,1,B::HEIGHT-4,colors.muted);  // the terminal
+  g.fillRect(x+2,B::TOP+2,b.fill,B::HEIGHT-4,b.tone==B::Charging?colors.ready:b.tone==B::Low?colors.warning:colors.text);
+}
 inline void battery(lgfx::LGFXBase &g,bool valid,int percent,unsigned millivolts,bool chargeKnown,bool charging) {
   const int cx=g.width()/2;
   g.setTextDatum(top_center);g.setTextColor(colors.text,colors.background);
@@ -145,6 +180,25 @@ inline void battery(lgfx::LGFXBase &g,bool valid,int percent,unsigned millivolts
   g.drawString(!chargeKnown?"Charge status unknown":charging?"Charging":"Not charging",cx,161,1);
   g.setTextColor(colors.muted,colors.background);
   footer(g,"A Done");
+}
+// What the unit runs, for an owner and for support: the firmware release and
+// its build, the unit's ID (its MAC, also its USB serial number) and how many
+// pulls its history holds.
+inline void about(lgfx::LGFXBase &g,const char *deviceId,unsigned pulls) {
+  const int cx=g.width()/2;
+  heading(g,"About");
+  const int length=versionLength(runtime);char line[32];
+  g.setTextColor(colors.muted,colors.background);g.drawString("Firmware",cx,38,1);
+  snprintf(line,sizeof(line),"%.*s",length,runtime);
+  g.setTextColor(colors.accent,colors.background);g.drawString(line,cx,52,4);
+  g.setTextColor(colors.faint,colors.background);g.drawString(runtime[length]?runtime+length+1:"",cx,82,1);
+  g.setTextColor(colors.muted,colors.background);g.drawString("Device ID",cx,108,1);
+  g.setTextColor(colors.text,colors.background);g.drawString(deviceId,cx,122,1);
+  g.setTextColor(colors.muted,colors.background);g.drawString("Pulls saved",cx,148,1);
+  snprintf(line,sizeof(line),"%u",pulls);
+  g.setTextColor(colors.text,colors.background);g.drawString(line,cx,162,2);
+  g.setTextColor(colors.muted,colors.background);g.drawString("launchlab.beywatch.gg",cx,200,1);
+  footer(g,"A Back");
 }
 inline void wipe(lgfx::LGFXBase &g,const WipeConfirmation &flow,uint32_t now,bool failed,bool blocked,bool complete) {
   heading(g,"Wipe all");

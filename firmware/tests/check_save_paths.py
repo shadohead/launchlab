@@ -72,6 +72,7 @@ prefix = r'''
 #include "brightness.h"
 #include "display_flip_setting.h"
 #include "shake_wake_setting.h"
+#include "battery_icon_setting.h"
 #include "display_orientation.h"
 #include "sensor_profile_setting.h"
 #include "start_mark_reference.h"
@@ -122,7 +123,8 @@ struct Prefs:Preferences {
 static uint8_t stored(const char *key){uint8_t value=0;assert(prefs.getBytes(key,&value,1)==1);return value;}
 struct {struct {unsigned brightness=0,rotation=0;void setBrightness(unsigned v){brightness=v;}void setRotation(unsigned v){rotation=v;}}Display;}M5;
 static Controls::State controls;static SettingsSave settingsSave;
-static bool motionPending=false,settingsSaveError=false,restorePreview=false,displayFlipped=false,dirty=false,extPower=false,shakeToWake=ShakeWakeSetting::DEFAULT_ON;
+static bool motionPending=false,settingsSaveError=false,restorePreview=false,displayFlipped=false,dirty=false,extPower=false,shakeToWake=ShakeWakeSetting::DEFAULT_ON,
+  batteryIcon=BatteryIconSetting::DEFAULT_ON;
 static bool saveError=false,wipeCheckpointHeld=false,orphanSeen=false;
 static uint8_t brightnessPercent=Brightness::DEFAULT_PERCENT;static uint32_t orphanSince=0;
 static constexpr uint32_t ORPHAN_CHECKPOINT_MS=1000,HISTORY_COALESCE_MS=10000,HISTORY_SAVE_RETRY_MS=5000;
@@ -191,6 +193,7 @@ static void boot() {
   assert(acquisition.initAdc());ownerPump=pump;acquisition.setRequestHook(quietImuForFlash);
   dropReplies=dropCommands=false;imuAcquisition={};controls={};settingsSave={};
   motionPending=settingsSaveError=restorePreview=displayFlipped=dirty=extPower=saveError=wipeCheckpointHeld=orphanSeen=false;shakeToWake=ShakeWakeSetting::DEFAULT_ON;
+  batteryIcon=BatteryIconSetting::DEFAULT_ON;
   brightnessPercent=Brightness::DEFAULT_PERCENT;orphanSince=lastSaveTry=saveCount=saveErrors=maxSaveUs=lastAcceptedAt=historyPendingSince=0;
   inactivity={};launchFeedback={};practice={};appearance={};personalBests={};
   rpmEstimator=RpmEstimator::DEFAULT_MODE;sensorProfile=StickS3SensorProfile::DEFAULT_MODE;
@@ -230,6 +233,19 @@ static void shakeWakeSave() {
   apply(unsigned(S::ShakeWake),1);passes(1000);assert(shakeToWake && !settingsSave.pending() && stored(ShakeWakeSetting::KEY)==1);
   freeEntries=158;
   std::cout<<"PASS: Shake to wake applies at once and saves its own key in the next checkpoint, never held back by the NVS reserve\n";
+}
+// Battery icon (0.20.8) the same way: Apply shows or hides the corner battery
+// at once and its own key follows in the next checkpoint.
+static void batteryIconSave() {
+  using S=Controls::Setting;
+  boot();freeEntries=0;apply(unsigned(S::BatteryIcon),0);
+  assert(!batteryIcon && SettingsSave::item(unsigned(S::BatteryIcon))==SettingsSave::BatteryIcon);
+  passes(1000);assert(!settingsSave.pending() && stored(BatteryIconSetting::KEY)==0 && running());
+  apply(unsigned(S::BatteryIcon),1);passes(1000);assert(batteryIcon && !settingsSave.pending() && stored(BatteryIconSetting::KEY)==1);
+  // Wipe all and About save nothing.
+  assert(!SettingsSave::item(unsigned(S::WipeAll)) && !SettingsSave::item(unsigned(S::About)));
+  freeEntries=158;
+  std::cout<<"PASS: Battery icon applies at once and saves its own key in the next checkpoint, never held back by the NVS reserve\n";
 }
 
 static void imuVeto() {
@@ -768,7 +784,7 @@ static void sensorFaultHistory() {
 
 main = r'''
 int main() {
-  freshEdgeAtApply();imuVeto();shakeWakeSave();applyDuringPull();lostReplies();usbDeviceSettings();shutdownFlush();startMarkSaves();themeRequests();milestoneRequests();milestoneImport();effectSetRequests();nvsReserve();historyLogSaves();historyLogNvsRefused();sensorFaultHistory();
+  freshEdgeAtApply();imuVeto();shakeWakeSave();batteryIconSave();applyDuringPull();lostReplies();usbDeviceSettings();shutdownFlush();startMarkSaves();themeRequests();milestoneRequests();milestoneImport();effectSetRequests();nvsReserve();historyLogSaves();historyLogNvsRefused();sensorFaultHistory();
 }
 '''
 

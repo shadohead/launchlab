@@ -69,6 +69,12 @@ public:
   // slot mode sends each sample on both slots, so the ES8311 sees no change).
   void configure() {
     auto c=M5.Speaker.config();c.task_pinned_core=1;c.stereo=false;M5.Speaker.config(c);
+    // Each request of a song the speaker's task has finished reading, and
+    // whether the channel holds another (set before any play, as M5 asks).
+    M5.Speaker.setBufferReleaseCallback(this,[](void *self,const void *,uint8_t channel) {
+      Music *music=static_cast<BestEffectSpeaker *>(self)->music_;
+      if(channel==MusicChannel::CHANNEL && music)music->released(!M5.Speaker.isPlaying(channel),uint32_t(esp_timer_get_time()/1000));
+    });
     configured_=M5.Speaker.isEnabled();
   }
   // Loaded effects' own sounds, once the store is open; without it every
@@ -138,7 +144,7 @@ public:
       M5.Speaker.setVolume(level==Appearance::Sound::High?HIGH_VOLUME:LOW_VOLUME);
       outputUs_=SoundSync::outputUs(M5.Speaker.isPlaying());
       if(!music_->start(file,bytes,uint32_t(skip),255,channel_))return false;
-      xTaskNotifyGive(musicTask_);playingIndex_=SOUNDS;++plays_;return true;
+      xTaskNotifyGive(musicTask_);playingIndex_=SOUNDS;++plays_;songStartMs_=uint32_t(esp_timer_get_time()/1000);return true;
     }
     if(level==Appearance::Sound::Off || !ready(s) || skip>=s.samples || !power())return false;
     M5.Speaker.setVolume(level==Appearance::Sound::High?HIGH_VOLUME:LOW_VOLUME);
@@ -159,8 +165,13 @@ public:
     if(music_ && music_->active())music_->fade(uint32_t(esp_timer_get_time()/1000));
     if(begun_ && M5.Speaker.isPlaying(0)){M5.Speaker.stop(0);++stops_;}
   }
+  // Whether the effect's sound is a song, streamed as it plays.
+  bool song(Appearance::Effect e)const{return source(e).stream;}
   // A song is playing (it outlives its effect's frames).
   bool streaming()const{return music_ && music_->active();}
+  // Whether the song started last has queued its first block, after its
+  // pre-roll, and when (ms, feedSong()'s clock): it is heard from then.
+  bool songBegun(uint32_t &atMs)const{if(!music_ || !music_->begun())return false;atMs=music_->begunAt();return true;}
   // Each loop pass: the song's next blocks to the speaker; the codec powers
   // down once silent, but never while a pull is measured.
   // The song's next blocks to the speaker: every loop pass, and between the
@@ -193,8 +204,12 @@ public:
     Serial.printf("SOUND_STATUS level=%s configured=%d buffers=%u evictions=%lu rendered=%s powered=%d playing=%d plays=%lu stops=%lu lock_misses=%lu render_us=%lu max_slice_us=%lu max_begin_us=%lu max_end_us=%lu loaded_rendered=%s codec_failures=%lu\n",
       Appearance::label(level),configured_,buffers,(unsigned long)evictions_,rendered,begun_,playing(),
       (unsigned long)plays_,(unsigned long)stops_,(unsigned long)lockMisses_,(unsigned long)renderUs_,(unsigned long)maxSliceUs_,(unsigned long)beginUs_,(unsigned long)endUs_,loaded,(unsigned long)codecFailures_);
-    Serial.printf("MUSIC_STATUS ready=%d streaming=%d fading=%d plays=%lu underruns=%lu played_blocks=%lu\n",music_!=nullptr,streaming(),
-      music_ && music_->fading(),(unsigned long)(music_?music_->plays():0),(unsigned long)(music_?music_->underruns():0),(unsigned long)(music_?music_->played():0));
+    // begin_ms: from the last song's start to its first block queued (its pre-roll);
+    // max_dry_ms: the longest its channel was empty with more to come.
+    uint32_t begun=0;const bool hasBegun=songBegun(begun);
+    Serial.printf("MUSIC_STATUS ready=%d streaming=%d fading=%d plays=%lu underruns=%lu played_blocks=%lu begin_ms=%lu max_dry_ms=%lu\n",music_!=nullptr,streaming(),
+      music_ && music_->fading(),(unsigned long)(music_?music_->plays():0),(unsigned long)(music_?music_->underruns():0),(unsigned long)(music_?music_->played():0),
+      (unsigned long)(hasBegun?begun-songStartMs_:0),(unsigned long)(music_?music_->maxDryMs():0));
   }
   static constexpr unsigned MAX_BUFFERS=12;
   // A buffer per built-in effect, then one per loaded slot.
@@ -253,6 +268,6 @@ private:
   BestEffectSound::Synth synth_{Appearance::Effect::Off,0};
   unsigned target_=SOUNDS;uint32_t targetKey_=0;size_t progress_=0;  // the sound being rendered and how far
   bool configured_=false,begun_=false;
-  uint32_t plays_=0,stops_=0,lockMisses_=0,renderUs_=0,maxSliceUs_=0,beginUs_=0,endUs_=0,outputUs_=0,codecFailures_=0;
+  uint32_t plays_=0,stops_=0,lockMisses_=0,renderUs_=0,maxSliceUs_=0,beginUs_=0,endUs_=0,outputUs_=0,codecFailures_=0,songStartMs_=0;
 };
 

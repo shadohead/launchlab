@@ -30,6 +30,7 @@ prefix=r'''
 #include "device_wipe.h"
 #include "display_flip_setting.h"
 #include "shake_wake_setting.h"
+#include "battery_icon_setting.h"
 #include "display_orientation.h"
 #include "sensor_profile_setting.h"
 #include "start_mark_reference.h"
@@ -64,7 +65,8 @@ static struct {void cancel(){}}restoreRx;
 static void beginWipe();static void cancelWipe();
 // The start-mark reference (its saves are checked by check_save_paths).
 static StartMarkReference::Reference startMarks;static bool startMarksDirty=false;static void loadStartMarks(){}static void saveStartMarks(){}
-static bool tournamentMode=false,historyPage=false,dirty=false,diagnostics=false,demo=false,motionDemo=false,motionPending=false,settingsSaveError=false,restorePreview=false,displayFlipped=false,shakeToWake=ShakeWakeSetting::DEFAULT_ON;
+static bool tournamentMode=false,historyPage=false,dirty=false,diagnostics=false,demo=false,motionDemo=false,motionPending=false,settingsSaveError=false,restorePreview=false,displayFlipped=false,shakeToWake=ShakeWakeSetting::DEFAULT_ON,
+  batteryIcon=BatteryIconSetting::DEFAULT_ON;
 static uint8_t brightnessPercent=Brightness::DEFAULT_PERCENT;
 static uint32_t historyOffset=0,newSessionAt=0,tournamentHintUntil=0;
 enum class TournamentView:uint8_t{RecordingOnly,Rpm};
@@ -152,6 +154,7 @@ prefix+='\n'+source[visible_start:source.index('}',visible_start)+1]+'\n'
 tests=r'''
 static void reset(){
   controls={};appearance={};appearanceStore={};bestEffect={};tournamentMode=historyPage=dirty=diagnostics=demo=motionDemo=motionPending=settingsSaveError=restorePreview=displayFlipped=false;shakeToWake=ShakeWakeSetting::DEFAULT_ON;
+  batteryIcon=BatteryIconSetting::DEFAULT_ON;
   gestureA={};gestureB={};wipeConfirmation={};wipeFailed=wipeBlocked=false;
   historyOffset=newSessionAt=tournamentHintUntil=0;historyView=PracticeUI::View::Recent;tournamentView=TournamentView::RecordingOnly;
   practice={};demoPractice={};latestMotion={};launchFeedback={};inactivity={};brightnessPercent=BRIGHT;rpmEstimator=RpmEstimator::DEFAULT_MODE;sensorProfile=StickS3SensorProfile::DEFAULT_MODE;
@@ -231,6 +234,12 @@ static void bootDefaults() {
    assert(!shakeToWake && Preferences::data==before && !prefs.writes && Serial.last.empty());}
   freshStore();assert(prefs.putUChar(ShakeWakeSetting::KEY,9)==1);{const auto before=Preferences::data;shakeToWake=false;boot();
    assert(shakeToWake && Preferences::data==before && !prefs.writes && Serial.last=="SHAKE_WAKE_SETTING_NOTICE invalid_saved_value_retained_using_on");}
+  // Battery icon (0.20.8), the same way: On with no saved choice.
+  freshStore();batteryIcon=false;boot();assert(batteryIcon && Preferences::data.empty() && !prefs.writes);
+  freshStore();assert(prefs.putUChar(BatteryIconSetting::KEY,0)==1);{const auto before=Preferences::data;batteryIcon=true;boot();
+   assert(!batteryIcon && Preferences::data==before && !prefs.writes && Serial.last.empty());}
+  freshStore();assert(prefs.putUChar(BatteryIconSetting::KEY,7)==1);{const auto before=Preferences::data;batteryIcon=false;boot();
+   assert(batteryIcon && Preferences::data==before && !prefs.writes && Serial.last=="BATTERY_ICON_SETTING_NOTICE invalid_saved_value_retained_using_on");}
   // Invalid records: the defaults are used, the bytes are kept and each
   // notice names the default it fell back to.
   for(uint8_t percent:{0,5,45,110,255}) {

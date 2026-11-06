@@ -33,6 +33,9 @@ cue_start = source.index("  if(!tournamentMode && !diagnostics && !historyPage &
 cue_end = source.index("  launchFeedback.replayPresented(", cue_start)
 cue = source[cue_start:cue_end]
 deadline = re.search(r"static constexpr uint32_t SOUND_LATE_MS=\d+;", source)[0]
+# 0.20.8: a song's effect waits for its first block (absent from an older --sketch).
+song_cue = re.search(r"static Appearance::Celebration \*songCue=nullptr;[^\n]*\n.*?SONG_HOLD_MS=\d+;", source, re.S)
+song_cue = song_cue[0] if song_cue else ""
 # Reproduce normal capture/sound/draw order. The locked wipe branch renders
 # only its confirmation/recovery screen and returns before this path.
 loop = source[source.index("void loop() {"):]
@@ -93,6 +96,8 @@ struct SpeakerPeripheral {
   void stop(){playing=false;++stops;}
   void stop(uint8_t){stop();}
   void setChannelVolume(uint8_t,uint8_t){}
+  // The music channel's releases are not modelled here (test_music_stream does).
+  void setBufferReleaseCallback(void *,void (*)(void *,const void *,uint8_t)){}
 };
 // The internal I2C bus: the codec writes the speaker makes after end().
 struct InternalI2C {
@@ -119,6 +124,7 @@ static void xTaskNotifyGive(TaskHandle_t){}
 static void updateStartFloor(){}
 // The speaker's music channel: holds up to two blocks until the test plays them.
 struct MusicChannel:MusicOutput {
+  static constexpr uint8_t CHANNEL=1;
   static inline unsigned held=0,queuedBlocks=0,stops=0;static inline int lastVolume=-1;
   unsigned queued() override{return held;}
   bool queue(const int16_t *,size_t) override{if(held>=2)return false;++held;++queuedBlocks;return true;}
@@ -490,6 +496,29 @@ int main() {
     run(1,Snapshot{AnalogTachometer::Phase::Launch});assert(stream.fading() && soundPlayer.streaming());
     run(6,Snapshot{AnalogTachometer::Phase::Launch});
     assert(!soundPlayer.streaming() && MusicChannel::stops==stops+1 && MusicChannel::lastVolume<255);
+    // 0.20.8: a song is heard from its first block, queued after its
+    // pre-roll, so its celebration's effect holds its first frame until
+    // then and lines up with it there (SoundSync), not at play().
+    auto celebrate=[&]{
+      reset(Effect::Orbit);soundPlayer.attach(&songs);soundPlayer.attachMusic(&stream,nullptr);MusicChannel::held=0;
+      bestEffect.queue(true,1,mine);bestEffect.captured(1);bestEffect.presented(millis());assert(bestEffect.takeCue());
+      soundRequest.active=true;soundRequest.celebration=true;soundRequest.effect=mine;soundRequest.level=Appearance::Sound::Low;
+      const uint32_t from=bestEffect.startedAt();startSound(false);
+      assert(soundPlayer.streaming() && bestEffect.elapsed(millis())==0);
+      return from;
+    };
+    const uint32_t from=celebrate(),played=millis();
+    for(unsigned i=0;i<20 && !stream.begun();++i) {
+      assert(bestEffect.elapsed(millis())==0);  // its first frame, held
+      stream.step([]{return 0u;});hostUs+=4000;tickSound(Snapshot{});
+    }
+    assert(stream.begun() && stream.begunAt()>played && stream.blocks()>=Music::PREROLL);
+    const uint32_t at=SoundSync::clockStart(stream.begunAt(),soundPlayer.outputUs(),presentLagUs);
+    assert(bestEffect.startedAt()==at && soundShiftMs==int32_t(at-from));
+    // A song stopped before its first block lets its effect move on at once.
+    celebrate();soundPlayer.stop();tickSound(Snapshot{});
+    assert(!soundPlayer.streaming() && bestEffect.startedAt()==millis());
+    soundPlayer.stop();bestEffect.clear();
     // Without the streamer a song effect sounds as its stock fallback.
     soundPlayer.attachMusic(nullptr,nullptr);M5.Speaker.playing=false;
     Appearance::loadedHooks().fallback=[](unsigned){return unsigned(Effect::Sparkles);};
@@ -500,11 +529,11 @@ int main() {
   // These buffers live for the firmware lifetime; release fake allocations
   // here so the host harness can also use leak detection.
   for(auto p:allocations)if(p)std::free(p);
-  std::cout<<"PASS: every effect's sound within "<<int(std::ceil(worstOffsetMs))<<" ms of its frames (celebration, USB preview, editor preview after another, celebration into a playing sound, late start); production Random/PB/hidden/cancel selection, first-frame cues, six USB preview sounds, milestone sounds rendered ahead, a bounded least-recently-used sound cache, actual Best effect/Sound editor helpers, real sliced synth/speaker buffer, pull/close cancellation, late deadline and timer wrap, a streamed song outliving its frames and fading on a pull\n";
+  std::cout<<"PASS: every effect's sound within "<<int(std::ceil(worstOffsetMs))<<" ms of its frames (celebration, USB preview, editor preview after another, celebration into a playing sound, late start); production Random/PB/hidden/cancel selection, first-frame cues, six USB preview sounds, milestone sounds rendered ahead, a bounded least-recently-used sound cache, actual Best effect/Sound editor helpers, real sliced synth/speaker buffer, pull/close cancellation, late deadline and timer wrap, a streamed song outliving its frames and fading on a pull, a song's effect held until its first block and lined up there\n";
 }
 '''
 names = ["milestonePicks", "nextMilestonePick", "upcoming", "celebrationEffect", "soundTarget", "requestSound", "startSound", "tickSound", "prepareMotion", "previewBestEffect", "previewEffect", "previewSound"]
-code = prefix + speaker + state + deadline + "\n".join(function(source, name) for name in names)
+code = prefix + speaker + state + deadline + "\n" + song_cue + "\n" + "\n".join(function(source, name) for name in names)
 code += "\nstatic void presentFrame(){\n" + cue + "}\n" + tests
 with tempfile.TemporaryDirectory(prefix="launchlab-best-sound-") as temporary:
     build = Path(temporary)

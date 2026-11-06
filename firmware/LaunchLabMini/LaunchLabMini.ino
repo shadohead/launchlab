@@ -1,6 +1,7 @@
 #include <M5Unified.h>
 #include <Preferences.h>
 #include <memory>
+#include "esp_mac.h"
 #include "acquisition.h"
 #include "level_indicator.h"
 #include "practice_store.h"
@@ -46,6 +47,7 @@ namespace Lab {inline PowerLab::Knobs knobs;inline bool running=false,displayAsl
 #include "brightness.h"
 #include "display_flip_setting.h"
 #include "shake_wake_setting.h"
+#include "battery_icon_setting.h"
 #include "display_orientation.h"
 #include "sensor_profile_setting.h"
 #include "start_mark_reference.h"
@@ -77,11 +79,11 @@ namespace Lab {inline PowerLab::Knobs knobs;inline bool running=false,displayAsl
 #define LOOP_HELPER __attribute__((noinline))
 #if LAUNCHLAB_HIL
 // Test-only hardware-in-the-loop build; never a release. See tools/hil.
-static constexpr char VERSION[] = "0.20.7-sticks3-songs-hil-pm";
+static constexpr char VERSION[] = "0.20.8-sticks3-songs-hil-pm";
 #elif LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = "0.20.7-sticks3-songs-pm";
+static constexpr char VERSION[] = "0.20.8-sticks3-songs-pm";
 #else
-static constexpr char VERSION[] = "0.20.7-sticks3-songs";
+static constexpr char VERSION[] = "0.20.8-sticks3-songs";
 #endif
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ
@@ -210,6 +212,9 @@ static uint8_t brightnessPercent=Brightness::DEFAULT_PERCENT;
 static bool displayFlipped=false;
 // Shake to wake (0.20.2, shake_wake_setting.h): whether an inactivity sleep arms the IMU wake.
 static bool shakeToWake=ShakeWakeSetting::DEFAULT_ON;
+// Battery icon (0.20.8, battery_icon_setting.h): the charge in the screens' top right corner.
+static bool batteryIcon=BatteryIconSetting::DEFAULT_ON;
+static ControlsUI::CornerBattery drawnCornerBattery;  // as last drawn
 static RpmEstimator::Mode rpmEstimator=RpmEstimator::DEFAULT_MODE;
 static StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;
 static MountOrientation::Mode mountMode=MountOrientation::Mode::Top;
@@ -265,6 +270,11 @@ static int64_t effectReadUs=0;static uint32_t presentLagUs=15000;
 static int32_t soundShiftMs=0;static uint32_t soundSkipped=0;
 // A celebration sound that cannot start within this long after its effect is dropped.
 static constexpr uint32_t SOUND_LATE_MS=300;
+// A song is heard from its first block, queued once its pre-roll is rendered
+// (music_stream.h, 30-95 ms after it starts): its effect holds its first
+// frame until then, this long at most, and tickSound() lines it up.
+static Appearance::Celebration *songCue=nullptr;static uint32_t songCueFrom=0;
+static constexpr uint32_t SONG_HOLD_MS=500;
 static void requestSound(Appearance::Effect effect,Appearance::Sound level,bool celebration);static void startSound(bool late);
 static const char *milestoneStoreName();static const char *effectSetFields();
 static Appearance::Effect celebrationEffect();static Appearance::Effect soundTarget();
@@ -388,7 +398,8 @@ static void syncNavigation() {
   historyPage=controls.page!=Controls::Page::Main && !tournamentMode;
   if(controls.page==Controls::Page::History)historyView=PracticeUI::View(controls.history);
   else if(controls.page==Controls::Page::Battery)historyView=PracticeUI::View::Battery;
-  else if(controls.page==Controls::Page::Settings || controls.page==Controls::Page::Edit || controls.page==Controls::Page::Wipe)historyView=PracticeUI::View::Settings;
+  else if(controls.page==Controls::Page::Settings || controls.page==Controls::Page::Edit || controls.page==Controls::Page::Wipe ||
+          controls.page==Controls::Page::About)historyView=PracticeUI::View::Settings;
   dirty=true;
 }
 static int64_t wallUs(){timeval t;gettimeofday(&t,nullptr);return int64_t(t.tv_sec)*1000000+t.tv_usec;}
@@ -568,8 +579,8 @@ LOOP_HELPER static void status() {
   soundPlayer.feedSong();
   Serial.printf("SOUND_SYNC present_lag_us=%lu output_us=%lu clock_shift_ms=%ld skipped_samples=%lu\n",(unsigned long)presentLagUs,
     (unsigned long)soundPlayer.outputUs(),(long)soundShiftMs,(unsigned long)soundSkipped);
-  Serial.printf("UI_STATUS page=%u menu=%u history=%u setting=%u draft=%u recording=%s\n",
-    unsigned(controls.page),controls.menu,controls.history,controls.setting,controls.draft,
+  Serial.printf("UI_STATUS page=%u menu=%u history=%u setting=%u draft=%u battery_icon=%d corner_fill=%u recording=%s\n",
+    unsigned(controls.page),controls.menu,controls.history,controls.setting,controls.draft,batteryIcon,unsigned(drawnCornerBattery.fill),
     s.resting?"idle_paused":LAUNCHLAB_MOTION_ADC_GATE?"motion_gated":"always");
   soundPlayer.feedSong();
   Serial.printf("PERF acquisition_core=0 ui_core=%d processing_pct=%.2f max_batch_us=%lu frame_budget_us=%lu max_read_gap_us=%lu stack_free=%lu invalid_frames=%lu lost_events=%lu adc_stalls=%lu max_draw_us=%lu max_effect_us=%lu ui_stalls=%lu stress=%d heap_free=%lu psram_free=%lu usb_drain_timeouts=%lu usb_rejected_commands=%lu frames=%lu whole_frames=%lu unchanged_frames=%lu pushed_rows=%lu row_hashes=%d adc_retimes=%lu\n",
@@ -715,6 +726,15 @@ LOOP_HELPER static void pollUsbAwake(uint32_t now,const Snapshot &s,bool force=f
   }
 }
 
+// The corner battery (Battery icon) on the Menu and Settings pages
+// (Controls::showsCornerBattery), never over the tournament or the
+// diagnostics. Editing the row previews the choice.
+static ControlsUI::CornerBattery cornerBattery(uint32_t now) {
+  const bool editing=controls.page==Controls::Page::Edit && controls.setting==unsigned(Controls::Setting::BatteryIcon);
+  const bool shown=(editing?bool(controls.draft):batteryIcon) && !tournamentMode && !diagnostics && Controls::showsCornerBattery(controls.page);
+  return shown?ControlsUI::cornerBattery(battery.valid(now),battery.percent,battery.charging):ControlsUI::CornerBattery{};
+}
+
 LOOP_HELPER static void pollBattery(uint32_t now,const Snapshot &s) {
   if(s.phase==AnalogTachometer::Phase::Launch || (batteryPolled && now-lastBatteryPoll<5000))return;
   if(!imuAcquisition.lock())return;
@@ -730,7 +750,7 @@ LOOP_HELPER static void pollBattery(uint32_t now,const Snapshot &s) {
   imuAcquisition.unlock();
   battery.update(mv,voltageRead,chargeRead,bits,now);
   maxBatteryPollUs=std::max(maxBatteryPollUs,uint32_t(esp_timer_get_time()-started));
-  if(historyPage && historyView==PracticeUI::View::Battery)dirty=true;
+  if((historyPage && historyView==PracticeUI::View::Battery) || cornerBattery(now)!=drawnCornerBattery)dirty=true;
 }
 
 LOOP_HELPER static void tickDisplayPower(uint32_t now,const Snapshot &s) {
@@ -767,6 +787,12 @@ LOOP_HELPER static void tickDisplayPower(uint32_t now,const Snapshot &s) {
 static void drawBattery(lgfx::LGFXBase &g,uint32_t now) {
   ControlsUI::battery(g,battery.valid(now),battery.percent,battery.millivolts,battery.chargeKnown,battery.charging);
 }
+// The unit's ID is its factory MAC, which is also its USB serial number.
+static void drawAbout(lgfx::LGFXBase &g) {
+  uint8_t mac[6]={};char id[18]="--";
+  if(esp_efuse_mac_get_default(mac)==ESP_OK)snprintf(id,sizeof(id),"%02X:%02X:%02X:%02X:%02X:%02X",mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
+  ControlsUI::about(g,id,practice.size());
+}
 
 // The applied value of each editable Settings row, in Controls::Setting order.
 static uint8_t settingValue(unsigned row) {
@@ -783,13 +809,14 @@ static uint8_t settingValue(unsigned row) {
     case S::Sound:return uint8_t(appearance.sound);
     case S::Mount:return uint8_t(mountMode);
     case S::ShakeWake:return uint8_t(shakeToWake);
-    case S::WipeAll:break;
+    case S::BatteryIcon:return uint8_t(batteryIcon);
+    case S::WipeAll:case S::About:break;
   }
   return 0;
 }
 static void drawSettings(lgfx::LGFXBase &g) {
-  uint8_t values[Controls::EDITABLE_SETTING_COUNT];
-  for(unsigned i=0;i<Controls::EDITABLE_SETTING_COUNT;++i)values[i]=settingValue(i);
+  uint8_t values[Controls::SETTING_COUNT];
+  for(unsigned i=0;i<Controls::SETTING_COUNT;++i)values[i]=settingValue(i);
   ControlsUI::settings(g,controls,values);
 }
 
@@ -857,6 +884,7 @@ LOOP_HELPER static void draw(const Snapshot &s) {
   const int64_t started=esp_timer_get_time();
   const Palette::Colors colors=ui();
   ControlsUI::colors=colors;ControlsUI::themeLabel=[](Appearance::Theme t){return themeLibrary.label(t);};ControlsUI::milestones=&milestones;
+  ControlsUI::runtime=VERSION;
   const uint32_t replayFrameElapsed=launchFeedback.replayElapsed(millis());
   const bool replayWasStarted=launchFeedback.replayStarted();
   auto &view=screenReady?static_cast<lgfx::LGFXBase &>(screen):static_cast<lgfx::LGFXBase &>(M5.Display);
@@ -892,6 +920,7 @@ LOOP_HELPER static void draw(const Snapshot &s) {
         break;
       case Controls::Page::NewSession:ControlsUI::session(view,controls.startSession);break;
       case Controls::Page::Battery:drawBattery(view,millis());break;
+      case Controls::Page::About:drawAbout(view);break;
       case Controls::Page::Wipe:ControlsUI::wipe(view,wipeConfirmation,millis(),wipeFailed,wipeBlocked,wipeComplete);break;
       case Controls::Page::MicRpm:
         MicView::draw(view,micListener.trace(),micPageState(),colors);
@@ -951,6 +980,7 @@ LOOP_HELPER static void draw(const Snapshot &s) {
     ControlsUI::hold(view,tournamentMode?"Exit tournament":"Enter tournament",now-M5.BtnA.lastChange(),1000);
   else if(M5.BtnB.isPressed() && !gestureB.consumed && (controls.page!=Controls::Page::Main || launchFeedback.shown()) && !tournamentMode)
     ControlsUI::hold(view,controls.page==Controls::Page::Edit?"Cancel change":"Back",now-M5.BtnB.lastChange(),1000);
+  drawnCornerBattery=cornerBattery(now);ControlsUI::cornerBattery(view,drawnCornerBattery);
   // An internal canvas is pushed by DMA, which endWrite does not wait for.
   // Wait so the transfer stays inside the boundary marks and the next frame
   // cannot overwrite pixels still being sent.
@@ -1209,8 +1239,10 @@ LOOP_HELPER static void startSound(bool late) {
   if(late && synced && soundPlayer.power())
     skip=SoundSync::skipSamples(millis(),soundPlayer.nextOutputUs(),presentLagUs,shown.startedAt(),BestEffectSound::RATE);
   const bool started=soundPlayer.play(soundRequest.effect,soundRequest.level,skip);
-  if(started){soundSkipped=uint32_t(skip);soundShiftMs=0;}
-  if(started && synced && !late) {
+  if(started){soundSkipped=uint32_t(skip);soundShiftMs=0;songCue=nullptr;}
+  if(started && synced && !late && soundPlayer.song(soundRequest.effect)) {
+    songCue=&shown;songCueFrom=shown.startedAt();shown.align(millis()+SONG_HOLD_MS);
+  } else if(started && synced && !late) {
     const uint32_t at=SoundSync::clockStart(millis(),soundPlayer.outputUs(),presentLagUs);
     soundShiftMs=int32_t(at-shown.startedAt());shown.align(at);
   }
@@ -1264,6 +1296,7 @@ static void writeSettings() {
   if((items&SettingsSave::Brightness) && prefs.putUChar(Brightness::KEY,brightnessPercent)==1)saved|=SettingsSave::Brightness;
   if((items&SettingsSave::Flip) && DisplayFlipSetting::save(prefs,displayFlipped))saved|=SettingsSave::Flip;
   if((items&SettingsSave::ShakeWake) && ShakeWakeSetting::save(prefs,shakeToWake))saved|=SettingsSave::ShakeWake;
+  if((items&SettingsSave::BatteryIcon) && BatteryIconSetting::save(prefs,batteryIcon))saved|=SettingsSave::BatteryIcon;
   if(items&SettingsSave::Mount) {
     bool current=liveMount==mountMode;
     if(!current && imuAcquisition.setMount(mountMode)) {
@@ -1310,6 +1343,7 @@ static void commitSetting() {
     case Controls::Setting::Brightness:changed=value!=brightnessPercent;brightnessPercent=value;break;
     case Controls::Setting::Flip:changed=bool(value)!=displayFlipped;displayFlipped=value;break;
     case Controls::Setting::ShakeWake:changed=bool(value)!=shakeToWake;shakeToWake=value;break;
+    case Controls::Setting::BatteryIcon:changed=bool(value)!=batteryIcon;batteryIcon=value;break;
     case Controls::Setting::Sensor:
       applied=StickS3SensorProfile::valid(value);changed=applied && StickS3SensorProfile::Mode(value)!=sensorProfile;
       if(changed)sensorProfile=StickS3SensorProfile::Mode(value);
@@ -1338,7 +1372,7 @@ static void commitSetting() {
       if(changed)milestones=next;
       break;
     }
-    case Controls::Setting::WipeAll:applied=false;break; // Erasure never uses Apply or draft values.
+    case Controls::Setting::WipeAll:case Controls::Setting::About:applied=false;break; // Neither has an editor.
   }
   settingsSaveError=!applied;
   Serial.printf("SETTING_APPLY row=%u value=%u applied=%d changed=%d\n",controls.setting,value,applied,changed);
@@ -1956,7 +1990,7 @@ LOOP_HELPER static void exportBackup() {
   if(!contents){Serial.println("BACKUP_ERROR out_of_memory");return;}
   contents->practice=practice;contents->look=appearance;contents->bests=personalBests;
   contents->hasMotion=referenceMotion.valid();if(contents->hasMotion)contents->motion=referenceMotion;
-  contents->settings={inactivity.minutes(),brightnessPercent,rpmEstimator,sensorProfile,displayFlipped,mountMode,shakeToWake};
+  contents->settings={inactivity.minutes(),brightnessPercent,rpmEstimator,sensorProfile,displayFlipped,mountMode,shakeToWake,batteryIcon};
   contents->hasThemes=!themeLibrary.empty();contents->themes=themeLibrary;
   contents->hasMilestones=!milestones.isDefault();contents->milestones=milestones;
   contents->hasEffectSet=!effectSet.isDefault();contents->effectSet=effectSet;
@@ -2021,7 +2055,7 @@ LOOP_HELPER static void finishRestore(const Snapshot &s) {
     prefs.putUChar("sleep_min",settings.sleepMinutes)==1 && prefs.putUChar(Brightness::KEY,settings.brightness)==1 &&
     RpmEstimatorSetting::save(prefs,settings.rpmMethod) && SensorProfileSetting::save(prefs,settings.sensorProfile) &&
     DisplayFlipSetting::save(prefs,settings.flipped) && MountOrientationSetting::save(prefs,settings.mount) &&
-    ShakeWakeSetting::save(prefs,settings.shakeWake) &&
+    ShakeWakeSetting::save(prefs,settings.shakeWake) && BatteryIconSetting::save(prefs,settings.batteryIcon) &&
     (!contents->hasThemes || themeStore.save(contents->themes,true)) &&
     (!contents->hasMilestones || milestoneStore.save(contents->milestones)) &&
     (!contents->hasEffectSet || effectSetStore.saveViewed(contents->effectSet));
@@ -2679,6 +2713,7 @@ void setup() {
   if(!Brightness::load(prefs,brightnessPercent))
     Serial.printf("BRIGHTNESS_SETTING_NOTICE invalid_saved_value_using_default_pct=%u\n",unsigned(Brightness::DEFAULT_PERCENT));
   if(!ShakeWakeSetting::load(prefs,shakeToWake))Serial.println("SHAKE_WAKE_SETTING_NOTICE invalid_saved_value_retained_using_on");
+  if(!BatteryIconSetting::load(prefs,batteryIcon))Serial.println("BATTERY_ICON_SETTING_NOTICE invalid_saved_value_retained_using_on");
   if(!DisplayFlipSetting::load(prefs,displayFlipped))Serial.println("DISPLAY_SETTING_NOTICE invalid_record_retained_using_flip_off_default");
   if(!MountOrientationSetting::load(prefs,mountMode))Serial.println("MOUNT_SETTING_NOTICE invalid_record_retained_using_top_default");
   liveMount=mountMode;
@@ -2794,6 +2829,13 @@ LOOP_HELPER static void tickSound(const Snapshot &s) {
     soundRequest.active=false;
   if(!soundPlayer.playing())celebrationSound=soundPreview=false;
   soundPlayer.tick(measuring || motionPending);
+  // A song's effect moves on with the song's first block (startSound), or
+  // at once if the song stopped before it began.
+  uint32_t begunMs=0;
+  if(songCue && soundPlayer.songBegun(begunMs)) {
+    const uint32_t at=SoundSync::clockStart(begunMs,soundPlayer.outputUs(),presentLagUs);
+    soundShiftMs=int32_t(at-songCueFrom);songCue->align(at);songCue=nullptr;
+  } else if(songCue && !soundPlayer.streaming()){songCue->align(millis());songCue=nullptr;}
 #if LAUNCHLAB_HIL
   hilFeedProbe(soundPlayer.streaming(),hilStatusRuns,saveCount,lastDraw);
 #endif

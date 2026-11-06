@@ -54,13 +54,15 @@ int main() {
   using namespace Controls;unsigned renders=0;
   for(unsigned row=0;row<MENU_COUNT;++row){lgfx::LGFXBase g;ControlsUI::list(g,"Menu",ControlsUI::MENU,MENU_COUNT,row);assert(g.footers==1);++renders;}
   for(unsigned row=0;row<4;++row){lgfx::LGFXBase g;ControlsUI::list(g,"History",ControlsUI::HISTORY,4,row);assert(g.footers==1);++renders;}
-  uint8_t values[]={10,0,100,1,0,0,0,2,2,0,1};
+  uint8_t values[]={10,0,100,1,0,0,0,2,2,0,1,0,0,1};
+  static_assert(sizeof(values)==SETTING_COUNT,"a value for every row");
   for(unsigned row=0;row<=SETTING_COUNT;++row){lgfx::LGFXBase g;State state;state.setting=row;ControlsUI::settings(g,state,values);assert(g.footers==1);++renders;}
   // Lowest and highest draft for each setting. A named array keeps the values
   // alive for the loop; a conditional initializer_list would dangle.
-  const unsigned extremes[][2]={{1,10},{0,1},{10,100},{0,1},{0,1},{0,Appearance::THEMES-1},{0,Appearance::EFFECTS-1},{0,2},{0,2},{0,1},{0,1}};
-  static_assert(sizeof(extremes)/sizeof(extremes[0])>=EDITABLE_SETTING_COUNT,"one range per editable setting");
-  for(unsigned row=0;row<EDITABLE_SETTING_COUNT;++row)for(unsigned value:extremes[row]) {
+  const unsigned extremes[][2]={{1,10},{0,1},{10,100},{0,1},{0,1},{0,Appearance::THEMES-1},{0,Appearance::EFFECTS-1},{0,2},{0,2},{0,1},{0,1},
+    {0,0},{0,0},{0,1}};  // Wipe all and About have no editor
+  static_assert(sizeof(extremes)/sizeof(extremes[0])==SETTING_COUNT,"one range per setting");
+  for(unsigned row=0;row<SETTING_COUNT;++row)if(editable(row))for(unsigned value:extremes[row]) {
     lgfx::LGFXBase g;State state;state.setting=row;state.draft=value;
     ControlsUI::editor(g,state,true,row==1 || row==4);
     assert(g.footers==1 && g.cycleHints==1);
@@ -119,6 +121,21 @@ int main() {
     ControlsUI::milestones=nullptr;
   }
   for(bool start:{false,true}){lgfx::LGFXBase g;ControlsUI::session(g,start);assert(g.footers==1);++renders;}
+  // The corner battery (Battery icon, 0.20.8): its fill follows the charge,
+  // a sliver even at 0%, the warning color at 20% or less as on the Battery
+  // page, the ready color while charging, and nothing without a reading.
+  {
+    using ControlsUI::CornerBattery;using ControlsUI::cornerBattery;
+    assert(cornerBattery(false,72,false).fill==0 && cornerBattery(true,-1,true).fill==0 && cornerBattery(false,72,false)==CornerBattery{});
+    assert(cornerBattery(true,0,false).fill==1 && cornerBattery(true,100,false).fill==CornerBattery::FILL && cornerBattery(true,140,false).fill==CornerBattery::FILL);
+    assert(cornerBattery(true,72,false).fill==10 && cornerBattery(true,72,false).tone==CornerBattery::Normal);
+    assert(cornerBattery(true,20,false).tone==CornerBattery::Low && cornerBattery(true,21,false).tone==CornerBattery::Normal);
+    assert(cornerBattery(true,15,true).tone==CornerBattery::Charging && cornerBattery(true,15,true)!=cornerBattery(true,15,false));
+    for(int percent=0;percent<=100;++percent)for(bool charging:{false,true}) {
+      const auto b=cornerBattery(true,percent,charging);assert(b.fill>=1 && b.fill<=CornerBattery::FILL);
+      lgfx::LGFXBase g;ControlsUI::cornerBattery(g,b);++renders;  // every rectangle on screen
+    }
+  }
   {
     WearCheck::Session wear;
     const WearCheck::Tilt tilts[]={
