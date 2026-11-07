@@ -1,8 +1,8 @@
 # LaunchLab for M5StickS3
 
-Current revision: **0.20.5-sticks3-songs-pm**, the recommended stable release, for **M5StickS3 K150 (ESP32-S3, 8 MB flash / 8 MB OPI PSRAM)**.
+Current revision: **0.20.8-sticks3-songs-pm**, the recommended stable release, for **M5StickS3 K150 (ESP32-S3, 8 MB flash / 8 MB OPI PSRAM)**.
 One application supports analog QRE1113 and TCRT5000 through the saved Sensor profile setting.
-See [build context](../../docs/FIRMWARE_0.20.5.md) and [release notes](../releases/0.20.5-sticks3-songs-pm/README.md).
+See [build context](../../docs/FIRMWARE_0.20.8.md) and [release notes](../releases/0.20.8-sticks3-songs-pm/README.md).
 
 Tilt replay is reliable on hard pulls: the accelerometer uses its ±16 g range, and every IMU sample is read from the BMI270 FIFO, so the live level and recordings no longer drop out at rest or during saves. A pull that reaches the gyro's 2000 °/s limit keeps its replay, marked **Tilt approx.**
 A single click of the side power key saves pending pulls and powers off.
@@ -11,6 +11,9 @@ RPM detection treats the cord rewind after a pull as part of that pull, confirms
 Filtered movement renews the 30-second unused shake-wake timer. Stillness also enables RESTING, which pauses ADC sampling until movement or a button resumes it. The shared sensor supply remains powered. USB keeps the device awake.
 0.20.4 adds String wear check under Menu: pull out, hold until LET GO, then let go, and it measures the retraction, never the pull out, reading the launcher's tilt in the selected Mounting (Top or Sidecar). 0.20.3 introduced it as Wear check.
 0.20.5's recap graphs each pull's RPM turn by turn, from the gear starting through the peak to the end, in place of the Start/End level dots; after a pull the tilt replay plays twice, and A on Main opens the recap looping until A again or a pull.
+0.20.6 fixes four ways a unit could stay awake until its battery ran flat (movement after use, a refused save at power-off, steady optical marks and a held button): a used unit now sleeps at most 5 minutes after its last use even while it moves, the standby leaves the green LED off, and the speaker is powered down after every sound.
+0.20.7 adds Mic RPM on the Menu: while the page is open, the built-in mic plots the RPM heard from the spin after each pull beside the optical peak, and the speaker stays muted.
+0.20.8 adds Settings → About (the firmware, the unit's ID and its saved pulls) and a battery icon in the top right corner of the Menu and Settings, with no percentage (Settings → Battery icon turns it off), and plays songs without gaps.
 0.20.2 sleeps after 1 minute by default on a unit that never chose (a chosen Sleep after time is kept) and adds a Shake to wake setting: On, the default, wakes on a shake as before; Off sleeps more deeply and only the side key wakes it.
 0.20.1 reads RPM accurately at high speed, plays songs for at most 6 s like a celebration, and while a sound plays a pull must start with marks at least half as strong as your recent pulls, so speaker noise cannot start one.
 0.20.0 lets an added celebration effect carry a song made from a MIDI file in the [website effects library](https://launchlab.beywatch.gg/effects), with new voices and a drum bank; a song fades out when a pull starts.
@@ -46,8 +49,8 @@ Measurement runs on every screen while active. After 30 seconds of stillness, RE
 
 - **Main:** A shows the latest launch recap; B opens the menu. Hold A for one second to enter tournament mode.
 - **Menus:** A opens or applies the highlighted item; B moves to the next choice; hold B goes back one level or cancels an edit. Every list has a Back choice.
-- **Menu items:** History, New session, Battery, Settings, Tournament and Back. History offers Launches, Pull trend and Session trend. New session starts on the next accepted pull and keeps earlier launches.
-- **Settings:** Sleep after, Shake to wake, RPM method, Brightness, Sensor profile, Flip display, Theme, Best effect, Celebrate, Sound, Mounting and Wipe all, five rows to a page. In an editor the value is centred, with a faint `B next option ->` hint beneath it: B cycles the value, A applies, hold B cancels.
+- **Menu items:** History, New session, Battery, Settings, Tournament, String wear check, Mic RPM and Back. History offers Launches, Pull trend and Session trend. New session starts on the next accepted pull and keeps earlier launches.
+- **Settings:** Sleep after, Shake to wake, RPM method, Brightness, Sensor profile, Flip display, Theme, Best effect, Celebrate, Sound, Mounting, Battery icon, Wipe all and About, five rows to a page. In an editor the value is centred, with a faint `B next option ->` hint beneath it: B cycles the value, A applies, hold B cancels.
   - Sleep after: 1–10 minutes, 1-minute default (3 minutes before 0.20.2; a chosen time is kept).
   - Shake to wake: On (default) wakes on a shake; Off sleeps more deeply and only the side key wakes it.
   - RPM method: 1-turn peak (default from 0.18.0) or 3-turn average. The launch floor is 1,000 RPM.
