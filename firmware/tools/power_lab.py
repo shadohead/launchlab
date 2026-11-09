@@ -6,7 +6,7 @@ runtime by running the battery down, logging a record every 10 s to flash.
 A run can rotate through several power profiles so one discharge compares
 them at the same state of charge. See docs/battery/POWER_LAB.md.
 
-  power_lab.py --serial 7C:E8:B1:E1:C1:F8 status
+  power_lab.py --serial <USB serial, the unit's MAC> status
   power_lab.py --serial ... start --segment 600 "b30 a1" "b10 a1" "b0 a1"
   power_lab.py --serial ... start --charge-off "b30 a1"   # USB meter mode: charging off, USB carries the whole load
   power_lab.py --serial ... live                         # LAB_LIVE lines while attached
