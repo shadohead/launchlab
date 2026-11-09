@@ -2,9 +2,15 @@
 
 Run these commands from the repository root unless a `cd` step is shown.
 
-Install Arduino CLI, then run `bash scripts/build-firmware.sh`. It installs the pinned ESP32 3.3.0, M5Unified 0.2.23 and M5GFX 0.2.30 dependencies and the verified full PM SDK into a project-local cache and compiles the 8 MB flash / OPI PSRAM target. Source builds may differ byte-for-byte from the archived binary across hosts/toolchains. The published binary is the exact saved release, with recorded checksum.
+Install Arduino CLI, then run `bash scripts/build-firmware.sh`.
+It installs the pinned ESP32 3.3.0, M5Unified 0.2.23 and M5GFX 0.2.30 dependencies and the verified full PM SDK into a project-local cache and compiles the 8 MB flash / OPI PSRAM target into `firmware/build`; `--hil` also builds the hardware-in-the-loop test image into `firmware/build-hil`.
+On a Mac with Apple silicon, Arduino's ctags helper needs Rosetta 2.
+Source builds may differ byte-for-byte from the archived binary across hosts/toolchains.
+The published binary is the exact saved release, with recorded checksum.
 
-Run `bash scripts/test-firmware.sh` for the native C++ suites with address/undefined sanitizers and the production harnesses; the script itself is the list of what runs. With Node 22 or later, run the dependency-free transfer guard and compatibility redirect checks:
+Run `python3 scripts/firmware_proof.py host` for the firmware host suite (`scripts/firmware_tests.py`: native C++ suites with address/undefined sanitizers, production harnesses and the screen render check) and a proof of the run for your pull request; `bash scripts/test-firmware.sh` runs the same suite without the proof.
+[CONTRIBUTING.md](../CONTRIBUTING.md) has the setup, the proof, what CI checks and the optional HIL run on your own device.
+With Node 22 or later, run the dependency-free transfer guard and compatibility redirect checks:
 
 ```sh
 cd site
