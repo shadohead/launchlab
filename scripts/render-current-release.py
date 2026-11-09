@@ -26,7 +26,8 @@ docs/FIRMWARE_<version>.md for a new release, then run
 
 Nothing else names the current release, so nothing else is edited by hand.
 `--check` changes nothing and exits 1 when a block is stale or a document names
-the current release outside a block; scripts/verify-artifacts.py runs it.
+the current release outside a block; scripts/verify-artifacts.py runs it, after
+scripts/test_render_current_release.py.
 
 A new docs/FIRMWARE_<version>.md starts like this, so that neither its own
 promotion nor any later release ever edits it:
@@ -52,7 +53,9 @@ VERSION = r'\d+\.\d+\.\d+'
 # Prose that names a release as the current one. Inside a block it is generated;
 # outside one it goes stale at the next promotion.
 STALE = [re.compile(p) for p in (
-    r'(?i)\b(?:current|recommended|latest)\b[^.|\n]{0,40}?(?<![\w.])' + VERSION + r'(?![\w.]*\d)',
+    # "current 1.2.3", "Current revision: **1.2.3", "the current stable release is 1.2.3": at most
+    # three words in between and no sentence end, so "current layout, unchanged since 1.2.3" is history.
+    r'(?i)\b(?:current|recommended|latest)\b(?:[^\w.|\n]+[a-z]+){0,3}?[^\w.|\n]+' + VERSION + r'(?![\w.]*\d)',
     r'(?i)(?<![\w.])' + VERSION + r'\b[^.|\n]{0,40}?\b(?:is now|remains) the (?:current|recommended|latest)\b',
     r'(?i)\brecommended release (?:is now|remains)\b',
     r'(?i)\bupdater recommends ' + VERSION,
@@ -195,7 +198,7 @@ def main(argv):
     check = argv == ['--check']
     try:
         releases = Releases()
-        stale, problems, changed, blocks = [], [], [], 0
+        stale, problems, blocks = {}, [], 0
         for path, relative in documents():
             text = path.read_text()
             try:
@@ -205,17 +208,17 @@ def main(argv):
             blocks += text.count(START)
             problems += [f'{relative}: {p}' for p in lint(rendered, relative, releases)]
             if rendered != text:
-                stale.append(relative)
-                if not check:
-                    path.write_text(rendered)
-                    changed.append(relative)
+                stale[relative] = (path, rendered)
         if not blocks:
             raise Problem('no current-release blocks found')
     except Problem as problem:
         print(f'FAIL: {problem}', file=sys.stderr)
         return 1
-    for relative in changed:
-        print(f'updated {relative}')
+    # Nothing is written unless every document rendered; prose problems are reported after the blocks are fresh.
+    if not check:
+        for relative, (path, rendered) in stale.items():
+            path.write_text(rendered)
+            print(f'updated {relative}')
     for problem in problems:
         print(f'FAIL: {problem}', file=sys.stderr)
     if check and stale:
