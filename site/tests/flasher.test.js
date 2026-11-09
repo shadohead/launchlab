@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {existsSync} from 'node:fs';
 import {readdir} from 'node:fs/promises';
-import {APP_OFFSET, APP_IDENTITY_BYTES, compareVersions, validateCatalog, verifiedDownload, flashVerified, inspectInstalledApplication} from '../src/flasher.js';
+import {APP_OFFSET, APP_IDENTITY_BYTES, MAX_KNOWN_APPLICATIONS, compareVersions, validateCatalog, verifiedDownload, flashVerified, inspectInstalledApplication} from '../src/flasher.js';
 import {catalog,index,current,oldCatalog,base,localFetch,images,oldImages,preserved,newestFirst,downgradeBlocked,fake,opts} from './helpers.js';
 const {catalog:archivedCatalog,images:archivedImages}=await preserved('0.12.1');
 // Every catalog kept on disk, newest first: the listed releases and the archived 0.12.1.
@@ -200,6 +200,16 @@ test('every preserved catalog is valid and recognizes every listed release, beta
   }
 });
 
+// The identity table grows by one with every published release; its bound is a sanity check on fetched data.
+test('a catalog recognizing years of releases validates and only an absurd identity table is refused',()=>{
+  const digest=(kind,n,length)=>createHash('sha256').update(kind+n).digest('hex').slice(0,length);
+  const grown=count=>{const c=structuredClone(catalog);
+    for(let n=c.knownApplications.length;n<count;n++)c.knownApplications.push({version:'1.'+n+'.0',runtime:'1.'+n+'.0-sticks3-future',size:APP_IDENTITY_BYTES+n,sha256:digest('app',n,64),md5:digest('md5',n,32),elfSha256:digest('elf',n,64),sensor:'qre1113'});
+    return c;};
+  assert.ok(catalog.knownApplications.length<=MAX_KNOWN_APPLICATIONS/2,'the real table is half way to its bound: raise MAX_KNOWN_APPLICATIONS here and in the Beywatch copy well before it is reached');
+  for(const count of [catalog.knownApplications.length+120,MAX_KNOWN_APPLICATIONS])assert.equal(validateCatalog(grown(count)).knownApplications.length,count);
+  for(const count of [MAX_KNOWN_APPLICATIONS+1,100000])assert.throws(()=>validateCatalog(grown(count)),/installed-application identities/);
+});
 // Sensor-neutral release names retain all version, path and board guards.
 test('release identity permits original QRE names and current shared-profile names only',()=>{
   assert.equal(validateCatalog(oldCatalog),oldCatalog);

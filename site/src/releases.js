@@ -5,12 +5,15 @@ import {compareVersions, validateCatalog} from './flasher.js';
 // releases alone, which is all an older reader looks at; betas sit in "betaReleases"
 // and "beta" names the newest one while it is newer than latest. An index from before
 // channels has neither field and every release in it is stable.
+// A sanity bound on a fetched list, not a product rule: every release ever published stays
+// listed, about a hundred a year at two a week. Each of the two lists may hold this many.
+export const MAX_LISTED_RELEASES=500;
 export const channelOf=release=>release.channel ?? 'stable';
 export const listedReleases=index=>[...index.releases,...(index.betaReleases ?? [])].sort((a,b)=>compareVersions(b.version,a.version));
 
 export function validateReleaseIndex(index) {
-  if (!Array.isArray(index.releases) || !index.releases.length || index.releases.length > 20) throw new Error('Firmware release list unavailable.');
-  if (index.betaReleases!==undefined && (!Array.isArray(index.betaReleases) || index.betaReleases.length > 20)) throw new Error('Firmware release list unavailable.');
+  if (!Array.isArray(index.releases) || !index.releases.length || index.releases.length > MAX_LISTED_RELEASES) throw new Error('Firmware release list unavailable.');
+  if (index.betaReleases!==undefined && (!Array.isArray(index.betaReleases) || index.betaReleases.length > MAX_LISTED_RELEASES)) throw new Error('Firmware release list unavailable.');
   if ((index.beta===undefined)!==(index.betaReleases===undefined)) throw new Error('Firmware release list unavailable.');
   if (index.releases.some(r=>channelOf(r)!=='stable') || index.betaReleases?.some(r=>r.channel!=='beta')) throw new Error('Invalid release channel.');
   const seen = new Set();

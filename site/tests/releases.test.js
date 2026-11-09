@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {compareVersions} from '../src/flasher.js';
-import {validateReleaseIndex, loadReleaseIndex, createReleaseSelection, channelOf, listedReleases} from '../src/releases.js';
+import {MAX_LISTED_RELEASES, validateReleaseIndex, loadReleaseIndex, createReleaseSelection, channelOf, listedReleases} from '../src/releases.js';
 import {catalog,index,current,oldCatalog,base,preserved,newestFirst,listed} from './helpers.js';
 const reply=data=>({ok:true,json:async()=>data});
 // A release that does not exist yet (the minor after the newest one listed) and a version that was never published.
@@ -124,4 +124,16 @@ test('a beta release is selectable by version',async()=>{
   const i=structuredClone(index);const old=i.releases.pop();i.betaReleases=[{...old,channel:'beta'}];i.beta=null;
   const selection=createReleaseSelection({index:i,baseUrl:base,fetchFn:async()=>reply(oldCatalog)});
   await selection.select(old.version);assert.equal(selection.state.error,null);assert.equal(selection.state.catalog.version,old.version);
+});
+// The list bound is a sanity check on fetched data; the release cadence must never reach it.
+test('a long release history validates and only an absurd list is refused',()=>{
+  const row=(version,channel)=>({version,catalog:'firmware/'+version+'/catalog.json',channel});
+  const history=(stable,betas)=>({latest:'1.'+stable+'.0',beta:betas?'1.'+betas+'.1':null,
+    releases:Array.from({length:stable},(_,n)=>row('1.'+(stable-n)+'.0','stable')),betaReleases:Array.from({length:betas},(_,n)=>row('1.'+(betas-n)+'.1','beta'))});
+  assert.equal(listedReleases(validateReleaseIndex(history(60,60))).length,120);
+  validateReleaseIndex(history(MAX_LISTED_RELEASES,MAX_LISTED_RELEASES));
+  for(const list of [index.releases,index.betaReleases])assert.ok(list.length<=MAX_LISTED_RELEASES/2,'the real list is half way to its bound: raise MAX_LISTED_RELEASES here and in the Beywatch copy well before it is reached');
+  assert.throws(()=>validateReleaseIndex(history(MAX_LISTED_RELEASES+1,60)),/unavailable/);
+  assert.throws(()=>validateReleaseIndex(history(60,MAX_LISTED_RELEASES+1)),/unavailable/);
+  assert.throws(()=>validateReleaseIndex(history(100000,0)),/unavailable/);
 });
