@@ -1,5 +1,5 @@
 from pathlib import Path
-import hashlib, json, zipfile
+import hashlib, json, subprocess, sys, zipfile
 root = Path(__file__).resolve().parents[1]
 catalog = json.loads((root/'site/public/firmware/catalog.json').read_text())
 count=0
@@ -117,4 +117,9 @@ for entry in h['images']+h['models']:
 proof=root/'site/public'/h['pipeline']['sourceProof']
 assert hashlib.sha256(proof.read_bytes()).hexdigest()==h['pipeline']['sourceProofSha256'],proof
 assert json.loads(proof.read_text())['status']=='PASS'
+# Documents show the current release through blocks generated from the release index.
+# A stale block, or prose that names a current release by hand, fails here, after the
+# generator's own tests on a fixture repository.
+for step in (['test_render_current_release.py'],['render-current-release.py','--check']):
+    if subprocess.run([sys.executable,str(root/'scripts'/step[0]),*step[1:]]).returncode: sys.exit(1)
 print(f"PASS: {count} checksums; all 3MF archives intact; preserved catalog {catalog['version']} and source {source_version} independently match frozen firmware")

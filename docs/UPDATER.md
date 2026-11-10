@@ -1,8 +1,17 @@
 # Update, repair and rollback
 
-Use the [LaunchLab USB updater](https://launchlab.beywatch.gg/update). It is the only maintained browser updater; the former GitHub Pages address redirects there. Check the selected target version and release notes before installing. This repository preserves the [0.20.8 release notes](../firmware/releases/0.20.8-sticks3-songs-pm/README.md), [build context](FIRMWARE_0.20.8.md) and [firmware catalog](../site/public/firmware/versions.json) as source and artifact references.
+Use the [LaunchLab USB updater](https://launchlab.beywatch.gg/update). It is the only maintained browser updater; the former GitHub Pages address redirects there. Check the selected target version and release notes before installing. This repository preserves every release's notes and build context and the [firmware catalog](../site/public/firmware/versions.json) as source and artifact references; the current ones are under [Current release](#current-release).
 
 Ordinary Update blocks downgrades and unknown or incomplete applications. Repair / rollback and First install require their own explicit confirmations. Current byte verification does not establish physical rollback, stock reinstall or reliable pull measurement. Follow the procedures below and keep private backups.
+
+## Current release
+
+<!-- current-release:start summary -->
+The current stable release is **0.20.8** (`0.20.8-sticks3-songs-pm`): [0.20.8 release notes](../firmware/releases/0.20.8-sticks3-songs-pm/README.md) and [build context](FIRMWARE_0.20.8.md).
+No beta is newer than it.
+<!-- current-release:end -->
+These lines are generated from [`site/public/firmware/versions.json`](../site/public/firmware/versions.json), the file the updater reads, by `scripts/render-current-release.py`.
+Every other document that shows the current release is generated the same way, and each release's own build context points here instead of naming a newer release.
 
 ## Stable and beta firmware
 
