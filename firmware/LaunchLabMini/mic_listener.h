@@ -7,6 +7,7 @@
 #include "mic_rpm.h"
 #include "mic_session.h"
 #include "mic_trace.h"
+#include "analysis_rpm_filter.h"
 #include "motion_acquisition.h"
 #include "pm1_idle.h"
 #include "raw_transfer.h"
@@ -54,6 +55,8 @@ public:
   bool on()const{return state()==MicSession::State::On;}
   bool warm(uint32_t now)const{return on() && now-onMs_>=WARMUP_MS;}
   const MicTrace::Trace *trace()const{return trace_;}
+  void freezeTrace(){if(trace_){trace_->freeze();stoppedLaunch_=trace_->launch();if(analysisFollowing_ && task_)xTaskNotifyGive(task_);}}
+  void setAnalysisMode(bool enabled){analysisMode_=enabled;}
   // A reading arrived since the last call.
   bool fresh(){const bool was=fresh_;fresh_=false;return was;}
   // Each loop pass while the page is open or the mic has not yet stopped.
@@ -195,7 +198,7 @@ private:
   static constexpr uint32_t TASK_STACK=4096;
   enum class Job:uint8_t{Idle,Following};
   // `lagMs`: from the release to the result reaching launch(), at `notedUs`.
-  struct Pull {uint32_t number;float rpm;uint64_t pullSample,releaseSample;uint32_t pullMs,lagMs;int64_t notedUs;};
+  struct Pull {uint32_t number;float rpm;uint64_t pullSample,releaseSample;uint32_t pullMs,lagMs;int64_t notedUs;bool analysis=false;};
   struct Cost {uint32_t n=0,max=0;uint64_t sum=0;void add(uint32_t us){++n;sum+=us;max=std::max(max,us);}};
   // One spin, as MIC_SPIN reports it. `wakeMs`: from launch() to the task
   // taking the pull; `skippedMs`: the sound the ring had already lost.
@@ -214,9 +217,20 @@ private:
   }
   static const char *searchName(unsigned i){static constexpr const char *NAMES[SEARCHES]={"none","prior","near","full"};return NAMES[i];}
   // Loop side -----------------------------------------------------------------
+  bool ensureTrace() {
+    const unsigned capacity=analysisMode_?MicTrace::ANALYSIS_READINGS:MicTrace::MAX_READINGS;
+    if(trace_ && trace_->capacity()>=capacity)return true;
+    void *memory=heap_caps_calloc(1,sizeof(MicTrace::Trace)+capacity*sizeof(uint16_t)*(analysisMode_?2:1),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+    if(!memory)return false;
+    auto *slots=reinterpret_cast<uint16_t *>(static_cast<uint8_t *>(memory)+sizeof(MicTrace::Trace));
+    auto *replacement=new(memory) MicTrace::Trace(slots,capacity,analysisMode_?slots+capacity:nullptr);
+    heap_caps_free(trace_);trace_=replacement;return true;
+  }
   void take(uint32_t number,bool valid,float rpm,uint64_t startUs,uint64_t endUs) {
+    if(!ensureTrace())return;
+    stoppedLaunch_=0;
     int64_t lag=0;const uint64_t release=sampleAt(endUs,&lag);
-    const Pull pull{number,valid?rpm:0,sampleAt(startUs),release,uint32_t((endUs-startUs)/1000),uint32_t(std::max<int64_t>(lag,0)/1000),esp_timer_get_time()};
+    const Pull pull{number,valid?rpm:0,sampleAt(startUs),release,uint32_t((endUs-startUs)/1000),uint32_t(std::max<int64_t>(lag,0)/1000),esp_timer_get_time(),analysisMode_};
     if(valid)trace_->begin(number,rpm);else unheard_=number;
     portENTER_CRITICAL(&clockMux_);next_=pull;waiting_=true;portEXIT_CRITICAL(&clockMux_);
     vTaskPrioritySet(task_,PRIORITY);  // out of its bench, if it is in it
@@ -225,8 +239,7 @@ private:
   bool spawn(uint32_t now) {
     (void)now;
     if(!spins_)spins_=static_cast<Spin *>(heap_caps_calloc(SPINS,sizeof(Spin),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
-    trace_=static_cast<MicTrace::StoredTrace *>(heap_caps_malloc(sizeof(MicTrace::StoredTrace),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
-    if(trace_)new(trace_) MicTrace::StoredTrace;
+    ensureTrace();
     steps_=xQueueCreate(STEPS,sizeof(MicTrace::Step));
     stack_=heap_caps_malloc(TASK_STACK,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
     block_=static_cast<StaticTask_t *>(heap_caps_malloc(sizeof(StaticTask_t),MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
@@ -299,6 +312,9 @@ private:
       if(gap>CHUNK*1000000/RATE*2)++late_;
     }
     portENTER_CRITICAL(&clockMux_);written_+=length;lastUs_=now;peak_=std::max(peak_,peak);portEXIT_CRITICAL(&clockMux_);
+    // Callback runs in the capture task, not an ISR. Only Analysis followers subscribe.
+    // Publish samples before notifying; counting notifications close the check/wait race.
+    if(analysisFollowing_.load() && task_)xTaskNotifyGive(task_);
     if(hold_)return;
     // The two queued requests stay continuous. Only this task refills them, once
     // start() has lit the chain: a second writer can outrun it and both then see
@@ -436,14 +452,20 @@ private:
   void follow() {
     const int64_t started=esp_timer_get_time();
     MicRpm::Summary summary;float levelMax=-200,firstSeconds=0,lastHz=0;
+    analysisFollowing_=pull_.analysis;
     stream_->reset(pull_.rpm);
     const uint64_t taped=tape_.written;
     stream_->record(tapeArmed_.load()?&tape_:nullptr);
-    uint64_t at=pull_.releaseSample,skipped=0;MicTrace::Follower follower;
+    uint64_t at=pull_.releaseSample,skipped=0;MicTrace::Follower follower(pull_.analysis);
+    AnalysisMode::RpmFilter analysisFilter;
     uint32_t busy=0;
-    while(!follower.done() && !quit_ && !waiting_ && !dumping_) {
+    while(!follower.done() && !quit_ && !waiting_ && !dumping_ && !(pull_.analysis && stoppedLaunch_.load()==pull_.number)) {
       const uint64_t have=written();
-      if(at>=have){vTaskDelay(pdMS_TO_TICKS(10));continue;}
+      if(at>=have){
+        if(pull_.analysis)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(100));
+        else vTaskDelay(pdMS_TO_TICKS(10));
+        continue;
+      }
       const uint64_t from=MicSession::resume(at,have,USABLE,MARGIN);
       if(from!=at) {
         if(summary.frames)++overruns_;else ++lateStarts_;
@@ -462,12 +484,19 @@ private:
       if(r.valid && !summary.valid)firstSeconds=stream_->seconds();
       if(r.valid)lastHz=r.hz;
       summary.add(r);levelMax=std::max(levelMax,r.level);
-      send(follower.next(pull_.number,r,stream_->seconds()));
+      auto step=follower.next(pull_.number,r,stream_->seconds());
+      if(pull_.analysis) {
+        step.rawRpm=r.valid?uint16_t(std::lround(r.rpm)):0;
+        step.rpm=uint16_t(std::lround(analysisFilter.update(r.valid?r.rpm:0,stream_->seconds())));
+        if(r.valid && !step.rpm){step.rejectedRpm=uint16_t(std::lround(r.rpm));step.reason=MicRpm::Reason::Acquiring;}
+      }
+      send(step);
       if(tape_.written-taped>=uint64_t(TAPE_SPIN_S)*MicRpm::TRACK_HZ)stream_->record(nullptr);
     }
     stream_->record(nullptr);
     // A spin that stopped short still ends on the page; a newer pull replaces it.
     if(!follower.done() && !waiting_ && !quit_){MicRpm::Reading none;send(MicTrace::step(pull_.number,follower.slot()+1,none,true));}
+    analysisFollowing_=false;
     finish(summary,firstSeconds,lastHz,levelMax,started,skipped,taped);
     job_=Job::Idle;
   }
@@ -538,7 +567,8 @@ private:
   MicSession::Machine session_;std::atomic<MicSession::Worker> worker_{MicSession::Worker::None};
   int16_t *ring_=nullptr;MicRpm::Space *space_=nullptr;MicRpm::Stream *stream_=nullptr;TaskHandle_t task_=nullptr;QueueHandle_t steps_=nullptr;
   void *stack_=nullptr;StaticTask_t *block_=nullptr;
-  MicTrace::StoredTrace *trace_=nullptr;Spin *spins_=nullptr;  // PSRAM, on first use; the spin log stays for the next `p`
+  bool analysisMode_=false;std::atomic<bool> analysisFollowing_{false};std::atomic<uint32_t> stoppedLaunch_{0};
+  MicTrace::Trace *trace_=nullptr;Spin *spins_=nullptr;  // PSRAM, on first use; the spin log stays for the next `p`
   MicRpm::Tape tape_;std::atomic<bool> tapeArmed_{false};  // the task writes it only while following
   volatile bool hold_=true,waiting_=false,quit_=false,dumping_=false;bool have_=false,fresh_=false;
   std::atomic<Job> job_{Job::Idle};MicSession::Chain chain_;std::atomic<uint32_t> logged_{0};

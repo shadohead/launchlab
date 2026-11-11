@@ -207,5 +207,19 @@ int main() {
   for(const char *label:{"Enter tournament","Exit tournament","Cancel change","Back"})for(unsigned elapsed:{0u,999u,1000u,10000u}) {
     lgfx::LGFXBase g;ControlsUI::hold(g,label,elapsed,1000);assert(g.footers==1);++renders;
   }
+  auto noOverlap=[](const lgfx::LGFXBase &g){for(unsigned i=0;i<g.spans.size();++i)for(unsigned j=i+1;j<g.spans.size();++j){auto a=g.spans[i],b=g.spans[j];int ah=a[3]==4?26:a[3]==2?16:8,bh=b[3]==4?26:b[3]==2?16:8;assert(a[1]<=b[0] || b[1]<=a[0] || a[2]+ah<=b[2] || b[2]+bh<=a[2]);}};
+  assert(!strcmp(ControlsUI::MENU[2],"Device"));
+  for(auto flash:{ControlsUI::FlashInfo{8388608,1900000,0x330000},ControlsUI::FlashInfo{},ControlsUI::FlashInfo{8388608,0,0x330000},ControlsUI::FlashInfo{8388608,0x340000,0x330000},ControlsUI::FlashInfo{8388608,0x330000,0x330000}})
+    for(bool valid:{false,true})for(int percent:{0,20,100})for(bool charging:{false,true}){
+      lgfx::LGFXBase g;ControlsUI::device(g,valid,percent,4100,valid,charging,flash);assert(g.drew("Device") && g.drew("Flash"));noOverlap(g);
+      if(!flash.appKnown())assert(g.drew("App free unavailable"));++renders;
+    }
+  for(int percent:{0,9,20,61,62,99,100,140}){
+    lgfx::LGFXBase g;ControlsUI::list(g,"Menu",ControlsUI::MENU,Controls::MENU_COUNT,2);
+    ControlsUI::cornerBattery(g,ControlsUI::cornerBattery(true,percent,false),true);
+    char value[8];snprintf(value,sizeof(value),"%d%%",std::min(percent,100));assert(g.drew(value));noOverlap(g);
+  }
+  assert(ControlsUI::cornerBattery(true,61,false)!=ControlsUI::cornerBattery(true,62,false));
+  {lgfx::LGFXBase g;ControlsUI::cornerBattery(g,ControlsUI::CornerBattery{},true);assert(g.texts.empty());}
   std::cout<<"PASS: "<<renders<<" actual menu/editor/confirmation/hold renders fit135x240; one-line footers, conservative glyph bounds\n";
 }

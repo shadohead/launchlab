@@ -54,6 +54,7 @@ def shutdown_flush():
 
 
 prefix = r'''
+static bool saveAnalysisResult(){return true;}
 #include "fake_runtime.h"
 #include "sensor_profile.h"
 #include "rpm_estimator.h"

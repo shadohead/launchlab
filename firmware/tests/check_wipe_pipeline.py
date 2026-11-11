@@ -38,6 +38,8 @@ def function(source, name, result="void", static=True):
 
 PREFIX = r'''
 #include "controls.h"
+#include "analysis_mode.h"
+static AnalysisMode::Session analysis;
 #include "start_mark_reference.h"
 #include "usb_command_guard.h"
 #include "accel_range.h"

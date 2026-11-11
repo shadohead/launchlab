@@ -39,6 +39,8 @@ namespace Lab {inline PowerLab::Knobs knobs;inline bool running=false,displayAsl
 #include <sys/time.h>
 #include <esp32-hal-cpu.h>
 #include <esp_heap_caps.h>
+#include <esp_ota_ops.h>
+#include <esp_image_format.h>
 #include <esp_memory_utils.h>
 #include <nvs.h>
 #include "shake_wake.h"
@@ -79,11 +81,11 @@ namespace Lab {inline PowerLab::Knobs knobs;inline bool running=false,displayAsl
 #define LOOP_HELPER __attribute__((noinline))
 #if LAUNCHLAB_HIL
 // Test-only hardware-in-the-loop build; never a release. See tools/hil.
-static constexpr char VERSION[] = "0.20.8-sticks3-songs-hil-pm";
+static constexpr char VERSION[] = "0.20.8-analysis-hil-pm";
 #elif LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = "0.20.8-sticks3-songs-pm";
+static constexpr char VERSION[] = "0.20.8-analysis-dev-pm";
 #else
-static constexpr char VERSION[] = "0.20.8-sticks3-songs";
+static constexpr char VERSION[] = "0.20.8-analysis-dev";
 #endif
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ
@@ -96,6 +98,13 @@ static constexpr uint32_t ANALOG_SAMPLE_HZ = StickS3Acquisition::SAMPLE_HZ;
 #include "raw_transfer.h"
 #include "mic_listener.h"
 #include "mic_view_ui.h"
+#include "analysis_ui.h"
+#include "analysis_result_service.h"
+#include "analysis_result_ui.h"
+static AnalysisResult::Service analysisResults;
+static AnalysisMode::Session analysis;
+static AnalysisUI::Cache analysisCache;
+static uint8_t analysisCacheRotation=0xff;
 static StickS3Acquisition acquisition;
 static Preferences prefs;
 static StickS3Level level;
@@ -223,6 +232,7 @@ static MountOrientation::Mode mountMode=MountOrientation::Mode::Top;
 // must never happen during a pull or its capture.
 static MountOrientation::Mode liveMount=MountOrientation::Mode::Top;
 static StickS3Battery battery;
+static ControlsUI::FlashInfo deviceFlash;
 static uint32_t lastBatteryPoll=0,maxBatteryPollUs=0,lastShutdownTry=0;
 static bool batteryPolled=false;
 static bool powerConfigValid=false;
@@ -784,8 +794,18 @@ LOOP_HELPER static void tickDisplayPower(uint32_t now,const Snapshot &s) {
     selected,percent,unsigned(target),(unsigned long)idle,percent<selected);
 }
 
-static void drawBattery(lgfx::LGFXBase &g,uint32_t now) {
-  ControlsUI::battery(g,battery.valid(now),battery.percent,battery.millivolts,battery.chargeKnown,battery.charging);
+// Cache flash metadata once before acquisition starts; never scan flash while drawing.
+static void readDeviceFlash() {
+  deviceFlash={};deviceFlash.total=ESP.getFlashChipSize();
+  const auto *running=esp_ota_get_running_partition();
+  if(!running)return;
+  deviceFlash.slot=running->size;
+  const esp_partition_pos_t position{running->address,running->size};
+  esp_image_metadata_t metadata={};
+  if(esp_image_verify(ESP_IMAGE_VERIFY_SILENT,&position,&metadata)==ESP_OK)deviceFlash.app=metadata.image_len;
+}
+static void drawDevice(lgfx::LGFXBase &g,uint32_t now) {
+  ControlsUI::device(g,battery.valid(now),battery.percent,battery.millivolts,battery.chargeKnown,battery.charging,deviceFlash);
 }
 // The unit's ID is its factory MAC, which is also its USB serial number.
 static void drawAbout(lgfx::LGFXBase &g) {
@@ -889,7 +909,10 @@ LOOP_HELPER static void draw(const Snapshot &s) {
   const bool replayWasStarted=launchFeedback.replayStarted();
   auto &view=screenReady?static_cast<lgfx::LGFXBase &>(screen):static_cast<lgfx::LGFXBase &>(M5.Display);
   if(!screenReady){acquisition.displayBoundary(true);M5.Display.startWrite();}
-  view.fillScreen(colors.background);
+  const bool cacheAnalysis=screenReady && controls.page==Controls::Page::Analysis && !analysis.replay() && !analysis.results() && !diagnostics && !tournamentMode;
+  if(!cacheAnalysis || analysisCacheRotation!=M5.Display.getRotation())analysisCache.invalidate();
+  analysisCacheRotation=M5.Display.getRotation();
+  if(!cacheAnalysis)view.fillScreen(colors.background);
   const int cx=view.width()/2;
   view.setTextDatum(top_center);
   view.setTextColor(colors.text,colors.background);
@@ -902,7 +925,7 @@ LOOP_HELPER static void draw(const Snapshot &s) {
   } else if(diagnostics) {
     ScreensUI::diagnostics(view,s.pin,s.last,s.minimum,s.maximum,s.rate);
   } else if(historyPage) {
-    view.fillScreen(colors.background);
+    if(!cacheAnalysis)view.fillScreen(colors.background);
     switch(controls.page) {
       case Controls::Page::Menu:ControlsUI::list(view,"Menu",ControlsUI::MENU,Controls::MENU_COUNT,controls.menu);break;
       case Controls::Page::HistoryMenu:ControlsUI::list(view,"History",ControlsUI::HISTORY,4,controls.history);break;
@@ -919,9 +942,17 @@ LOOP_HELPER static void draw(const Snapshot &s) {
         }
         break;
       case Controls::Page::NewSession:ControlsUI::session(view,controls.startSession);break;
-      case Controls::Page::Battery:drawBattery(view,millis());break;
+      case Controls::Page::Battery:drawDevice(view,millis());break;
       case Controls::Page::About:drawAbout(view);break;
       case Controls::Page::Wipe:ControlsUI::wipe(view,wipeConfirmation,millis(),wipeFailed,wipeBlocked,wipeComplete);break;
+      case Controls::Page::Analysis: {
+        const auto *fit=analysisResults.results();
+        if(analysis.results())AnalysisResultUI::draw(view,analysis,analysisResults.details(),analysisResults.busy(),analysisResults.failed(),colors);
+        else AnalysisUI::draw(view,analysis,esp_timer_get_time(),micListener.trace(),micPageState(),latestMotion,
+          motionPending,visibleDisplayFlipped(),colors,latestCurve,s.stateName(),s.ready && !s.signalFault,cacheAnalysis?&analysisCache:nullptr,
+          fit,analysisResults.input(),analysisResults.winner(),analysisResults.busy());
+        break;
+      }
       case Controls::Page::MicRpm:
         MicView::draw(view,micListener.trace(),micPageState(),colors);
         break;
@@ -978,9 +1009,9 @@ LOOP_HELPER static void draw(const Snapshot &s) {
   const uint32_t now=millis();
   if(M5.BtnA.isPressed() && !gestureA.consumed && (tournamentMode || (controls.page==Controls::Page::Main && !launchFeedback.shown())))
     ControlsUI::hold(view,tournamentMode?"Exit tournament":"Enter tournament",now-M5.BtnA.lastChange(),1000);
-  else if(M5.BtnB.isPressed() && !gestureB.consumed && (controls.page!=Controls::Page::Main || launchFeedback.shown()) && !tournamentMode)
-    ControlsUI::hold(view,controls.page==Controls::Page::Edit?"Cancel change":"Back",now-M5.BtnB.lastChange(),1000);
-  drawnCornerBattery=cornerBattery(now);ControlsUI::cornerBattery(view,drawnCornerBattery);
+  else if(M5.BtnB.isPressed() && !gestureB.consumed && !tournamentMode)
+    ControlsUI::hold(view,controls.page==Controls::Page::Analysis?"Exit analysis":controls.page==Controls::Page::Main?"Enter analysis":controls.page==Controls::Page::Edit?"Cancel change":"Back",now-M5.BtnB.lastChange(),1000);
+  drawnCornerBattery=cornerBattery(now);ControlsUI::cornerBattery(view,drawnCornerBattery,controls.page==Controls::Page::Menu);
   // An internal canvas is pushed by DMA, which endWrite does not wait for.
   // Wait so the transfer stays inside the boundary marks and the next frame
   // cannot overwrite pixels still being sent.
@@ -1272,6 +1303,32 @@ static void cancelSettingEdit() {
 // detector's estimator and sensor profile can only change there, and the IMU
 // frame only outside a pull or capture. A cancelled power-off then leaves the
 // live state matching the records. Whatever fails stays pending.
+LOOP_HELPER static void logAnalysisResults() {
+  const auto *fits=analysisResults.results();if(!fits)return;
+  Serial.printf("ANALYSIS_RESULTS samples=%u source=%u best=%d validation=%d observed_stop=%d\n",fits->sampleCount,fits->sourceCount,fits->best,fits->validationPossible,fits->actualStopValid);
+  for(unsigned i=0;i<Decay::MODEL_COUNT;++i){const auto &r=fits->models[i];
+    Serial.printf("ANALYSIS_MODEL model=%c valid=%d converged=%d boundary=%d unstable=%d a=%.7g b=%.7g c=%.7g k=%.7g n=%.7g stop_valid=%d stop_s=%.3f error_valid=%d error_s=%.3f abs_error_s=%.3f\n",
+      'A'+i,r.valid,r.converged,r.boundary,r.unstable,r.params.a,r.params.b,r.params.c,r.params.k,r.params.n,r.stopValid,r.stopSeconds,r.stopErrorValid,r.stopError,r.absoluteStopError);
+    const Decay::Metric *metrics[]={&r.training,&r.validation,&r.all};
+    for(unsigned j=0;j<3;++j){const auto &m=*metrics[j];Serial.printf("ANALYSIS_METRIC model=%c set=%s valid=%d rmse=%.3f mae=%.3f max=%.3f\n",'A'+i,j==0?"train":j==1?"validation":"all",m.valid,m.rmse,m.mae,m.maxError);}
+  }
+}
+// Optional latest-fit record: reserve capacity for the next practice-history save.
+// CRC-protected bytes are read back. Failure leaves the current results usable in RAM.
+LOOP_HELPER static bool saveAnalysisResult() {
+  if(!analysisResults.recordPending())return true;
+  static constexpr const char *key="analysis_fit";
+  const unsigned own=NvsBudget::blobEntries(Decay::Record::BYTES);
+  const unsigned needed=NvsBudget::optionalNeeded(own,prefs.isKey(key)?0:own,NvsBudget::blobEntries(PracticeHistory::IMAGE_BYTES));
+  unsigned available=0;bool ok=false;
+  if(nvsAvailable(available) && available>=needed){
+    const auto &image=analysisResults.record();Decay::Record::Image check{};
+    ok=prefs.putBytes(key,image.data(),image.size())==image.size() &&
+      prefs.getBytes(key,check.data(),check.size())==check.size() && check==image;
+  }
+  Serial.printf("ANALYSIS_RECORD saved=%d bytes=%u available=%u needed=%u\n",ok,unsigned(Decay::Record::BYTES),available,needed);
+  analysisResults.recordHandled();return true; // Optional failure must not block shutdown/history.
+}
 static void writeSettings() {
   const uint16_t items=settingsSave.pending();
   if(!items)return;
@@ -1310,6 +1367,7 @@ static void writeSettings() {
   if((items&SettingsSave::Milestones) && milestoneStore.save(milestones))saved|=SettingsSave::Milestones;
   if((items&SettingsSave::Pin) && prefs.putUChar("ao_pin",live.pin)==1)saved|=SettingsSave::Pin;
   if((items&SettingsSave::ExtPower) && prefs.putBool("ext5v",extPower)==1)saved|=SettingsSave::ExtPower;
+  if((items&SettingsSave::AnalysisResult) && saveAnalysisResult())saved|=SettingsSave::AnalysisResult;
   settingsSave.wrote(saved);dirty=true;
   Serial.printf("SETTINGS_SAVE items=0x%03x saved=0x%03x\n",unsigned(items),unsigned(saved));
 }
@@ -1393,12 +1451,13 @@ LOOP_HELPER static MicView::Mic micPageState() {
   if(micListener.state()==MicSession::State::Refused)return micListener.why()==MicSession::Why::Memory?MicView::Mic::NoMemory:MicView::Mic::Failed;
   return micListener.warm(millis())?MicView::Mic::On:MicView::Mic::Starting;
 }
-// The Mic RPM page alone runs the mic. Opening it mutes the speaker, which
+// Mic RPM and Analysis run the mic. Opening either mutes the speaker, which
 // powers down, and then the mic starts; leaving it, however the page changed,
 // stops the mic and gives the speaker back. An owner who never opens the page
 // stops at the first line.
 LOOP_HELPER static void tickMicPage() {
-  const bool open=controls.page==Controls::Page::MicRpm;
+  micListener.setAnalysisMode(controls.page==Controls::Page::Analysis);
+  const bool open=controls.page==Controls::Page::MicRpm || controls.page==Controls::Page::Analysis;
   if(!open && micListener.off())return;
   const uint32_t now=millis();
   const auto before=micListener.state();
@@ -1414,11 +1473,15 @@ LOOP_HELPER static void tickMicPage() {
     if(micListener.warm(now)!=micPageWarm){micPageWarm=!micPageWarm;dirty=true;}  // "warming up" ends without a reading
   }
   if(micListener.fresh())micPageFresh=true;
-  if(micPageFresh && now-lastDraw>=MIC_PAGE_FRAME_MS){micPageFresh=false;dirty=true;}
+  if(micPageFresh && now-lastDraw>=MIC_PAGE_FRAME_MS){
+    micPageFresh=false;
+    if(controls.page!=Controls::Page::Analysis || (!analysis.replay() && !analysis.results()))dirty=true;
+  }
 }
 // Sleep and power-off wait for this, so neither meets a running mic, unless
 // its stop never ends: then they go ahead after MicSession::STOP_LIMIT_MS.
 LOOP_HELPER static void leaveMicPage() {
+  if(controls.page==Controls::Page::Analysis){analysis.clear();controls.page=Controls::Page::Main;syncNavigation();dirty=true;}
   if(controls.page==Controls::Page::MicRpm){controls.page=Controls::Page::Menu;syncNavigation();dirty=true;}
 }
 static void browseOlder() {
@@ -1428,11 +1491,20 @@ static void browseOlder() {
   historyOffset=historyOffset+step<total?historyOffset+step:0;dirty=true;
 }
 static void navigate(Controls::Effect effect,Controls::Page previous) {
+  if(previous!=controls.page && (previous==Controls::Page::Analysis || controls.page==Controls::Page::Analysis)) {
+    analysis.clear();launchFeedback.clear();dirty=true;
+  }
   if(previous==Controls::Page::Wipe && controls.page!=previous)wipeConfirmation.cancel();
   if(previous!=controls.page || effect==Controls::Effect::Recap || effect==Controls::Effect::Tournament)bestEffect.clear();
   if(previous==Controls::Page::Main && controls.page!=previous)launchFeedback.clear();
   if(previous!=controls.page){diagnostics=false;motionDemo=false;demo=false;historyOffset=0;}
   switch(effect) {
+    case Controls::Effect::AnalysisReplay:
+      analysis.toggleReplay(esp_timer_get_time());dirty=true;break;
+    case Controls::Effect::AnalysisStop:
+      if(analysis.stop(esp_timer_get_time())){micListener.freezeTrace();inactivity.touch(millis());dirty=true;}
+      else if(analysis.nextResult()){inactivity.touch(millis());dirty=true;}
+      break;
     case Controls::Effect::Recap:toggleFeedback();break;
     case Controls::Effect::BeginEdit:
       settingsSaveError=false;
@@ -1818,6 +1890,7 @@ LOOP_HELPER static void autoPowerOff(uint32_t now,const Snapshot &s) {
   constexpr bool dry=false;
 #endif
   if(usbAwake.inhibited(now) && !dry)return;
+  if(controls.page==Controls::Page::Analysis && analysis.running())return;
   const bool measuring=opticalGuard.measuring(now,s.phase==AnalogTachometer::Phase::Launch);
   if(!inactivity.due(now,measuring))opticalGuard.clear();
   if(motionPending || !inactivity.due(now,measuring) || (lastShutdownTry && now-lastShutdownTry<60000))return;
@@ -2611,6 +2684,7 @@ void setup() {
   // PM1's physical power-key/reset operation remains a hardware function.
   cfg.pmic_button=false;
   M5.begin(cfg);
+  readDeviceFlash();
   // The changed-row hashes go in PSRAM: without them every frame is pushed whole.
   frameRows.begin(static_cast<uint32_t *>(heap_caps_malloc(FrameRows::BYTES,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT)));
   soundPlayer.configure();
@@ -3152,7 +3226,15 @@ void loop() {
   }
   if(wipeBlocked)return;
   pollCommands(s);
+  if(controls.page==Controls::Page::Analysis) {
+    if(analysis.tick(esp_timer_get_time())){micListener.freezeTrace();inactivity.touch(millis());dirty=true;}
+    if(analysisResults.busy() && !analysis.running() && !analysis.replay() && !analysis.results() && millis()-lastDraw>=250)dirty=true;
+    if(analysis.needsFrame(esp_timer_get_time(),millis()-lastDraw,MotionReplay::playbackDurationMs(latestMotion)))dirty=true;
+  }
   tickMicPage();
+  const bool resultsWereReady=analysisResults.ready();
+  if(analysisResults.tick(controls.page==Controls::Page::Analysis,analysis,micListener.trace())){dirty=true;if(!resultsWereReady && analysisResults.ready())logAnalysisResults();}
+  if(analysisResults.recordPending())settingsSave.mark(SettingsSave::AnalysisResult);
   pollPowerKey(millis());
   Snapshot event;
   while(acquisition.takeEvent(event)) {
@@ -3161,7 +3243,10 @@ void loop() {
       Serial.printf("LAUNCH_RESULT valid=%d peak_rpm=%.1f revs=%lu amplitude=%.1f start_noise=%.1f launches=%lu end=%s t_us=%llu\n",
         event.valid,event.resultRpm,(unsigned long)event.revolutions,event.amplitude,event.startNoise,
         (unsigned long)event.launches,event.endName(),(unsigned long long)event.detectorUs);
-      micListener.launch(event.launches,event.valid,event.resultRpm,event.burstStartHostUs,event.burstEndHostUs);
+      if(controls.page!=Controls::Page::Analysis || event.valid)
+        micListener.launch(event.launches,event.valid,event.resultRpm,event.burstStartHostUs,event.burstEndHostUs);
+      if(controls.page==Controls::Page::Analysis)
+        analysis.begin(event.launches,event.valid,event.resultRpm,event.burstEndHostUs);
       if(controls.page==Controls::Page::WearCheck) {
         const auto stageBefore=controls.wear.stage();
         const auto stepBefore=controls.wear.step();

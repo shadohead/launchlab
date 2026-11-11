@@ -11,7 +11,7 @@
 #include "wipe_confirmation.h"
 
 namespace ControlsUI {
-static constexpr const char *MENU[]={"History","New session","Battery","Settings","Tournament","String wear check","Mic RPM","Back"};
+static constexpr const char *MENU[]={"History","New session","Device","Settings","Tournament","String wear check","Mic RPM","Back"};
 static constexpr const char *HISTORY[]={"Launches","Pull trend","Session trend","Back"};
 // By Controls::Setting value; the list shows them in Controls::ORDER.
 static constexpr const char *SETTINGS[]={"Sleep after","RPM method","Brightness","Flip display","Sensor profile","Theme","Best effect","Celebrate","Sound","Mounting","Shake to wake","Wipe all","About","Battery icon","Back"};
@@ -143,42 +143,57 @@ inline void hold(lgfx::LGFXBase &g,const char *label,unsigned elapsed,unsigned d
 struct CornerBattery {
   static constexpr int RIGHT=24,TOP=2,WIDTH=18,HEIGHT=8,FILL=WIDTH-4;
   enum Tone:uint8_t {Normal,Low,Charging};
+  int8_t percent=-1;
   uint8_t fill=0;  // columns of FILL; 0 draws nothing
   Tone tone=Normal;
-  bool operator==(const CornerBattery &o)const{return fill==o.fill && tone==o.tone;}
+  bool operator==(const CornerBattery &o)const{return fill==o.fill && tone==o.tone && percent==o.percent;}
   bool operator!=(const CornerBattery &o)const{return !(*this==o);}
 };
 inline CornerBattery cornerBattery(bool valid,int percent,bool charging) {
   CornerBattery b;
   if(!valid || percent<0)return b;
   b.fill=uint8_t(std::max(1,(std::min(percent,100)*CornerBattery::FILL+50)/100));
+  b.percent=int8_t(std::min(percent,100));
   b.tone=charging?CornerBattery::Charging:percent<=20?CornerBattery::Low:CornerBattery::Normal;
   return b;
 }
-inline void cornerBattery(lgfx::LGFXBase &g,CornerBattery b) {
+inline void cornerBattery(lgfx::LGFXBase &g,CornerBattery b,bool showPercent=false) {
   using B=CornerBattery;
   if(!b.fill)return;
   const int x=g.width()-B::RIGHT;
   g.drawRoundRect(x,B::TOP,B::WIDTH,B::HEIGHT,2,colors.muted);
   g.fillRect(x+B::WIDTH,B::TOP+2,1,B::HEIGHT-4,colors.muted);  // the terminal
   g.fillRect(x+2,B::TOP+2,b.fill,B::HEIGHT-4,b.tone==B::Charging?colors.ready:b.tone==B::Low?colors.warning:colors.text);
+  if(showPercent){char label[8];snprintf(label,sizeof(label),"%d%%",int(b.percent));
+    g.setTextDatum(top_right);g.setTextColor(b.tone==B::Charging?colors.ready:b.tone==B::Low?colors.warning:colors.text,colors.background);
+    g.drawString(label,x-2,B::TOP,1);
+  }
 }
-inline void battery(lgfx::LGFXBase &g,bool valid,int percent,unsigned millivolts,bool chargeKnown,bool charging) {
-  const int cx=g.width()/2;
-  g.setTextDatum(top_center);g.setTextColor(colors.text,colors.background);
-  g.drawString("Battery",cx,8,2);
-  char line[32];
-  if(valid)snprintf(line,sizeof(line),"%d%%",percent);else snprintf(line,sizeof(line),"--");
+struct FlashInfo {
+  uint32_t total=0,app=0,slot=0;
+  bool appKnown()const{return app>0 && slot>0 && app<=slot;}
+};
+inline void device(lgfx::LGFXBase &g,bool valid,int percent,unsigned millivolts,bool chargeKnown,bool charging,const FlashInfo &flash) {
+  const int cx=g.width()/2;char line[32];heading(g,"Device");
+  g.setTextColor(colors.muted,colors.background);g.drawString("Battery",cx,32,1);
+  if(valid)snprintf(line,sizeof(line),"%d%%",std::clamp(percent,0,100));else snprintf(line,sizeof(line),"--");
   const bool low=valid && percent<=20;
-  g.setTextColor(low?colors.warning:colors.accent,colors.background);
-  g.drawString(line,cx,43,4);
-  g.drawRoundRect(29,96,74,25,3,colors.muted);g.fillRect(103,103,4,11,colors.muted);
-  if(valid)g.fillRect(33,100,66*percent/100,17,low?colors.warning:colors.accent);
+  g.setTextColor(low?colors.warning:colors.accent,colors.background);g.drawString(line,cx,44,4);
+  g.drawRoundRect(29,77,74,17,3,colors.muted);g.fillRect(103,82,4,7,colors.muted);
+  if(valid)g.fillRect(33,81,66*std::clamp(percent,0,100)/100,9,low?colors.warning:colors.accent);
   g.setTextColor(colors.text,colors.background);
   if(valid)snprintf(line,sizeof(line),"%.2f V",millivolts/1000.0);else snprintf(line,sizeof(line),"Reading unavailable");
-  g.drawString(line,cx,133,2);
-  g.drawString(!chargeKnown?"Charge status unknown":charging?"Charging":"Not charging",cx,161,1);
-  g.setTextColor(colors.muted,colors.background);
+  g.drawString(line,cx,101,valid?2:1);
+  g.drawString(!chargeKnown?"Charge status unknown":charging?"Charging":"Not charging",cx,124,1);
+  g.setTextColor(colors.text,colors.background);g.drawString("Flash",cx,147,2);
+  constexpr float MIB=1048576.f;
+  if(flash.total)snprintf(line,sizeof(line),"Total %.2f MiB",flash.total/MIB);else snprintf(line,sizeof(line),"Total unavailable");
+  g.drawString(line,cx,171,1);
+  if(flash.appKnown())snprintf(line,sizeof(line),"App %.2f/%.2f MiB",flash.app/MIB,flash.slot/MIB);else snprintf(line,sizeof(line),"App unavailable");
+  g.drawString(line,cx,187,1);
+  if(flash.appKnown())snprintf(line,sizeof(line),"App free %.2f MiB",(flash.slot-flash.app)/MIB);else snprintf(line,sizeof(line),"App free unavailable");
+  g.drawString(line,cx,203,1);
+  g.setTextColor(colors.muted,colors.background);g.drawString("App = firmware slot",cx,218,1);
   footer(g,"A Done");
 }
 // What the unit runs, for an owner and for support: the firmware release and
