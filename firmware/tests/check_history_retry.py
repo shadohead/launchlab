@@ -34,6 +34,8 @@ def shutdown_flush():
 prefix = r'''
 #include "history_checkpoint.h"
 #include "controls.h"
+#include "analysis_mode.h"
+static AnalysisMode::Session analysis;
 #include "accel_range.h"
 #include "sensor_profile.h"
 #include "practice_store.h"

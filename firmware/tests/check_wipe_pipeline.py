@@ -38,6 +38,8 @@ def function(source, name, result="void", static=True):
 
 PREFIX = r'''
 #include "controls.h"
+#include "analysis_mode.h"
+static AnalysisMode::Session analysis;
 #include "start_mark_reference.h"
 #include "usb_command_guard.h"
 #include "accel_range.h"
@@ -70,6 +72,7 @@ PREFIX = r'''
 using Controls::Page;
 static uint32_t clockMs=1000;
 static uint32_t millis(){return clockMs;}
+static uint64_t esp_timer_get_time(){return uint64_t(clockMs)*1000;}
 static unsigned normalWrites=0,normalLoads=0,statusReads=0,draws=0,levelPolls=0,restarts=0;
 static void delay(unsigned ms){clockMs+=ms;}
 static void normal(){++normalWrites;}
@@ -101,9 +104,16 @@ static IdleFake &pm1Idle(){static IdleFake idle;return idle;}
 struct {bool available=true;bool lock(){return available;}void unlock(){}bool quiet(uint32_t){return true;}}imuAcquisition;
 static Controls::State controls;static Controls::Gesture gestureA,gestureB;
 // The mic is off unless a test says otherwise: leaving its page stops it.
-static struct {bool running=false;bool off()const{return !running;}bool holdsSleep(uint32_t)const{return running;}void dump(){}void askBench(){}void armTape(){}void sendTape(){}void launch(uint32_t,bool,float,uint64_t,uint64_t){}}micListener;
+static struct {void freezeTrace(){} const void *trace()const{return nullptr;}bool running=false;bool off()const{return !running;}bool holdsSleep(uint32_t)const{return running;}void dump(){}void askBench(){}void armTape(){}void sendTape(){}void launch(uint32_t,bool,float,uint64_t,uint64_t){}}micListener;
 static unsigned micPageLeaves=0;static void leaveMicPage(){++micPageLeaves;micListener.running=false;}
 static void tickMicPage(){}
+static struct {
+  bool busy() const {return false;}
+  bool ready() const {return false;}
+  bool recordPending() const {return false;}
+  bool tick(bool,const AnalysisMode::Session &,const void *) {return false;}
+} analysisResults;
+static void logAnalysisResults(){}
 static WipeConfirmation wipeConfirmation;
 static bool wipeFailed=false,wipeBlocked=false,wipeComplete=false;
 static bool wipeCheckpointHeld=false,wipeBootRecovery=false,wipeRestartRequested=false;
@@ -211,7 +221,7 @@ static void saveHistory(uint32_t,const Snapshot &){normal();}
 // Settings saves and the orphaned-checkpoint release must never run after an
 // erase attempt: one would write old RAM, the other resume the held checkpoint.
 static void saveSettings(uint32_t,const Snapshot &){normal();}static void releaseOrphanCheckpoint(uint32_t,const Snapshot &){normal();}
-struct SettingsSave {enum Item:uint16_t {Pin=128,ExtPower=256};void mark(uint16_t){normal();}bool pending()const{return false;}}settingsSave;
+struct SettingsSave {enum Item:uint16_t {Pin=128,ExtPower=256,AnalysisResult=4096};void mark(uint16_t){normal();}bool pending()const{return false;}}settingsSave;
 static void pollBattery(uint32_t,const Snapshot &){normal();}static void tickPowerLog(uint32_t,const Snapshot &){normal();}static void tickHistoryLog(uint32_t,const Snapshot &){normal();}
 static void pollUsbAwake(uint32_t,const Snapshot &){normal();}static void tickSound(const Snapshot &){normal();}
 // Side-key power-off has its own production harness; its wipe guard is tested there.

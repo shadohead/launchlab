@@ -11,6 +11,7 @@
 // Hz x 60 / the cycles per turn the optical peak resolved, and never the
 // optical RPM, which stays a separate marker at time zero.
 namespace MicTrace {
+constexpr unsigned ANALYSIS_READINGS=3000; // Five minutes, Analysis only.
 constexpr unsigned MAX_READINGS=1200;  // 2 minutes of slots; the apps stop at 10
 constexpr unsigned LOST_READINGS=80;   // 8 s of slots with no evidence ends a spin, as in the apps
 constexpr float HOP_S=float(MicRpm::HOP)/float(MicRpm::TRACK_HZ);
@@ -22,7 +23,7 @@ constexpr float MIN_SPAN_S=10,SPAN_STEP_S=10,MIN_TOP_RPM=9000,TOP_STEP_RPM=3000;
 inline unsigned slot(float seconds){return unsigned(std::lround(std::max(seconds-FIRST_S,0.f)/HOP_S));}
 // One reading, from the analysis task to the loop.
 struct Step {
-  uint32_t launch=0;uint16_t index=0,rpm=0;
+  uint32_t launch=0;uint16_t index=0,rpm=0,rejectedRpm=0,rawRpm=0;
   MicRpm::Reason reason=MicRpm::Reason::Quiet;bool last=false;
 };
 // The apps' launch detector's evidence of a spin: trusted, or about to be.
@@ -42,10 +43,11 @@ inline bool finished(unsigned index,unsigned quiet){return quiet>=LOST_READINGS 
 // when the spin is over.
 class Follower {
 public:
+  explicit Follower(bool analysis=false):analysis_(analysis){}
   Step next(uint32_t launch,const MicRpm::Reading &r,float seconds) {
     const unsigned at=MicTrace::slot(seconds);
     quiet_=evidence(r)?0:quiet_+(skipped_?1:at-slot_);slot_=at;skipped_=false;
-    done_=finished(at,quiet_);
+    done_=analysis_?at+1>=ANALYSIS_READINGS:finished(at,quiet_);
     return step(launch,at,r,done_);
   }
   // The reader skipped sound the ring had lost: the slots up to the next
@@ -54,32 +56,45 @@ public:
   bool done()const{return done_;}
   unsigned slot()const{return slot_;}
 private:
-  unsigned slot_=0,quiet_=0;bool done_=false,skipped_=false;
+  unsigned slot_=0,quiet_=0;bool done_=false,skipped_=false,analysis_=false;
 };
 
 // Owned by the loop: the analysis task only sends Steps. Its slots live
 // beside it in StoredTrace, so an empty one costs almost nothing.
 class Trace {
 public:
-  constexpr explicit Trace(uint16_t *slots=nullptr):rpm_(slots){}
-  void clear(){launch_=0;count_=heard_=first_=last_=0;peak_=optical_=0;started_=ended_=false;reason_=MicRpm::Reason::Quiet;}
+  constexpr explicit Trace(uint16_t *slots=nullptr,unsigned capacity=MAX_READINGS,uint16_t *rejected=nullptr):rpm_(slots),rejected_(rejected),capacity_(capacity){}
+  unsigned capacity()const{return capacity_;}
+  void clear(){launch_=0;count_=heard_=first_=last_=rawCount_=lastRaw_=0;peak_=optical_=rejectedPeak_=0;started_=ended_=frozen_=false;reason_=MicRpm::Reason::Quiet;}
   // `opticalRpm`: the launch's peak, 0 when the optical reading was invalid.
   void begin(uint32_t launch,float opticalRpm=0){clear();launch_=launch;optical_=uint16_t(std::lround(std::min(opticalRpm,65535.f)));started_=true;}
   // Steps of an older launch and repeats are ignored; a lost step reads as no reading.
   void add(const Step &s) {
-    if(!started_ || s.launch!=launch_ || s.index<count_ || s.index>=MAX_READINGS)return;
-    while(count_<s.index)rpm_[count_++]=0;
+    if(frozen_ || !started_ || s.launch!=launch_ || s.index<count_ || s.index>=capacity_)return;
+    while(count_<s.index){if(rejected_)rejected_[count_]=0;rpm_[count_++]=0;}
+    if(rejected_){
+      const uint16_t raw=s.rawRpm?s.rawRpm:(s.rejectedRpm?s.rejectedRpm:s.rpm);
+      rejected_[count_]=raw;
+      if(raw){++rawCount_;lastRaw_=s.index;}
+      rejectedPeak_=std::max(rejectedPeak_,s.rejectedRpm);
+    }
     rpm_[count_++]=s.rpm;reason_=s.reason;ended_=s.last;
     if(!s.rpm)return;
     if(!heard_)first_=s.index;
     last_=s.index;++heard_;peak_=std::max(peak_,s.rpm);
   }
+  void freeze(){frozen_=true;}
   bool started()const{return started_;}
   bool ended()const{return ended_;}
   uint32_t launch()const{return launch_;}
   unsigned count()const{return count_;}
+  unsigned rawCount()const{return rejected_?rawCount_:heard_;}
+  float lastRawSeconds()const{return seconds(rejected_?lastRaw_:last_);}
   unsigned heard()const{return heard_;}
   uint16_t rpm(unsigned i)const{return rpm_[i];}
+  uint16_t rawRpm(unsigned i)const{return rejected_?rejected_[i]:rpm_[i];}
+  uint16_t rejectedRpm(unsigned i)const{return rejected_ && !rpm_[i]?rejected_[i]:0;}
+  uint16_t rejectedPeakRpm()const{return rejectedPeak_;}
   static float seconds(unsigned i){return FIRST_S+float(i)*HOP_S;}
   float elapsed()const{return count_?seconds(count_-1):0;}
   float firstSeconds()const{return seconds(first_);}
@@ -92,9 +107,11 @@ public:
   // The change from the first reading to the latest, in percent.
   float changePercent()const{return heard_?100*(float(latestRpm())-float(firstRpm()))/float(firstRpm()):0;}
 private:
-  uint16_t *rpm_;  // 0: no trusted reading
-  uint32_t launch_=0;unsigned count_=0,heard_=0,first_=0,last_=0;uint16_t peak_=0,optical_=0;
-  bool started_=false,ended_=false;MicRpm::Reason reason_=MicRpm::Reason::Quiet;
+  uint16_t *rpm_;       // 0: no trusted reading
+  uint16_t *rejected_;  // Optional Analysis-only original acoustic readings, before the filter
+  unsigned capacity_;
+  uint32_t launch_=0;unsigned count_=0,heard_=0,first_=0,last_=0,rawCount_=0,lastRaw_=0;uint16_t peak_=0,optical_=0,rejectedPeak_=0;
+  bool started_=false,ended_=false,frozen_=false;MicRpm::Reason reason_=MicRpm::Reason::Quiet;
 };
 class StoredTrace:public Trace {
 public:

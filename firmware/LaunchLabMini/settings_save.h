@@ -10,7 +10,7 @@
 class SettingsSave {
 public:
   static constexpr uint32_t RETRY_MS=1000,FAILED_RETRY_MS=5000;
-  enum Item:uint16_t {Sleep=1,Rpm=2,Brightness=4,Flip=8,Sensor=16,Appearance=32,Mount=64,Pin=128,ExtPower=256,Milestones=512,ShakeWake=1024,BatteryIcon=2048};
+  enum Item:uint16_t {Sleep=1,Rpm=2,Brightness=4,Flip=8,Sensor=16,Appearance=32,Mount=64,Pin=128,ExtPower=256,Milestones=512,ShakeWake=1024,BatteryIcon=2048,AnalysisResult=4096};
   // Bit for a Controls::Setting row: Sleep, Rpm, Brightness, Flip, Sensor,
   // Theme, BestEffect, Celebrate, Sound, Mount, ShakeWake, then BatteryIcon
   // after Wipe all and About, which save nothing. The three appearance rows

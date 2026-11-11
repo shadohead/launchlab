@@ -4,7 +4,10 @@
 using namespace Controls;
 int main() {
   State s;assert(s.autoRecap() && s.tapA()==Effect::Recap);
-  assert(s.holdB(true)==Effect::Recap && s.holdB()==Effect::None);
+  assert(s.holdB(true)==Effect::None && s.page==Page::Analysis);
+  assert(!s.autoRecap() && s.tapA()==Effect::AnalysisReplay);
+  assert(s.tapB()==Effect::AnalysisStop && s.holdA()==Effect::None && s.page==Page::Analysis);
+  assert(s.holdB()==Effect::None && s.page==Page::Main);
   s.tapB();assert(s.page==Page::Menu && s.menu==0 && !s.autoRecap());
   s.tapA();assert(s.page==Page::HistoryMenu);
   for(unsigned view=0;view<3;++view) {

@@ -23,9 +23,12 @@ problems, loop = [], None
 for report in reports:
     for line in report.read_text().splitlines():
         location, size, kind = line.rsplit('\t', 2)
-        name = re.sub(r'^.*:\d+:\d+:', '', location)
+        match = re.match(r'^(.*):\d+:\d+:(.*)$', location)
+        if not match:
+            continue
+        source, name = match.groups()
         # Library templates instantiated here (M5GFX, newlib) are budgeted by their owners.
-        if '/LaunchLabMini/' not in location.split(':', 1)[0]:
+        if '/LaunchLabMini/' not in source.replace('\\', '/'):
             continue
         size = int(size)
         if kind.strip() != 'static':

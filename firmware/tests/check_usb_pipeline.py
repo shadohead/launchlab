@@ -46,6 +46,8 @@ static FrameRows frameRows;
 #include "power_diagnostics.h"
 #include "wake_ui_state.h"
 #include "controls.h"
+#include "analysis_mode.h"
+static AnalysisMode::Session analysis;
 #include <cassert>
 #include <cstring>
 #include <iostream>
@@ -151,6 +153,10 @@ static void off(){autoPowerOff(millis(),acquisition.snapshot());}
 static void confirmedHost(){hardwareSof=true;powerSource=5;poll(1000);poll(1250);assert(usbAwake.remembered());}
 static void assertNoStandby(){assert(!acquisition.begins && !shakeWake.arms && !shakeWake.sleeps && !prefs.writes && !M5.Display.writes && !M5.Power.writes && !powerSaves);}
 int main(){
+  reset();controls.page=Controls::Page::Analysis;analysis.begin(1,true,6000,1000000);
+  at(601000);off();assert(!shakeWake.sleeps);
+  analysis.stop(601000000);controls.page=Controls::Page::Main;analysis.clear();
+
   // The connection monitor can remain optimistically positive for multiple
   // polls. SOF alone must not promote a shake wake when checked VIN is absent.
   reset();inactivity.begin(1000,true);hardwareSof=true;powerSource=4;

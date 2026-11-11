@@ -8,3 +8,8 @@
 *.gcode binary
 *.bin binary
 *.zip binary
+
+# These vendored test files are checked against upstream SHA-256 hashes.
+firmware/tests/fakes/m5_button/Button_Class.hpp text eol=lf
+firmware/tests/fakes/m5_button/Button_Class.inl text eol=lf
+firmware/tests/fakes/m5_button/LICENSE text eol=lf
