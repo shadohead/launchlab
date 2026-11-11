@@ -85,7 +85,8 @@ class Rig:
     def end(self):
         s = self.scenario
         s['seconds'] = round(time.time() - s['started'], 1)
-        self.check_alive()
+        if self.check_alive():
+            self.check_sleep_scale()
         s['passed'] = all(c['ok'] or c['severity'] != 'fail' for c in s['checks'])
         s['end_line'] = self.dev.mark()
         (self.out / 'results.json').write_text(json.dumps(self.results, indent=1))
@@ -129,6 +130,15 @@ class Rig:
         if not same:
             self.boot_id = status.get('boot_id')
         return same and not reboots
+
+    def check_sleep_scale(self):
+        """A scenario that divided the sleep limits (!sleepscale) must leave the real
+        ones: every later scenario, and standby above all, runs at them."""
+        line = self.dev.latest('HIL_STATUS', since=self.scenario['start_line'])
+        scale = (line.f if line else {}).get('sleep_scale')
+        if scale not in (None, '1'):  # None: an image from before !sleepscale
+            self.check('the sleep limits are the real ones again (HIL_STATUS sleep_scale=1)', False, f'sleep_scale={scale}')
+            self.dev.hil('sleepscale 1')
 
     def recover(self):
         """Best-effort return to a known state after a scenario error."""

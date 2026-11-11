@@ -2,7 +2,7 @@
 """Every screen as the device draws it, pinned frame by frame.
 
 Builds firmware/tools/ui_render (the firmware's drawing code on a real M5GFX
-canvas) and compares one hash per frame with fixtures/ui_render.txt: 52
+canvas) and compares one hash per frame with fixtures/ui_render.txt: 60
 screens in each built-in theme and both Flip choices, plus one custom theme.
 A light custom theme (white background, allowed since 0.16) is pinned in
 fixtures/ui_render_light.txt, every screen and celebration frame in both

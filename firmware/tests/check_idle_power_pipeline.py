@@ -117,6 +117,7 @@ static void reset(){
   PowerSavers::settings=PowerSavers::Settings{};
 }
 static Snapshot state;
+
 static void display(uint32_t ms){at(ms);tickDisplayPower(ms,state);assert(!boundary);}
 static void poll(uint32_t ms){at(ms);pollBattery(ms,state);assert(!owned);}
 int main(){
@@ -214,7 +215,7 @@ int main(){
 with tempfile.TemporaryDirectory(prefix="idle-power-pipeline-") as tmp:
     path = Path(tmp)
     cpp = path / "pipeline.cpp"
-    cpp.write_text(prefix + function("pollBattery") + "\n" + function("tickDisplayPower") + tests)
+    cpp.write_text(prefix + "static bool displayDark(uint32_t){return false;}\n" + function("pollBattery") + "\n" + function("tickDisplayPower") + tests)
     exe = path / "pipeline"
     subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17", "-O1", "-g", "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-I" + str(root / "firmware/LaunchLabMini"), "-I" + str(root / "firmware/LaunchLabRpm"), str(cpp), "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)

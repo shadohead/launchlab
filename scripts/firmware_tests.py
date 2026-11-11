@@ -71,6 +71,7 @@ eva_effects slayer_effects ninja_effects nier_effects sorcery_effects
 aura_effects alchemy_effects phantom_effects armory_effects grimoire_effects ripsaw_effects corsair_effects reaper_effects
 fx_effects fx_sound fx_music music_stream fx_fuzz fx_share effect_store loaded_compat loaded_effects fx_transfer
 shake_wake wear_check rpm_curve power_lab frame_rows adc_clock mic_rpm mic_view mic_session
+dark_display ble_security ble_battle_pass ble_motion bluetooth_setting radio_calibration
 '''.split()
 
 # Libraries a VQF suite links besides the filter: share codes are zlib streams.
@@ -86,17 +87,17 @@ imu_startup mount_pipeline wipe_pipeline controls_pipeline best_sound_pipeline
 pm1_idle power_key_pipeline idle_power_pipeline sensor_idle_pipeline save_paths
 cpu_power_pipeline hil_isolation mic_isolation usb_flush hil_rig_upload usb_command_pipeline
 ui_render hil_themes hil_milestones hil_commands usb_config wear_pipeline usb_standby_pipeline keep_awake status_feeds
-codec_handover main_layout
+codec_handover sleep_scale hil_since_boot main_layout
 '''.split()
 
 # Python unit tests: the private-corpus runner's synthetic contracts (no
-# private data), the release gate, the host suite's compile cache, the
-# build gate, the build's static RAM check, the public repo's include layout,
-# the CI checkout's frozen releases, the contributor proof and the public sync.
-PYTHON_TESTS = '''
-captured_replay_runner mic_capture release_gate firmware_channels host_cc_cache build_gate static_ram hil_overhead
-hil_settings_walk public_layout ci_checkout hil_status_read hil_mic_stop_wait firmware_proof sync_public_firmware
-'''.split()
+# private data), the mic capture tool, the release gate and its orchestration plan, the since-boot check, the host suite's
+# compile cache, the build gate, the build's static RAM check, the HIL settings walk, the public
+# repo's include layout, the CI checkout's frozen releases, the rig's status read, the HIL preflight, the mic stop wait,
+# the contributor proof and the public sync.
+PYTHON_TESTS = ('captured_replay_runner mic_capture release_gate release_gate_plan hil_since_boot firmware_channels host_cc_cache build_gate '
+                'static_ram hil_overhead hil_settings_walk public_layout ci_checkout hil_status_read hil_preflight hil_mic_stop_wait '
+                'firmware_proof sync_public_firmware').split()
 
 # Replay checks on firmware/evidence: (check script, replay source or None).
 REPLAY_CHECKS = [
@@ -124,6 +125,7 @@ PRIVATE_ONLY = {
     'test_captured_replay_runner': 'tests the runner for the private capture corpus',
     'test_mic_capture': 'tests the mic recording tool, which stays private',
     'test_release_gate': 'tests the release gate tooling, which stays private',
+    'test_release_gate_plan': "tests the release gate's plan, which stays private",
     'test_firmware_channels': 'tests the release channel tooling, which stays private',
     'test_build_gate': 'tests the private build scripts (the public repo builds with scripts/build-firmware.sh)',
     'test_ci_checkout': "tests this repository's CI checkout",
@@ -447,7 +449,8 @@ def run_suite(args, build):
               file=sys.stderr)
         return TREE_CHANGED
     stamp = args.gate_dir / f'{tree}.pass' if args.gate_dir and not args.only else None
-    if stamp and stamp.exists():
+    # A release run (--result-json) always runs: it records this run, not an earlier pass.
+    if stamp and stamp.exists() and not args.result_json:
         print(f'HOST SUITE PASSED: already passed for this exact working tree ({tree}); not re-run')
         return 0
 

@@ -13,7 +13,6 @@ cannot pass on a correct device fails here, before it costs a device run.
 import base64
 import json
 from pathlib import Path
-import re
 import struct
 import sys
 import tempfile

@@ -28,12 +28,14 @@ struct Look {
 };
 struct Screen {const char *id;const char *title;};
 inline constexpr Screen SCREENS[]={
-  {"main","Main"},{"main-tilted","Main, tilted"},{"main-idle","Main, new session"},
+  {"main","Main"},{"main-tilted","Main, tilted"},{"main-idle","Main, new session"},{"main-charging","Main, charging"},{"main-idle-charging","Main, new session, charging"},
   {"recap","Recap"},{"recap-best","Recap, new best (Orbit)"},{"recap-flames","Best: Flames"},{"recap-sparkles","Best: Sparkles"},
   {"recap-shockwave","Best: Shockwave"},{"recap-lightning","Best: Lightning"},{"recap-slash","Best: Slash"},
   {"recap-milestone","Recap, 12K milestone (Flames)"},{"recap-demo","Recap demo"},{"recap-capturing","Recap, capturing"},
   {"menu","Menu"},{"menu-battery-low","Menu, battery low"},{"menu-charging","Menu, charging"},{"menu-settings","Menu, Settings"},{"menu-wear-check","Menu, String wear check"},{"history-menu","History menu"},
   {"settings","Settings"},{"settings-appearance","Settings, appearance"},{"settings-more","Settings, wipe and back"},{"about","About"},
+  {"menu-bluetooth","Menu, Bluetooth"},{"bluetooth","Bluetooth, off"},{"bluetooth-enable","Bluetooth, experimental notice"},{"bluetooth-on","Bluetooth, on with a phone"},
+  {"bluetooth-forget","Bluetooth, forget phones"},{"bluetooth-pair","Bluetooth, pairing number"},
   {"theme-editor","Theme editor"},{"effect-editor","Best effect editor"},{"celebrate-editor","Celebrate editor"},
   {"battery-icon-editor","Battery icon editor, Off"},
   {"history","Launch history"},{"pull-trend","Pull trend"},{"session-trend","Session trend"},{"history-empty","History, empty"},
@@ -143,7 +145,7 @@ inline void micScreen(lgfx::LGFX_Sprite &g,unsigned index,const Look &look) {
   const char *id=MIC_SCREENS[index].id;
   auto is=[&](const char *name){return !std::strcmp(id,name);};
   g.fillScreen(c.background);g.setTextDatum(top_center);g.setTextColor(c.text,c.background);
-  if(is("menu-mic")){ControlsUI::list(g,"Menu",ControlsUI::MENU,Controls::MENU_COUNT,Controls::MIC_ROW);ControlsUI::cornerBattery(g,detail::corner());return;}
+  if(is("menu-mic")){ControlsUI::list(g,"Menu",ControlsUI::MENU,Controls::MENU_COUNT,Controls::MIC_ROW,Controls::MENU_GROUPS);ControlsUI::cornerBattery(g,detail::corner());return;}
   static StoredTrace t;t.clear();
   auto mark=[&](unsigned index,unsigned rpm,MicRpm::Reason reason,bool last){
     Step s;s.index=uint16_t(index);s.rpm=uint16_t(rpm);s.reason=reason;s.last=last;t.add(s);
@@ -212,7 +214,7 @@ inline void draw(lgfx::LGFX_Sprite &g,unsigned index,const Look &look,bool flip)
         BestEffectUI::Renderer::Anchor(),c.background);
     }
   } else if(main) {
-    const bool tilted=is("main-tilted"),idle=is("main-idle");
+    const bool tilted=is("main-tilted"),idle=is("main-idle") || is("main-idle-charging");
     ScreensUI::live(g,c,idle?"New session ready":tilted?"Settling":"Ready",
       idle?ScreensUI::Tone::Text:tilted?ScreensUI::Tone::Warning:ScreensUI::Tone::Ready,!tilted,idle?12345:6512);
     StickS3Level::Reading level;
@@ -224,11 +226,16 @@ inline void draw(lgfx::LGFX_Sprite &g,unsigned index,const Look &look,bool flip)
     Controls::State state;
     // A new unit's settings: every value is its default.
     const uint8_t values[]={InactivityTimer::DEFAULT_MINUTES,uint8_t(RpmEstimator::DEFAULT_MODE),Brightness::DEFAULT_PERCENT,uint8_t(flip),0,uint8_t(look.theme),uint8_t(Appearance::Effect::Random),uint8_t(Milestones::DEFAULT_MODE),0,0,uint8_t(InactivityTimer::SHAKE_WAKE_DEFAULT),
-      0,0,uint8_t(Controls::BATTERY_ICON_DEFAULT)};  // Wipe all and About have no value
+      0,0,uint8_t(Controls::BATTERY_ICON_DEFAULT),0};  // Wipe all and About have no value; Bluetooth is Off
     static_assert(sizeof(values)==Controls::SETTING_COUNT,"a default for every setting");
     static const Milestones::Config defaults;ControlsUI::milestones=&defaults;
     ControlsUI::runtime="0.20.8-sticks3-songs-pm";  // fixed, so a release number never moves a pinned frame
-    if(prefix("menu")){state.menu=is("menu-settings")?3:is("menu-wear-check")?5:0;ControlsUI::list(g,"Menu",ControlsUI::MENU,Controls::MENU_COUNT,state.menu);}
+    if(is("bluetooth"))ControlsUI::bluetoothPage(g,0,false,false,"BEYBLADE_TOOL01",0);
+    else if(is("bluetooth-enable"))ControlsUI::enableBluetooth(g,true);
+    else if(is("bluetooth-on"))ControlsUI::bluetoothPage(g,1,true,true,"BEYBLADE_TOOL01",1);
+    else if(is("bluetooth-forget"))ControlsUI::forgetPhones(g,false);
+    else if(is("bluetooth-pair"))ControlsUI::comparison(g,123456,false);
+    else if(prefix("menu")){state.menu=is("menu-settings")?Controls::SETTINGS_ROW:is("menu-wear-check")?Controls::WEAR_ROW:is("menu-bluetooth")?Controls::BLUETOOTH_ROW:0;ControlsUI::list(g,"Menu",ControlsUI::MENU,Controls::MENU_COUNT,state.menu,Controls::MENU_GROUPS);}
     else if(is("history-menu"))ControlsUI::list(g,"History",ControlsUI::HISTORY,4,0);
     else if(is("settings")){state.setting=0;ControlsUI::settings(g,state,values);}
     else if(is("settings-appearance")){state.setting=uint8_t(Controls::rowAt(5));ControlsUI::settings(g,state,values);}
@@ -266,5 +273,7 @@ inline void draw(lgfx::LGFX_Sprite &g,unsigned index,const Look &look,bool flip)
   // icon editor previews Off.
   if(prefix("menu") || is("history-menu") || prefix("settings") || is("about") || (std::strstr(id,"-editor") && !is("battery-icon-editor")))
     ControlsUI::cornerBattery(g,detail::corner(is("menu-battery-low")?15:72,is("menu-charging")));
+  // Main shows it only while charging (Controls::showsChargingBattery).
+  if(is("main-charging") || is("main-idle-charging"))ControlsUI::cornerBattery(g,detail::corner(is("main-idle-charging")?100:72,true));
 }
 }

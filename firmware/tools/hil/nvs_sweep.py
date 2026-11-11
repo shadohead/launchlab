@@ -62,7 +62,7 @@ def main():
             scenarios.drain_history(rig)
         armed = {}
         for slow in (0, 400):
-            first = rig.pull(signals.standard_pull(6000, label=f'{level} free: priming'))
+            rig.pull(signals.standard_pull(6000, label=f'{level} free: priming'))
             optical = signals.standard_pull(9000, label=f'{level} free: pull -150 ms into a {slow} ms-slowed history write')
             r, trigger = scenarios.armed_pull(rig, optical, 'history', -150, slow, signals.launch_motion(seed=99))
             save = dev.wait('HISTORY_SAVE', 5, since=trigger.index) if trigger else None
@@ -81,10 +81,13 @@ def main():
     rig.end()
     lines = ['| Free entries | History save median (ms) | Max (ms) | Pull -150 ms, natural write | Pull -150 ms, +400 ms write |',
              '|---|---|---|---|---|']
+    def ms(us):
+        return '' if us is None else f'{us / 1000:.0f}'
+
+    def arm(r, k):
+        return f"{'counted' if r['armed'][k]['counted'] else 'LOST'} ({ms(r['armed'][k]['save_us'])} ms write)"
     for r in rows:
-        ms = lambda us: '' if us is None else f'{us / 1000:.0f}'
-        arm = lambda k: f"{'counted' if r['armed'][k]['counted'] else 'LOST'} ({ms(r['armed'][k]['save_us'])} ms write)"
-        lines.append(f"| {r['available']} | {ms(r['median_us'])} | {ms(r['max_us'])} | {arm(0)} | {arm(400)} |")
+        lines.append(f"| {r['available']} | {ms(r['median_us'])} | {ms(r['max_us'])} | {arm(r, 0)} | {arm(r, 400)} |")
     (a.out / 'summary.md').write_text('\n'.join(lines) + '\n')
     print('\n'.join(lines))
     dev.close()

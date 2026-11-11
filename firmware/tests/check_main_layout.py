@@ -30,6 +30,7 @@ prefix = r'''
 #include "appearance.h"
 #include "analog_tachometer.h"
 #include "level_indicator.h"
+#include "mount_orientation.h"
 #include <cassert>
 #include <cmath>
 #include <cstring>
@@ -66,7 +67,8 @@ public:
 #include "screens_ui.h"
 static uint32_t hostNow=2000,newSessionAt=0;
 static uint32_t millis(){return hostNow;}
-static StickS3Level level;static StickS3Level::Reading drawnLevel;
+static StickS3Level level;static MountOrientation::Mode liveMount=MountOrientation::Mode::Top;
+static StickS3Level::Reading drawnLevel;
 static bool flip=false;
 static Appearance::Theme theme=Appearance::Theme::Classic;
 static bool visibleDisplayFlipped(){return flip;}
@@ -114,6 +116,18 @@ int main(){
   std::cout<<"PASS: "<<cases<<" extracted production main-screen layout states, small status, notice gating, RPM fallback/accent, enlarged level bounds, both flips and all ten themes\n";
 }
 '''
+# The canvas prefers PSRAM, leaving internal RAM for BLE, and falls back to internal.
+canvas=source[source.index("screen.setColorDepth(16);"):source.index('DISPLAY_NOTICE direct_draw_fallback')]
+sprite="screenReady=screen.createSprite("
+assert canvas.index("screen.setPsram(canvasPsram);")<canvas.index(sprite)<canvas.index("if(!screenReady){screen.setPsram(!canvasPsram);"+sprite)
+# Bluetooth at boot: read before the canvas and the IMU owner allocate; nothing of
+# BLE starts from it being off, and the restart waits for a pull and saves first.
+assert source.index("bluetoothAtBoot=bluetoothOn;")<source.index("screen.setPsram(canvasPsram);")<source.index("for(unsigned attempt=0;attempt<3 && !startMotion();")
+assert "BleLink::tick(millis(),bluetoothAtBoot," in source
+restart=source[source.index("LOOP_HELPER static void restartForBluetooth("):]
+restart=restart[:restart.index("ESP.restart();")]
+assert restart.index("BleLink::replyFlushed(now)")<restart.index("flushForShutdown(now,s)!=ShutdownFlush::Ready")
+assert restart.index("s.phase==AnalogTachometer::Phase::Launch || motionPending")<restart.index("flushForShutdown(now,s)!=ShutdownFlush::Ready")<restart.index("settingsSave.pending()&SettingsSave::Bluetooth")<restart.index("BLUETOOTH_RESTART")
 with tempfile.TemporaryDirectory(prefix="launchlab-main-layout-") as directory:
     build=Path(directory); cpp=build/"test.cpp"; exe=build/"test"
     cpp.write_text(prefix+tests)

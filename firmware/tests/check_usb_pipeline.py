@@ -71,6 +71,7 @@ struct SerialFake {std::string lines;void println(const char *s){lines+=s;lines+
 // USB output is drained (never Serial.flush(), which discards it): usb_tx.h.
 namespace UsbTx {inline unsigned drains=0;inline bool drain(uint32_t){++drains;return true;}}
 
+#include "ble_link_fake.h"
 static UsbHostAwake usbAwake;static bool usbAutoOffInhibited=false;
 static InactivityTimer inactivity;static OpticalSleepGuard opticalGuard;static PracticeHistory practice;static PracticeStore practiceStore;
 static bool motionPending=false,saveError=false,dirty=false,extPower=false,tournamentMode=false,historyPage=false,demo=false,diagnostics=false;
@@ -138,7 +139,7 @@ static void reset(){
   controls={};wipeBlocked=false;
   clockUs=1000000;hardwareSof=false;powerReadOk=mutexAvailable=true;powerSource=4;attachOnPowerSave=false;
   hostReads=powerReads=locks=unlocks=flashWrites=powerSaves=0;
-  usbAwake=UsbHostAwake{};usbAutoOffInhibited=false;inactivity=InactivityTimer{};inactivity.setMinutes(1);inactivity.touch(millis());
+  BleLink::linkUp=false;usbAwake=UsbHostAwake{};usbAutoOffInhibited=false;inactivity=InactivityTimer{};inactivity.setMinutes(1);inactivity.touch(millis());
   practice=PracticeHistory{};practiceStore=PracticeStore{};acquisition=Acquisition{};M5=M5Fake{};prefs=Settings{};shakeWake=ShakeWake{};
   motionPending=saveError=dirty=extPower=tournamentMode=historyPage=demo=diagnostics=false;soundPlayer.shutdowns=0;
   lastShutdownTry=lastSaveTry=saveErrors=historyPendingSince=0;PowerDiagnostics::fresh(powerLog);powerLogDirty=false;sleepReceipt={};
@@ -201,6 +202,12 @@ int main(){
   for(uint32_t now=1000;now<=61000;now+=250)poll(now);
   assert(!powerReads && !usbAwake.remembered());off();assert(shakeWake.sleeps==1);
   std::cout<<"PASS: optimistic boot pulse releases; charger and full-battery VIN do not establish host; ordinary battery/charger timer still sleeps\n";
+  // A connected phone holds off the due inactivity sleep, with no standby
+  // side effects; the sleep goes ahead once it has gone.
+  reset();powerSource=1;at(61250);assert(inactivity.due(millis(),false));
+  BleLink::linkUp=true;off();assertNoStandby();
+  BleLink::linkUp=false;off();assert(shakeWake.sleeps==1);
+  std::cout<<"PASS: a connected Bluetooth phone inhibits the inactivity sleep; its disconnect releases it\n";
 
   reset();confirmedHost();hardwareSof=false;
   for(uint32_t now=1500;now<=181000;now+=250){poll(now);off();assert(usbAwake.inhibited(now));}

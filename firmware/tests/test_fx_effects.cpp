@@ -425,10 +425,10 @@ int main() {
   }
   {
     // A song's render budget (docs/FIRMWARE_SOUND_0_20.md, "Render budget"):
-    // the validator renders the song and holds its busiest block, by the
-    // device-calibrated cost per sounding voice, to 20% of core 0. The example
+    // the validator renders the song and holds its busiest block, by the cost
+    // model fitted on the device (0.21 refit), to 20% of core 0. The example
     // songs fit (their loads pinned); eight wavetable voices at once do not.
-    const struct {const char *name;uint32_t load;} music[]={{"victory_lap",1591},{"night_spin",1725},{"ripcord",1566}};
+    const struct {const char *name;uint32_t load;} music[]={{"victory_lap",1815},{"night_spin",1801},{"ripcord",1833}};
     for(const auto &[name,load]:music) {
       const auto file=compileFile(std::string("firmware/tools/fx/effects/music/")+name+".fx");
       const auto r=FxValidate::check(file,{FxValidate::fixture()});

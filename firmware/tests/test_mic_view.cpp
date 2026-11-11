@@ -218,7 +218,7 @@ static void a_spin_the_ring_has_partly_lost_is_heard_in_time() {
 }
 static void the_page_opens_from_the_menu_and_every_way_back_leaves_it() {
   using namespace Controls;
-  assert(MENU_COUNT==8);
+  assert(MENU_COUNT==9);
   State s;s.page=Page::Menu;s.menu=MIC_ROW;
   s.tapA();assert(s.page==Page::MicRpm);
   assert(!s.autoRecap());  // a pull stays on the view, without a recap
@@ -226,7 +226,7 @@ static void the_page_opens_from_the_menu_and_every_way_back_leaves_it() {
   s.tapA();assert(s.page==Page::Menu);
   s.page=Page::MicRpm;s.holdB();assert(s.page==Page::Menu);
   s.page=Page::MicRpm;assert(s.holdA()==Effect::None && s.page==Page::MicRpm);
-  s.page=Page::Menu;s.menu=MIC_ROW+1;s.tapA();assert(s.page==Page::Main);  // Back is still last
+  s.page=Page::Menu;s.menu=BACK_ROW;s.tapA();assert(s.page==Page::Main);  // Back is still last
 }
 // The mic never starts on wake: the view comes back as its Menu row.
 static void waking_returns_to_the_menu_row() {

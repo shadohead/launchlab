@@ -6,7 +6,6 @@ are 200 Hz board-axis frames (g, dps) produced by integrating an angular-rate
 profile, so accelerometer gravity and gyro rates stay physically consistent
 and the device's VQF fusion sees a real rotation.
 """
-import json
 import math
 import random
 import struct

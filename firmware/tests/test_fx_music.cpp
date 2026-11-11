@@ -221,8 +221,9 @@ int main() {
   {
     // The example songs, pinned: a later engine must play them unchanged.
     // Victory Lap (5.1 s) and Night Spin (6.0 s) were rewritten to a
-    // celebration's length in 0.20.1; Ripcord (2.0 s) is 0.20.0's.
-    const uint64_t pinned[]={0x125b090b56adf199ull,0x77fdde5426be23e0ull,0xaf217fcf31c0fe1cull};
+    // celebration's length in 0.20.1, and Night Spin's first-phrase pickup
+    // kick became a hat for the 0.21 cost refit; Ripcord (2.0 s) is 0.20.0's.
+    const uint64_t pinned[]={0x125b090b56adf199ull,0x2059e7f019a8d68eull,0xaf217fcf31c0fe1cull};
     for(size_t k=0;k<3;++k) {
       const auto s=render(compileText(readFile(songs[k])));
       int peak=0;for(int16_t v:s)peak=std::max(peak,std::abs(int(v)));

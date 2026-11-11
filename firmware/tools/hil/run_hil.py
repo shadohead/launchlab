@@ -4,6 +4,7 @@
   run_hil.py --port /dev/cu.usbmodem1101 --out ~/hil-runs/run1 normal hard
   run_hil.py --port ... --out ... all            # every scenario except soak/corpus
   run_hil.py --port ... --out ... soak --soak-minutes 30
+  run_hil.py --port ... --out ... --fail-fast normal songs ...   # stop at the first failed scenario
 
 Results: <out>/results.json, <out>/summary.md, <out>/serial.log, screenshots,
 and <out>/run.json (device runtime, source commit, the flashed build's
@@ -13,9 +14,9 @@ Keep --out outside the repository: logs contain the device's history.
 import argparse
 import datetime
 import json
+import signal
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -25,7 +26,7 @@ import scenarios  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[3]
 DEFAULT = ['normal', 'hard', 'weak', 'back_to_back', 'rearm', 'history_save_pull', 'long_save_pull', 'adc_stall', 'frame_rows', 'power_log_pull', 'standby', 'sleep_blockers', 'imu_timeline',
-           'imu_faults', 'imu_faults_pull', 'imu_backlog', 'settings', 'about_page', 'battery_icon', 'themes', 'milestones', 'request_burst', 'effect_set', 'nvs_tight',
+           'imu_faults', 'imu_faults_pull', 'imu_backlog', 'settings', 'about_page', 'battery_icon', 'bluetooth_off', 'ble_tap', 'bluetooth_storage', 'themes', 'milestones', 'request_burst', 'effect_set', 'nvs_tight',
            'effect_times', 'effect_bench_fixed', 'loaded_store', 'songs', 'wear_check', 'mic_page', 'stray_bytes']
 # effect_stages needs a BEST_EFFECT_PROFILE build (!effectstages); run it by name on one.
 
@@ -81,6 +82,22 @@ def utc():
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')
 
 
+def usb_serial(port):
+    """The USB serial (an M5's MAC) list_ports gives for `port`, without opening it."""
+    try:
+        from serial.tools import list_ports
+    except ImportError:
+        return None
+    name = port.replace('/dev/tty.', '/dev/cu.')
+    return next((p.serial_number for p in list_ports.comports()
+                 if p.device.replace('/dev/tty.', '/dev/cu.') == name and p.serial_number), None)
+
+
+class Stopped(BaseException):
+    """SIGTERM, e.g. release_gate.py stopping this rig after another rig's failure (not an
+    Exception, so Rig.run does not record it as a failed scenario and carry on)."""
+
+
 def main():
     sys.stdout.reconfigure(line_buffering=True)
     p = argparse.ArgumentParser()
@@ -92,6 +109,7 @@ def main():
     p.add_argument('--sensor', choices=('fitted', 'absent'),
                    help="whether an optical sensor is fitted: the songs scenario's ADC interference check counts only with 'fitted', "
                         "and is recorded as not covered otherwise")
+    p.add_argument('--fail-fast', action='store_true', help='stop after the first scenario that does not pass')
     p.add_argument('--verbose', action='store_true', help='echo every device line')
     p.add_argument('--build-dir', type=Path, default=REPO / 'firmware/build-m5-hil',
                    help='build of the flashed image; its build-info.json is recorded in run.json')
@@ -108,9 +126,12 @@ def main():
     commit, dirty = source()
     info = a.build_dir / 'build-info.json'
     run = {'tool': 'firmware/tools/hil/run_hil.py', 'scenarios': names, 'runtime': None, 'boot_id': None,
+           'rig': {'port': a.port, 'usb_serial': usb_serial(a.port)}, 'fail_fast': a.fail_fast, 'stopped': None,
            'source_commit': commit, 'source_dirty': dirty,
            'build_info': json.loads(info.read_text()) if info.exists() else None,
            'started_utc': utc(), 'finished_utc': None, 'completed': False, 'failed_checks': None}
+    if any(n.startswith('soak') for n in names):
+        run['soak_minutes'] = a.soak_minutes
     scenarios.SENSOR = a.sensor
     run['sensor'] = a.sensor or 'not declared'
     # The HIL image's internal RAM beyond production's (build-m5-hil.sh, tools/hil_overhead.py),
@@ -128,10 +149,16 @@ def main():
             p.error(f'unknown effects: {", ".join(unknown)}')
         scenarios.EFFECTS = tuple(e for e in scenarios.EFFECTS if e[1] in wanted)
         run['effects'] = wanted
+    def stop(signum, frame):
+        raise Stopped(f'signal {signum}')
+    # The finally below still recovers the device and writes the records.
+    signal.signal(signal.SIGTERM, stop)
     try:
         version = rig.require_hil_build()
         run.update(runtime=version, boot_id=rig.boot_id)
         print(f'device {version}, boot_id {rig.boot_id}')
+        run['preflight'] = scenarios.preflight(rig)
+        print(f"preflight: {run['preflight']}")
         for name in names:
             fn = scenarios.SCENARIOS[name]
             if name == 'corpus':
@@ -142,7 +169,15 @@ def main():
                 rig.run(name, fn, minutes=a.soak_minutes)
             else:
                 rig.run(name, fn)
-        run['completed'] = True
+            if a.fail_fast and not rig.results[-1].get('passed'):
+                run['stopped'] = f'--fail-fast: {name} did not pass'
+                print(f'{name} did not pass; stopping (--fail-fast)')
+                break
+        else:
+            run['completed'] = True
+    except Stopped as e:
+        run['stopped'] = str(e)
+        print(f'stopped: {e}')
     finally:
         try:
             rig.recover()
@@ -152,8 +187,8 @@ def main():
             run.update(finished_utc=utc(), failed_checks=failed)
             (a.out / 'run.json').write_text(json.dumps(run, indent=1) + '\n')
             dev.close()
-    print(f'\n{failed} failed checks; see {a.out / "summary.md"}')
-    return 1 if failed else 0
+    print(f'\n{failed} failed checks{"" if run["completed"] else ", run not completed"}; see {a.out / "summary.md"}')
+    return 1 if failed or not run['completed'] else 0
 
 
 if __name__ == '__main__':

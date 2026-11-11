@@ -1,9 +1,10 @@
 """Loaded effects over USB for the HIL rig (docs/FIRMWARE_LOADABLE_EFFECTS.md):
 compile an effect with fxc, frame an `X` request as fx_transfer.h does, send
 it the way the website will, and read the `F` list."""
-import re
 import base64
+import json
 import pathlib
+import re
 import struct
 import subprocess
 import tempfile
@@ -129,11 +130,12 @@ def worst_song_source(short_frames=False):
     """The heaviest song effect the M5 accepts: Boundless 0.17's frames (the
     heaviest passing idiom effect, 8.7 ms modelled, the most code) and a
     6 s song (as long as a celebration, the most a song may be from 0.20.1)
-    at the render budget (19.9% of core 0 by the cost model,
-    LoadableFx::SONG_BUDGET 20%): every voice type sounding at once on seven
-    channels (pulse, wavetable with a filter, FM, tone, stepped noise) and the
-    drum bank one drum at a time. A song that passes the validator must play
-    with no underrun, and this is the gate's worst case of one."""
+    at the render budget (19.8% of core 0 at its busiest by the cost model
+    refitted on the device in 0.21, LoadableFx::SONG_BUDGET 20%): the five
+    dearest voice kinds sounding at once (pulse, wavetable, FM, tone and the
+    drum bank, one drum at a time). Every kind at once no longer fits: the
+    refit charges kinds that sound together. A song that passes the validator
+    must play with no underrun, and this is the gate's worst case of one."""
     text = (ROOT / 'tools/fx/effects/idiom/boundless017.fx').read_text()
     text = text.replace('effect "Boundless 0.17"', 'effect "Worst Song"').replace('uid 0x4c4c465800010127', 'uid 0x4c4c4d55ffff0002')
     if short_frames:
@@ -145,11 +147,9 @@ def worst_song_source(short_frames=False):
     text = '\n'.join(l for l in text.split('\n') if not l.startswith('sound '))
     voices = """
 voice lead = pulse(duty: .25, attack: .003, decay: 4, gain: .14)
-voice harm = tone(wave: sine, attack: .003, decay: 6, gain: .1)
-voice pad = wave(points: [0, .38, .7, .92, 1, .92, .7, .38, 0, -.38, -.7, -.92, -1, -.92, -.7, -.38], attack: .05, decay: 3, gain: .1, filter: low, k: .2)
+voice pad = wave(points: [0, .38, .7, .92, 1, .92, .7, .38, 0, -.38, -.7, -.92, -1, -.92, -.7, -.38], attack: .003, decay: 3, gain: .1)
 voice bell = fm(ratio: 3.5, index: 1.8, attack: .002, decay: 2, gain: .1)
 voice bass = tone(wave: triangle, attack: .002, decay: 1.6, gain: .25)
-voice hiss = noise(step: 3, attack: .001, decay: 2, gain: .04)
 voice kick = drum(kick, gain: .5)
 voice snare = drum(snare, gain: .3)
 voice openhat = drum(openhat, gain: .15)
@@ -163,8 +163,8 @@ voice tomlow = drum(tomlow, gain: .2)
     patterns = []
     for k in range(4):
         lines = {
-            'lead': row(lead, k), 'harm': row(['e4', 'g4', 'b4', 'd5'], k), 'pad': row(['c3', 'e3', 'g3', 'a3'], k),
-            'bell': row(['c6', 'g6', 'e6', 'b6'], k), 'bass': row(['c2', 'c3', 'g1', 'g2'], k), 'hiss': row(['hiss'], k),
+            'lead': row(lead, k), 'pad': row(['c3', 'e3', 'g3', 'a3'], k),
+            'bell': row(['c6', 'g6', 'e6', 'b6'], k), 'bass': row(['c2', 'c3', 'g1', 'g2'], k),
             # Every 4th row of the whole song, across the 15-row patterns' ends.
             'beat': ' '.join(drums[((15 * k + i) // 4) % 4] if (15 * k + i) % 4 == 0 else '.' for i in range(15)),
         }
@@ -175,6 +175,18 @@ voice tomlow = drum(tomlow, gain: .2)
 
 
 WORST_SONG_SECONDS = 6.0
+
+
+def song_model(source, from_ms, to_ms):
+    """The cost model's mean share of core 0 for a song between two times
+    (`fxc songwork`), a fraction: what the device should measure there."""
+    with tempfile.TemporaryDirectory() as tmp:
+        src = pathlib.Path(tmp) / 'song.fx'
+        src.write_text(source)
+        r = subprocess.run([str(fxc()), 'songwork', str(src), str(from_ms), str(to_ms)], capture_output=True, text=True, check=True)
+    return json.loads(r.stdout)['model']
+
+
 # A song's channel can be empty between its requests (MUSIC_STATUS
 # max_dry_ms, 0.20.8), but M5's speaker writes silence once it has been
 # empty for 48 ms (music_stream.h): a play keeps under this.

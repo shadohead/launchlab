@@ -71,6 +71,8 @@ prefix = r'''
 #include "rpm_estimator_setting.h"
 #include "brightness.h"
 #include "display_flip_setting.h"
+#include "bluetooth_setting.h"
+#include "ble_link_fake.h"
 #include "shake_wake_setting.h"
 #include "battery_icon_setting.h"
 #include "display_orientation.h"
@@ -124,7 +126,7 @@ static uint8_t stored(const char *key){uint8_t value=0;assert(prefs.getBytes(key
 struct {struct {unsigned brightness=0,rotation=0;void setBrightness(unsigned v){brightness=v;}void setRotation(unsigned v){rotation=v;}}Display;}M5;
 static Controls::State controls;static SettingsSave settingsSave;
 static bool motionPending=false,settingsSaveError=false,restorePreview=false,displayFlipped=false,dirty=false,extPower=false,shakeToWake=ShakeWakeSetting::DEFAULT_ON,
-  batteryIcon=BatteryIconSetting::DEFAULT_ON;
+  batteryIcon=BatteryIconSetting::DEFAULT_ON,bluetoothOn=BluetoothSetting::DEFAULT_ON;
 static bool saveError=false,wipeCheckpointHeld=false,orphanSeen=false;
 static uint8_t brightnessPercent=Brightness::DEFAULT_PERCENT;static uint32_t orphanSince=0;
 static constexpr uint32_t ORPHAN_CHECKPOINT_MS=1000,HISTORY_COALESCE_MS=10000,HISTORY_SAVE_RETRY_MS=5000;
@@ -193,7 +195,7 @@ static void boot() {
   assert(acquisition.initAdc());ownerPump=pump;acquisition.setRequestHook(quietImuForFlash);
   dropReplies=dropCommands=false;imuAcquisition={};controls={};settingsSave={};
   motionPending=settingsSaveError=restorePreview=displayFlipped=dirty=extPower=saveError=wipeCheckpointHeld=orphanSeen=false;shakeToWake=ShakeWakeSetting::DEFAULT_ON;
-  batteryIcon=BatteryIconSetting::DEFAULT_ON;
+  batteryIcon=BatteryIconSetting::DEFAULT_ON;bluetoothOn=BluetoothSetting::DEFAULT_ON;
   brightnessPercent=Brightness::DEFAULT_PERCENT;orphanSince=lastSaveTry=saveCount=saveErrors=maxSaveUs=lastAcceptedAt=historyPendingSince=0;
   inactivity={};launchFeedback={};practice={};appearance={};personalBests={};
   rpmEstimator=RpmEstimator::DEFAULT_MODE;sensorProfile=StickS3SensorProfile::DEFAULT_MODE;
@@ -233,6 +235,12 @@ static void shakeWakeSave() {
   apply(unsigned(S::ShakeWake),1);passes(1000);assert(shakeToWake && !settingsSave.pending() && stored(ShakeWakeSetting::KEY)==1);
   freeEntries=158;
   std::cout<<"PASS: Shake to wake applies at once and saves its own key in the next checkpoint, never held back by the NVS reserve\n";
+  boot();freeEntries=0;apply(unsigned(S::Bluetooth),1);
+  assert(bluetoothOn && SettingsSave::item(unsigned(S::Bluetooth))==SettingsSave::Bluetooth);
+  passes(1000);assert(!settingsSave.pending() && stored(BluetoothSetting::KEY)==1 && running());
+  apply(unsigned(S::Bluetooth),0);passes(1000);assert(!bluetoothOn && !settingsSave.pending() && stored(BluetoothSetting::KEY)==0);
+  freeEntries=158;
+  std::cout<<"PASS: Bluetooth applies at once and saves its own key in the next checkpoint, never held back by the NVS reserve\n";
 }
 // Battery icon (0.20.8) the same way: Apply shows or hides the corner battery
 // at once and its own key follows in the next checkpoint.
@@ -793,7 +801,7 @@ functions = '\n'.join([
     statement('static StartMarkReference::Reference startMarks;'), statement('static bool startMarksDirty=false;'),
     statement('static constexpr const char *START_MARKS_KEY='), function('noteStartMark'), function('saveStartMarks'),
     function('quietImuForFlash', 'bool'), function('previewSetting'), function('writeSettings'),
-    function('saveSettings'), function('commitSetting'), function('saveHistory'),
+    function('saveSettings'), function('applySetting', 'bool'), function('commitSetting'), function('saveHistory'),
     function('releaseOrphanCheckpoint'), shutdown_flush(),
     function('themeReply'), function('themesChanged'), function('selectTheme'), function('finishThemeRequest'),
     function('milestoneReply'), function('*milestoneStoreName', 'const char'),

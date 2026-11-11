@@ -34,9 +34,9 @@ def names(pattern):
 
 PAGES = names(r'enum class Page:uint8_t \{(.*?)\};')
 SETTINGS = names(r'enum class Setting:uint8_t \{(.*?)\};')
-ORDER = [SETTINGS.index(n.replace('Setting::', '')) for n in names(r'ORDER\[SETTING_COUNT\]=\{(.*?)\};')]
-COUNT = int(re.search(r'SETTING_COUNT=(\d+);', CONTROLS).group(1))
-MENU_SETTINGS = 3  # Controls::State::tapA: Menu row 3 opens Settings
+ORDER = [SETTINGS.index(n.replace('Setting::', '')) for n in names(r'ORDER\[ROWS\]=\{(.*?)\};')]
+COUNT = int(re.search(r'SETTING_COUNT=(\d+)[,;]', CONTROLS).group(1))
+MENU_SETTINGS = scenarios.MENU_ROWS.index('Settings')  # Controls::SETTINGS_ROW
 
 
 class Unit:
@@ -126,6 +126,11 @@ class SettingsWalk(unittest.TestCase):
         self.assertEqual(scenarios.SETTINGS_ORDER, [str(row) for row in ORDER + [COUNT]])
         self.assertEqual(scenarios.ABOUT_ROW, str(SETTINGS.index('About')))
         self.assertEqual(scenarios.BATTERY_ICON_ROW, str(SETTINGS.index('BatteryIcon')))
+        # The Menu's rows, top to bottom, are the device's (Controls::MenuRow and ControlsUI::MENU).
+        rows = names(r'enum MenuRow:uint8_t \{(.*?)\};')
+        self.assertEqual(rows, [r.upper().replace('STRING WEAR CHECK', 'WEAR').replace('MIC RPM', 'MIC').replace(' ', '_') + '_ROW' for r in scenarios.MENU_ROWS])
+        labels = re.search(r'MENU\[\]=\{(.*?)\};', (FIRMWARE / 'LaunchLabMini/controls_ui.h').read_text()).group(1)
+        self.assertEqual([l.strip().strip('"') for l in labels.split(',')], scenarios.MENU_ROWS)
         for constant, page in (('ABOUT_PAGE', 'About'), ('SETTINGS_PAGE', 'Settings'), ('EDIT_PAGE', 'Edit'), ('BATTERY_PAGE', 'Battery'), ('MENU_PAGE', 'Menu')):
             self.assertEqual(getattr(scenarios, constant), str(PAGES.index(page)), constant)
 

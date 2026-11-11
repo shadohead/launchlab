@@ -25,6 +25,8 @@ struct LGFXBase {
   int width(){return 135;}
   void setTextDatum(int d){datum=d;}void setTextColor(uint16_t color,uint16_t){ink=color;}
   void fillRect(int x,int y,int w,int h,uint16_t){assert(x>=0 && y>=0 && x+w<=135 && y+h<=240);}
+  void fillScreen(uint16_t){}
+  void fillRoundRect(int x,int y,int w,int h,int,uint16_t){fillRect(x,y,w,h,0);}
   void drawRoundRect(int x,int y,int w,int h,int,uint16_t){fillRect(x,y,w,h,0);}
   int textWidth(const char *text,const int *font){return int(std::strlen(text))*(*font==4?18:8);}
   // Font 2 is proportional: 8 px a glyph, but 5 for i, l, space and narrow
@@ -52,15 +54,15 @@ struct LGFXBase {
 #include "controls_ui.h"
 int main() {
   using namespace Controls;unsigned renders=0;
-  for(unsigned row=0;row<MENU_COUNT;++row){lgfx::LGFXBase g;ControlsUI::list(g,"Menu",ControlsUI::MENU,MENU_COUNT,row);assert(g.footers==1);++renders;}
+  for(unsigned row=0;row<MENU_COUNT;++row){lgfx::LGFXBase g;ControlsUI::list(g,"Menu",ControlsUI::MENU,MENU_COUNT,row,MENU_GROUPS);assert(g.footers==1);++renders;}
   for(unsigned row=0;row<4;++row){lgfx::LGFXBase g;ControlsUI::list(g,"History",ControlsUI::HISTORY,4,row);assert(g.footers==1);++renders;}
-  uint8_t values[]={10,0,100,1,0,0,0,2,2,0,1,0,0,1};
+  uint8_t values[]={10,0,100,1,0,0,0,2,2,0,1,0,0,1,1};
   static_assert(sizeof(values)==SETTING_COUNT,"a value for every row");
   for(unsigned row=0;row<=SETTING_COUNT;++row){lgfx::LGFXBase g;State state;state.setting=row;ControlsUI::settings(g,state,values);assert(g.footers==1);++renders;}
   // Lowest and highest draft for each setting. A named array keeps the values
   // alive for the loop; a conditional initializer_list would dangle.
   const unsigned extremes[][2]={{1,10},{0,1},{10,100},{0,1},{0,1},{0,Appearance::THEMES-1},{0,Appearance::EFFECTS-1},{0,2},{0,2},{0,1},{0,1},
-    {0,0},{0,0},{0,1}};  // Wipe all and About have no editor
+    {0,0},{0,0},{0,1},{0,1}};  // Wipe all and About have no editor
   static_assert(sizeof(extremes)/sizeof(extremes[0])==SETTING_COUNT,"one range per setting");
   for(unsigned row=0;row<SETTING_COUNT;++row)if(editable(row))for(unsigned value:extremes[row]) {
     lgfx::LGFXBase g;State state;state.setting=row;state.draft=value;
@@ -131,6 +133,15 @@ int main() {
     assert(cornerBattery(true,72,false).fill==10 && cornerBattery(true,72,false).tone==CornerBattery::Normal);
     assert(cornerBattery(true,20,false).tone==CornerBattery::Low && cornerBattery(true,21,false).tone==CornerBattery::Normal);
     assert(cornerBattery(true,15,true).tone==CornerBattery::Charging && cornerBattery(true,15,true)!=cornerBattery(true,15,false));
+    // The charging bolt (0.20.9): ten rows from a row above the outline to a
+    // row below, inside its width, each row touching the next.
+    static_assert(CornerBattery::BOLT_ROWS==CornerBattery::HEIGHT+2 && CornerBattery::TOP>=2);
+    for(int row=0;row<CornerBattery::BOLT_ROWS;++row) {
+      const int left=CornerBattery::BOLT_LEFT+CornerBattery::BOLT[row][0],right=left+CornerBattery::BOLT[row][1];
+      assert(left>=3 && right<=CornerBattery::WIDTH-3 && CornerBattery::BOLT[row][1]>=2);
+      if(row)assert(left<CornerBattery::BOLT_LEFT+CornerBattery::BOLT[row-1][0]+CornerBattery::BOLT[row-1][1] &&
+        right>CornerBattery::BOLT_LEFT+CornerBattery::BOLT[row-1][0]);
+    }
     for(int percent=0;percent<=100;++percent)for(bool charging:{false,true}) {
       const auto b=cornerBattery(true,percent,charging);assert(b.fill>=1 && b.fill<=CornerBattery::FILL);
       lgfx::LGFXBase g;ControlsUI::cornerBattery(g,b);++renders;  // every rectangle on screen
@@ -207,5 +218,21 @@ int main() {
   for(const char *label:{"Enter tournament","Exit tournament","Cancel change","Back"})for(unsigned elapsed:{0u,999u,1000u,10000u}) {
     lgfx::LGFXBase g;ControlsUI::hold(g,label,elapsed,1000);assert(g.footers==1);++renders;
   }
+  {lgfx::LGFXBase r;ControlsUI::restarting(r);assert(r.drew("Saving, restarting"));++renders;}
+  // The Bluetooth page: every row and state fits, the longest name too.
+  for(const char *name:{"BEYBLADE_TOOL01"})for(unsigned row=0;row<3;++row)for(bool on:{false,true})for(bool linked:{false,true})for(int bonds:{0,1,3}) {
+    lgfx::LGFXBase g;ControlsUI::bluetoothPage(g,row,on,linked,name,bonds);
+    assert(g.footers==1 && g.drew("Appears as") && g.drew(name) && g.drew("Forget phones") && g.drew(on?"On, experimental":"Off"));++renders;
+  }
+  // Before it turns on, the page says it is experimental (0.20.9); every line fits.
+  for(bool enable:{false,true}) {
+    lgfx::LGFXBase g;ControlsUI::enableBluetooth(g,enable);
+    assert(g.footers==1 && g.drew("Experimental") && g.drew("Cancel") && g.drew("Turn on"));++renders;
+    for(const auto &span:g.spans)if(span[3]==1 && span[2]>=31 && span[2]<213)assert(span[0]>=10 && span[1]<=125);
+  }
+  for(bool forget:{false,true}){lgfx::LGFXBase g;ControlsUI::forgetPhones(g,forget);assert(g.footers==1);++renders;}
+  // The number keeps its leading zeros; with no bond, only B is offered.
+  {lgfx::LGFXBase g;ControlsUI::comparison(g,7042,false);assert(g.drew("007 042") && g.footers==1 && g.drew("A confirm, B reject"));++renders;}
+  {lgfx::LGFXBase g;ControlsUI::comparison(g,999999,true);assert(g.drew("999 999") && g.drew("B reject") && !g.drew("A confirm, B reject"));++renders;}
   std::cout<<"PASS: "<<renders<<" actual menu/editor/confirmation/hold renders fit135x240; one-line footers, conservative glyph bounds\n";
 }
