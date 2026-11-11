@@ -167,5 +167,27 @@ int main(){
  for(unsigned i=0;i<MAX_SAMPLES;++i)session->samples[i]={1000,float(4000+MAX_SAMPLES-1-i),false};
  Results duplicates;prepare(*session,*work,duplicates,cfg);
  assert(work->count==1 && work->points[0].x==5.5f);
+ // A short, clean high-speed arc can favor Power-Law and still imply a many-minute finish.
+ session->launcherRpm=3847;session->launcherMs=0;session->count=80;session->hasStop=false;session->stopMs=21000;
+ for(unsigned i=0;i<80;++i){
+   const float t=(i+1)*.2f;
+   session->samples[i]={200*(i+1),3847/std::sqrt(1+.25f*t)+18*std::sin(i*.71f),false,false};
+ }
+ auto shortArc=fitAllModels(*session,*work);
+ assert(shortArc.best>=0 && !std::isfinite(liveFinishSeconds(shortArc,68)));
+ // A well-observed synthetic spin with an 82-second stop can produce a finish time.
+ session->count=300;session->stopMs=65000;
+ for(unsigned i=0;i<300;++i){
+   const float t=(i+1)*.2f;
+   session->samples[i]={200*(i+1),3847*(1-t/82)+6*std::sin(i*1.7f),false,false};
+ }
+ auto longArc=fitAllModels(*session,*work);
+ float estimate=liveFinishSeconds(longArc,65);
+ assert(std::isfinite(estimate) && std::fabs(estimate-82)<3);
+ assert(!std::isfinite(liveFinishSeconds(longArc,estimate+1)));
+ auto conflict=longArc;
+ auto &peer=conflict.models[(conflict.best+1)%MODEL_COUNT];
+ peer=conflict.models[conflict.best];peer.stopSeconds+=30;
+ assert(!std::isfinite(liveFinishSeconds(conflict,65)));
  std::cout<<"PASS: model reconstruction and robust fits\n";
 }

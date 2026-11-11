@@ -1,27 +1,16 @@
 # LaunchLab local build and flash
 
-Repository: `C:\Users\Truman\Projects\Launch Lab`
+Run the commands below in PowerShell from the repository root. The scripts expect these tools under the local `firmware\.arduino` directory:
 
-## Current status
-
-Installed locally under `firmware\.arduino`:
 - Arduino CLI 1.5.1
 - ESP32 Arduino core 3.3.0 and its compiler/tool dependencies
 - M5Unified 0.2.23 and M5GFX 0.2.30
 - LaunchLab's checksum-verified ESP32-S3 power-management SDK
 - Isolated Python environment with esptool 5.1.0 and pyserial 3.5
 
-The Analysis Mode source changes and local build/device scripts are in the repository.
-No device has been connected, opened, backed up, or flashed by this setup.
-
-**A firmware binary is NOT ready yet.** The build attempt inside Codex failed before compilation with Windows error 623 (Illegal System DLL Relocation). Both official Windows compiler variants failed to start. A reported Codex Windows issue describes this behavior with GCC while the same compiler runs from a normal Windows terminal: https://github.com/openai/codex/issues/51674
-
-## 1. Finish the build in a normal Windows terminal
-
-Open PowerShell or Windows Terminal outside the Codex command runner and run:
+## Build
 
 ```powershell
-Set-Location 'C:\Users\Truman\Projects\Launch Lab'
 .\scripts\build-local.cmd
 ```
 
@@ -39,9 +28,7 @@ Then inspect the offline plan:
 
 If compilation fails, stop and share `build.log` for diagnosis. Do not use the archived stable application as if it contained Analysis Mode. The development runtime should be `0.20.8-analysis-dev-pm`.
 
-## 2. Later: connect and identify the port
-
-The following steps are for when you choose to flash; they were not run during setup.
+## Identify the device
 
 Use an M5StickS3 K150 already running LaunchLab, connected by a USB data cable. Close the browser updater and serial monitors. Confirm the physical model; an ESP32-S3 chip alone does not identify a StickS3.
 
@@ -51,7 +38,7 @@ Use an M5StickS3 K150 already running LaunchLab, connected by a USB data cable. 
 
 Replace COM7 in the commands below with its actual port. If the device will not enter download mode automatically, use the manufacturer's procedure: hold the power button until the green LED blinks, release it, then recheck the port.
 
-## 3. Preview and flash (no automatic backup)
+## Preview and flash
 
 After a successful build, preview without opening the serial port:
 
@@ -77,14 +64,13 @@ with a previous flash snapshot in this workflow.
 Build and flash only when the build succeeds (Windows PowerShell or PowerShell 7):
 
 ```powershell
-Set-Location 'C:\Users\Truman\Projects\Launch Lab'
 .\scripts\build-local.cmd
 if ($LASTEXITCODE -eq 0) {
     .\scripts\device-local.cmd flash --port COM7 --execute
 }
 ```
 
-## 4. Optional separate full backup
+## Back up the device
 
 ```powershell
 .\scripts\device-local.cmd backup --port COM7
@@ -96,7 +82,7 @@ a current firmware build and does not write flash. Existing backups are never ov
 A backup contains private device data; retain it locally for recovery. Backup completion
 does not establish compatibility with the app-only updater; flashing runs its own checks.
 
-## 5. Check the development feature
+## Check Analysis Mode
 
 - Main: hold B for one second to enter Analysis.
 - Wait for microphone warm-up, then launch.
@@ -110,7 +96,3 @@ does not establish compatibility with the app-only updater; flashing runs its ow
 - Check history/settings, sleep/wake, and the side power key.
 
 Analysis automatically stops at five minutes and continues through quiet gaps. The separate Mic RPM mode retains its two-minute/eight-seconds-without-evidence limits. Analysis remains silent while the microphone is active.
-
-## Validation already completed
-
-Targeted firmware host tests were completed in the implementation work. Additional offline tests exercise the local flashing helper's no-write preview, checksum refusal, layout/boot-selection checks, targeted preflight checks, separate full backups, and application-only write sequence using mocked device calls. No physical flashing or runtime validation has occurred.

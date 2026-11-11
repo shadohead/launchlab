@@ -1,6 +1,7 @@
 #include "decay_record.h"
 #include <cassert>
 #include <iostream>
+#include <memory>
 int main(){
   Decay::Results in;in.initialRpm=9000;in.acousticStart=.2f;in.lastTime=40;in.launcherRpm=11000;in.actualStop=100;in.actualStopValid=true;in.manualAnchor=true;in.tailRpm=3000;in.tailSlope=-100;
   for(unsigned i=0;i<4;++i){auto &r=in.models[i];r.model=Decay::Model(i);r.valid=r.converged=true;r.params={.03f,.001f,.001f,.001f,1.5f};r.all={true,10,8,20};r.stopValid=true;r.stopSeconds=110;}
@@ -16,6 +17,13 @@ int main(){
   image[52]=0;image[53]=0;image[54]=0;image[55]=0x80;
   auto crc=Decay::Record::checksum(image.data(),image.size()-4);
   for(unsigned i=0;i<4;++i)image[image.size()-4+i]=uint8_t(crc>>(i*8));
+  assert(!Decay::Record::decode(image,out,selected));
+  // Immediate manual stop, before the microphone acquires a reading.
+  auto spin=std::make_unique<Decay::Session>();auto work=std::make_unique<Decay::Workspace>();
+  spin->launcherRpm=9000;spin->stopMs=100;spin->hasStop=true;
+  auto brief=Decay::fitAllModels(*spin,*work);assert(brief.models[0].params.a>10);
+  Decay::Record::encode(brief,0,image);assert(Decay::Record::decode(image,out,selected));
+  brief.models[0].params.a+=1;Decay::Record::encode(brief,0,image);
   assert(!Decay::Record::decode(image,out,selected));
   std::cout<<"PASS: versioned result record round-trip and corruption rejection\n";
 }

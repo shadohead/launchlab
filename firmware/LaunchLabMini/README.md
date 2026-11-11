@@ -29,70 +29,38 @@ Custom color themes made in the [website theme editor](https://launchlab.beywatc
 Settings adds saved Top/Sidecar mounting and a guarded Wipe all flow. Themes, personal-best effects, optional sound, history and USB backup/restore remain available.
 Battery display uses filtered voltage readings, idle screen updates are reduced, and PM1 access uses checked wake/retry handling.
 
-## Local Analysis Mode development
+## Analysis Mode
 
-This checkout adds Analysis Mode to the 0.20.8 base; it is not a published release.
-Hold **B for one second** on Main (including its recap) to enter, and hold B again to exit.
-Wait for the microphone warm-up indication to clear (about one second) before the first pull.
-Each valid launch shows its optical peak, starts a large circular **MM:SS** elapsed timer from the recorded
-end of the pull, and replaces the bottom optical curve with the existing acoustic RPM graph.
-Before a launch the screen shows the detector's READY state. A second timestamp below the
-elapsed timer shows when the last valid microphone RPM was recorded. The graph occupies the bottom third of the screen and expands its
-time axis throughout recording, including quiet gaps. Tap **B** to stop and freeze both;
-the next valid launch resets them. Tap **A** to show the tilt replay and initial optical
-RPM curve, then A again to return. Recording continues while replay is visible.
+Hold **B** for one second on Main to enter Analysis. Give the microphone about a second to warm up. A valid optical launch starts the timer and the acoustic RPM graph. Press **B** when the spin finishes. The five-minute timeout ends recording but leaves the physical stop time unknown.
 
-The microphone stays warm between launches; sounds and celebrations are suppressed while
-Analysis is open. Analysis records for up to **5 minutes**, even through quiet gaps; the
-separate Mic RPM page keeps its existing two-minute/eight-second silence limits.
-Active timing prevents automatic sleep. A manual stop or five-minute timeout starts the
-ordinary inactivity timeout again. The side power key still saves and powers off.
-Sleep/wake returns to normal Main, not an active microphone.
-Analysis traces remain in RAM; the latest fitted results can be saved as described below. The existing optical launch history is still saved normally.
-Millisecond formatting is not a claim of millisecond release-detection accuracy.
+**A** toggles tilt replay and the initial optical RPM graph. Recording continues during replay. Hold **B** to leave Analysis. The microphone stays warm between launches and the speaker is muted while Analysis is open.
 
-Analysis performance: its main view requests frames at 100 ms intervals, with immediate
-state/button updates and 50 ms button-hold feedback. Replay animates at up to 20 FPS and
-holds its endpoint without timer- or microphone-driven redraws. Static header, RPM and
-stopwatch pixels are retained in the existing screen sprite; the timer is redrawn only
-when its displayed second changes. Palette, launch, sensor-status and screen transitions
-invalidate this cache, and direct-display fallback always redraws fully. The graph remains
-clock-driven during silence. Analysis microphone followers wait for capture notifications
-with a 100 ms fallback; stop, exit and new-pull notifications wake them promptly.
-The standalone Mic RPM page retains its original polling and display behavior.
-Host tests cover these paths; on-device timing and battery gains remain unmeasured.
+During recording, a gated alpha-beta filter smooths the microphone readings. Gray points show readings withheld by the live filter. The timestamp above the graph shows the last accepted reading. The fitter retains the original readings so that smoothing does not distort its coefficients.
 
-Analysis alone applies a gated alpha-beta filter to accepted acoustic readings (alpha 0.6,
-beta 0.08), using each reading's sample timestamp. Deviations over max(200 RPM, 5% of
-predicted RPM) are withheld before updating the estimate. Three consecutive candidates
-within max(150 RPM, 3%) of one another can establish a changed speed; a gap over one
-second also requires three candidates to reacquire. Missing/rejected readings emit no
-predicted RPM and do not advance the last-reading timestamp. Every launch resets the
-filter. Optical RPM, the raw tracker, diagnostic spin summaries and the ordinary Mic RPM
-page are unchanged. These initial parameters passed synthetic host checks; they still
-need validation against real recordings, particularly impacts and competing tones.
+### Fitted curve
 
+After five seconds without a valid raw microphone reading, Analysis can fit a provisional curve in the background. It needs at least eleven raw observations to attempt chronological validation. The live status shows **Predicted finish** in MM:SS from launch when a stable winning fit has a corroborated stop estimate. The estimate must still be in the future and its remaining span from the last observation cannot exceed twice the observed acoustic duration. At least one comparably accurate stable model must agree on the remaining time (within five seconds or 25%, whichever is larger). Fits at the minimum constant-drag bound do not qualify. These display limits are heuristics. Until then it shows **--:--**. The projection is gray. The live axis extends ten seconds beyond the timer; its rightmost label is the edge of the viewing window. A new raw reading clears it. A preview uses the optical launch and acoustic evidence alone. Only the final fit can populate Analysis Details or be saved.
 
+Stopping the timer starts the final background fit. The worker consolidates repeated timestamps and checks upward jumps against the subsequent readings. After a gap longer than two seconds, a higher reading needs corroboration. A sustained higher track with at least four readings and two distinct declines can replace an earlier track.
 
-Analysis graphs show readings withheld by the alpha-beta filter as small gray dots at their original RPM and sample time. These diagnostic dots do not update the last accepted RPM timestamp or the filtered curve, and are hidden in ordinary Mic RPM. The vertical axis includes them so outliers remain visible. Their optional Analysis-only storage adds 6 KB of PSRAM for a five-minute trace.
+All four models start at the optical launch RPM. With speed `x` in thousands of RPM, the models use these deceleration laws:
 
-## Analysis Result (local development)
+| Model | Deceleration |
+| --- | --- |
+| Coulomb-Viscous | `a + b*x` |
+| Coulomb-Quadratic | `a + c*x^2` |
+| Riccati | `a + b*x + c*x^2` |
+| Power-Law Damping | `a + k*x^n`, with `0.5 <= n <= 3` |
 
-Once validation selects a winner, the main Analysis graph shows its curve as a solid line. The measured acoustic interval uses the theme accent, and extrapolated sections and excluded readings use gray. Three animated dots mark fitting in progress. The graph title identifies the winning model. After stopping, tap **B** to open Analysis Details. B scrolls complete 1k RPM bands six rows at a time. **A** returns to the main Analysis screen; a subsequent A opens replay as before. Holding B exits Analysis. A new valid launch resets the results view. Stopping the timer starts calculation; a busy screen remains responsive while fitting.
+A manual stop constrains the fitted duration. Time-weighted Huber loss reduces the influence of large acoustic errors. The first 80% of retained observations train each model, and the last 20% provide its validation score. The fitter favors the simpler model within a 15 RPM validation tie and refits the coefficients on the full track. USB serial reports the individual coefficients and errors in `ANALYSIS_MODEL` and `ANALYSIS_METRIC` records.
 
-The laws are `dx/dt = -(a+b*x)`, `-(a+c*x*x)`, `-(a+b*x+c*x*x)`, and `-(a+k*x^n)`, with `x` in kRPM, seconds from the optical launch, nonnegative coefficients, a positive `a` floor and `0.5 <= n <= 3`. The optical launch is a circle marker, the manual zero-RPM stop a cross. The line starts at the measured optical RPM and reaches zero at the manual stop. Press stop when the physical spin ends. A five-minute timeout is not an observed physical stop.
+The winning model appears above the graph. The solid line uses the theme accent over the retained acoustic interval and gray outside it. After a manual stop, a monotone cubic Hermite segment joins the last retained reading to zero RPM at the stop time. If validation is inconclusive, the graph shows the classified observations.
 
-Original acoustic readings (before the Analysis alpha-beta filter) are retained in the existing optional 6 KB buffer. The live filtered display is unchanged. Results show retained observations in the theme accent and excluded readings in gray. The fitted line is solid through the last retained reading. The Hermite tail to a manual stop and the extrapolation after a timeout use dots in the same theme accent. The curve starts at launch even when the microphone takes time to acquire the spin. The graph extends to the observed/manual stop or predicted stop (prediction display capped at ten minutes).
+### Analysis Details
 
-Fitting accepts every valid positive microphone RPM, consolidates duplicate timestamps, rejects unconfirmed upward jumps, replaces the earlier track when a sustained higher run decays consistently and uses time-weighted Huber loss (150 RPM transition). Each model uses the optical initial RPM. With a manual stop, the optimizer adjusts the curve shape against acoustic readings and scales the drag coefficients to match the recorded duration. With a manual stop, the displayed curve passes through the last retained acoustic reading and uses monotone cubic Hermite interpolation from there to zero. Its initial slope is estimated from the last five retained readings and limited to prevent overshoot. It flattens at the stop. Fit and validation errors describe the underlying decay model. With sparse data the earlier section uses the endpoint-only line as its baseline. For 48 or more observations each optimizer trial integrates elapsed time on a 128-bin RPM grid and interpolates at the observed timestamps. Shorter trials, reported errors and displayed model curves use RK4 with steps no larger than 0.1 seconds. Bounded multi-start Nelder–Mead has a 480-evaluation budget per fit; the power model starts at exponents 1, 1.5 and 2. The first 80% train and final 20% validate chronologically; displayed curves are refitted on all usable data. Rankings require convergence and adequate coverage; a two-coefficient model can win a near tie within 15 RPM. Sparse/flat recordings, coefficient bounds, incomplete convergence and disagreement between starting points are flagged.
+After stopping, press **B** to open Details. The page shows duration, average RPM lost per second, total revolutions, estimated battle stamina and the time spent crossing each complete 1,000 RPM band. Revolutions come from the area under the displayed curve. Battle stamina is the time from launch to its first downward crossing of 1,000 RPM. A timeout limits these metrics to the recorded interval. Press **B** for additional bands or **A** to return.
 
-The details screen shows recorded duration, average RPM lost per second, estimated revolutions, estimated battle stamina (seconds from launch to the first downward crossing of 1,000 RPM on the winning curve) and time per complete RPM band. Revolutions are the area under the winning curve in RPM-seconds divided by 60. Timeout metrics cover the recording interval; USB serial `ANALYSIS_MODEL` and `ANALYSIS_METRIC` lines report coefficients, convergence, training/validation/all-data RMSE, MAE and maximum error. Without a manual stop, stop integration checks numerical convergence and declines estimates beyond one hour.
-
-A priority-zero core-1 task yields regularly and uses approximately 72 KiB of PSRAM plus an 8 KiB PSRAM stack, allocated after the timer stops. The fitting workspace and stack are freed when the result is ready. Leaving Analysis or launching again cancels it without blocking the loop. Allocation failure shows an error. The normal Mic RPM page, acquisition and CPU clock policy are unchanged. Fitting adds temporary CPU load; runtime and energy cost require device measurement.
-
-The latest four fitted results and selected model are stored in a 512-byte versioned, CRC-protected binary `analysis_fit` record in the existing `launchlab-mini` namespace, through the existing ADC-safe settings checkpoint. Writes reserve space for practice history and verify a read-back; optional storage failure is reported over serial and keeps results in RAM. A device wipe clears the record. Raw samples are not persisted, and this version does not add a saved-results browser or reopen a prior result after reboot. The record contains time origins, normalization/version, coefficients and metrics sufficient to regenerate curves later.
-
-Host tests cover synthetic curves, analytic integrals, noise/spikes/dropouts, optical and manual endpoint constraints, failure cases, navigation, rendering bounds, raw capture, background cancellation and persistence faults. Hardware validation is still needed for fitting duration, real-world model selection and stopping accuracy.
+Opening Details queues the latest completed fit for storage at an idle flash checkpoint. The 512-byte `analysis_fit` record contains the coefficients, scores, curve anchors and winning model when one was selected. Saving reserves room for practice history. Raw readings live in RAM for the current session. A new launch or leaving Analysis releases the previous result.
 
 ## Wiring
 

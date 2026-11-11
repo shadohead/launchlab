@@ -946,11 +946,11 @@ LOOP_HELPER static void draw(const Snapshot &s) {
       case Controls::Page::About:drawAbout(view);break;
       case Controls::Page::Wipe:ControlsUI::wipe(view,wipeConfirmation,millis(),wipeFailed,wipeBlocked,wipeComplete);break;
       case Controls::Page::Analysis: {
-        const auto *fit=analysisResults.results();
+        const auto *fit=analysisResults.matches(analysis)?analysisResults.results():nullptr;
         if(analysis.results())AnalysisResultUI::draw(view,analysis,analysisResults.details(),analysisResults.busy(),analysisResults.failed(),colors);
         else AnalysisUI::draw(view,analysis,esp_timer_get_time(),micListener.trace(),micPageState(),latestMotion,
           motionPending,visibleDisplayFlipped(),colors,latestCurve,s.stateName(),s.ready && !s.signalFault,cacheAnalysis?&analysisCache:nullptr,
-          fit,analysisResults.input(),analysisResults.winner(),analysisResults.busy());
+          fit,analysisResults.input(),fit?analysisResults.winner():nullptr,analysisResults.busy());
         break;
       }
       case Controls::Page::MicRpm:
@@ -3226,14 +3226,26 @@ void loop() {
   }
   if(wipeBlocked)return;
   pollCommands(s);
-  if(controls.page==Controls::Page::Analysis) {
-    if(analysis.tick(esp_timer_get_time())){micListener.freezeTrace();inactivity.touch(millis());dirty=true;}
-    if(analysisResults.busy() && !analysis.running() && !analysis.replay() && !analysis.results() && millis()-lastDraw>=250)dirty=true;
-    if(analysis.needsFrame(esp_timer_get_time(),millis()-lastDraw,MotionReplay::playbackDurationMs(latestMotion)))dirty=true;
+  const bool analysisOpen=controls.page==Controls::Page::Analysis;
+  if(analysisOpen) {
+    const auto now=esp_timer_get_time();
+    if(analysis.tick(now)) {
+      micListener.freezeTrace();
+      inactivity.touch(millis());
+      dirty=true;
+    }
+    const uint32_t sinceDraw=millis()-lastDraw;
+    const bool graphVisible=!analysis.replay() && !analysis.results();
+    if(analysisResults.busy() && !analysis.running() && graphVisible && sinceDraw>=250)dirty=true;
+    const auto replayDuration=analysis.replay()?MotionReplay::playbackDurationMs(latestMotion):0;
+    if(analysis.needsFrame(now,sinceDraw,replayDuration))dirty=true;
   }
   tickMicPage();
   const bool resultsWereReady=analysisResults.ready();
-  if(analysisResults.tick(controls.page==Controls::Page::Analysis,analysis,micListener.trace())){dirty=true;if(!resultsWereReady && analysisResults.ready())logAnalysisResults();}
+  if(analysisResults.tick(analysisOpen,analysis,micListener.trace())) {
+    dirty=true;
+    if(!resultsWereReady && analysisResults.ready())logAnalysisResults();
+  }
   if(analysisResults.recordPending())settingsSave.mark(SettingsSave::AnalysisResult);
   pollPowerKey(millis());
   Snapshot event;

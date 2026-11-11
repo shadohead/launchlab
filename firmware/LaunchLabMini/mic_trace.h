@@ -65,14 +65,19 @@ class Trace {
 public:
   constexpr explicit Trace(uint16_t *slots=nullptr,unsigned capacity=MAX_READINGS,uint16_t *rejected=nullptr):rpm_(slots),rejected_(rejected),capacity_(capacity){}
   unsigned capacity()const{return capacity_;}
-  void clear(){launch_=0;count_=heard_=first_=last_=0;peak_=optical_=rejectedPeak_=0;started_=ended_=frozen_=false;reason_=MicRpm::Reason::Quiet;}
+  void clear(){launch_=0;count_=heard_=first_=last_=rawCount_=lastRaw_=0;peak_=optical_=rejectedPeak_=0;started_=ended_=frozen_=false;reason_=MicRpm::Reason::Quiet;}
   // `opticalRpm`: the launch's peak, 0 when the optical reading was invalid.
   void begin(uint32_t launch,float opticalRpm=0){clear();launch_=launch;optical_=uint16_t(std::lround(std::min(opticalRpm,65535.f)));started_=true;}
   // Steps of an older launch and repeats are ignored; a lost step reads as no reading.
   void add(const Step &s) {
     if(frozen_ || !started_ || s.launch!=launch_ || s.index<count_ || s.index>=capacity_)return;
     while(count_<s.index){if(rejected_)rejected_[count_]=0;rpm_[count_++]=0;}
-    if(rejected_){rejected_[count_]=s.rawRpm?s.rawRpm:(s.rejectedRpm?s.rejectedRpm:s.rpm);rejectedPeak_=std::max(rejectedPeak_,s.rejectedRpm);}
+    if(rejected_){
+      const uint16_t raw=s.rawRpm?s.rawRpm:(s.rejectedRpm?s.rejectedRpm:s.rpm);
+      rejected_[count_]=raw;
+      if(raw){++rawCount_;lastRaw_=s.index;}
+      rejectedPeak_=std::max(rejectedPeak_,s.rejectedRpm);
+    }
     rpm_[count_++]=s.rpm;reason_=s.reason;ended_=s.last;
     if(!s.rpm)return;
     if(!heard_)first_=s.index;
@@ -83,6 +88,8 @@ public:
   bool ended()const{return ended_;}
   uint32_t launch()const{return launch_;}
   unsigned count()const{return count_;}
+  unsigned rawCount()const{return rejected_?rawCount_:heard_;}
+  float lastRawSeconds()const{return seconds(rejected_?lastRaw_:last_);}
   unsigned heard()const{return heard_;}
   uint16_t rpm(unsigned i)const{return rpm_[i];}
   uint16_t rawRpm(unsigned i)const{return rejected_?rejected_[i]:rpm_[i];}
@@ -103,7 +110,7 @@ private:
   uint16_t *rpm_;       // 0: no trusted reading
   uint16_t *rejected_;  // Optional Analysis-only original acoustic readings, before the filter
   unsigned capacity_;
-  uint32_t launch_=0;unsigned count_=0,heard_=0,first_=0,last_=0;uint16_t peak_=0,optical_=0,rejectedPeak_=0;
+  uint32_t launch_=0;unsigned count_=0,heard_=0,first_=0,last_=0,rawCount_=0,lastRaw_=0;uint16_t peak_=0,optical_=0,rejectedPeak_=0;
   bool started_=false,ended_=false,frozen_=false;MicRpm::Reason reason_=MicRpm::Reason::Quiet;
 };
 class StoredTrace:public Trace {

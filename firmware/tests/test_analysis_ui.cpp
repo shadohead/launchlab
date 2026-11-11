@@ -99,7 +99,7 @@ int main(){
       input->samples[1]={50000,12000,false,true};
       lgfx::LGFXBase main;
       auto palette=Palette::builtIn(0x07ff,true);
-      AnalysisUI::completedPlot(main,palette,fits,*input,&curve,100);
+      AnalysisUI::fittedPlot(main,palette,fits,*input,&curve,100);
       int lastX=26;bool accentSeen=false;
       for(auto &line:main.lines){
         assert(line[0]==lastX);
@@ -109,7 +109,7 @@ int main(){
       }
       assert(accentSeen && lastX==130 && main.pixels[0][2]==palette.accent && main.pixels[1][2]==Palette::DARKGREY);
       lgfx::LGFXBase inconclusive;
-      AnalysisUI::completedPlot(inconclusive,palette,fits,*input,nullptr,100);
+      AnalysisUI::fittedPlot(inconclusive,palette,fits,*input,nullptr,100);
       assert(inconclusive.lines.empty());
     }
     delete input;
@@ -153,7 +153,7 @@ int main(){
   assert(marked.heard()==1 && marked.latestRpm()==5900 && marked.lastSeconds()==MicTrace::Trace::seconds(0));
   assert(marked.rejectedRpm(1)==0 && marked.rejectedRpm(2)==12000 && marked.peakRpm()==5900);
   AnalysisMode::Session markedSession;markedSession.begin(12,true,6000,1000000);
-  lgfx::LGFXBase markedGraph;AnalysisUI::draw(markedGraph,markedSession,2000000,&marked,MicView::Mic::On,motion,false,false,colors,curve);assert(markedGraph.grayDots==1);
+  lgfx::LGFXBase markedGraph;AnalysisUI::draw(markedGraph,markedSession,2000000,&marked,MicView::Mic::On,motion,false,false,colors,curve);assert(markedGraph.grayDots==1 && markedGraph.drew("Predicted finish --:--"));
   lgfx::LGFXBase normalGraph;MicView::draw(normalGraph,&marked,MicView::Mic::On,colors);assert(normalGraph.grayDots==0);
   markedSession.stop(2000000);
   for(unsigned phase=0;phase<3;++phase){
@@ -176,6 +176,24 @@ int main(){
     assert(graph.drew(titles[model]));
     if(model==1 || model==3)assert(graph.drew("Model"));
     checkOverlap(graph);
+    AnalysisMode::Session live;live.begin(13,true,6000,1000000);
+    // A long physical estimate must not set the right edge of a live preview.
+    winner.end=600;
+    for(unsigned i=0;i<Decay::CURVE_POINTS;++i)winner.rpm[i]=6000-10*winner.seconds(i);
+    ranked.validationPossible=true;ranked.acousticStart=1;ranked.lastTime=45;
+    for(auto &m:ranked.models){
+      m.valid=m.converged=m.validationConverged=m.validation.valid=m.stopValid=true;
+      m.params.a=.04f;m.validation.rmse=30;m.stopSeconds=83.4f;
+    }
+    ranked.models[model].stopValid=model!=0;
+    lgfx::LGFXBase prediction;
+    AnalysisUI::draw(prediction,live,51000000,nullptr,MicView::Mic::On,motion,false,false,colors,curve,
+                     "READY",true,nullptr,&ranked,samples,&winner,false);
+    assert(prediction.drew(model==0?"Predicted finish --:--":"Predicted finish 01:23") && prediction.drew("Press B when"));
+    assert(prediction.drew("60s") && !prediction.drew("600s"));
+    assert(!prediction.lines.empty() && prediction.lines.back()[2]==130);
+    for(const auto &line:prediction.lines)assert(line[0]>=26 && line[2]<=130);
+    checkOverlap(prediction);
   }
   delete samples;
   marked.freeze();bad.index=3;marked.add(bad);assert(marked.count()==3);

@@ -1,12 +1,19 @@
 """Execute the production optional-result save helper with NVS faults."""
+
+import os
+import subprocess
+import tempfile
 from pathlib import Path
-import os,subprocess,tempfile
-root=Path(__file__).resolve().parents[1]
-source=(root/'LaunchLabMini/LaunchLabMini.ino').read_text()
-start=source.index('static bool saveAnalysisResult()');end=source.index('{',start)+1;depth=1
+
+root = Path(__file__).resolve().parents[1]
+source = (root / "LaunchLabMini/LaunchLabMini.ino").read_text()
+start = source.index("static bool saveAnalysisResult()")
+end = source.index("{", start) + 1
+depth = 1
 while depth:
-    depth+=(source[end]=='{')-(source[end]=='}');end+=1
-prefix=r"""
+    depth += (source[end] == "{") - (source[end] == "}")
+    end += 1
+prefix = r"""
 #include "decay_record.h"
 #include "nvs_budget.h"
 #include <cassert>
@@ -23,7 +30,7 @@ struct PracticeHistory{static constexpr unsigned IMAGE_BYTES=2600;};
 static unsigned available=0;static bool nvsAvailable(unsigned &n){n=available;return true;}
 struct {bool ok=false;void printf(const char*,bool saved,unsigned,unsigned,unsigned){ok=saved;}}Serial;
 """
-tests=r"""
+tests = r"""
 int main(){
  Decay::Results results;Decay::Record::encode(results,2,analysisResults.bytes);
  assert(saveAnalysisResult() && !analysisResults.pending && !prefs.writes && !Serial.ok);
@@ -34,7 +41,19 @@ int main(){
  std::cout<<"PASS: production result save, history reserve, read-back verification and optional failure handling\n";
 }
 """
-with tempfile.TemporaryDirectory(prefix='analysis-save-') as directory:
-    cpp=Path(directory)/'test.cpp';exe=Path(directory)/'test';cpp.write_text(prefix+source[start:end]+tests)
-    subprocess.run([os.environ.get('CXX','c++'),'-std=c++17','-I'+str(root/'LaunchLabMini'),str(cpp),'-o',str(exe)],check=True)
-    subprocess.run([str(exe)],check=True)
+with tempfile.TemporaryDirectory(prefix="analysis-save-") as directory:
+    cpp = Path(directory) / "test.cpp"
+    exe = Path(directory) / "test"
+    cpp.write_text(prefix + source[start:end] + tests)
+    subprocess.run(
+        [
+            os.environ.get("CXX", "c++"),
+            "-std=c++17",
+            "-I" + str(root / "LaunchLabMini"),
+            str(cpp),
+            "-o",
+            str(exe),
+        ],
+        check=True,
+    )
+    subprocess.run([str(exe)], check=True)
