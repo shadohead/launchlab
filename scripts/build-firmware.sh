@@ -73,10 +73,15 @@ mkdir -p build-source/LaunchLabMini
 cp LaunchLabMini/*.ino LaunchLabMini/*.h build-source/LaunchLabMini/
 cp -R LaunchLabMini/src build-source/LaunchLabMini/
 
-# build <dir> <extra C++ flags> [arduino-cli arguments]
+# The radio's calibration data stays out of NVS (LaunchLabMini/radio_calibration.h):
+# nvs_open is wrapped and refuses the SDK's "phy" namespace. The define and the
+# linker flag go together in every build; the HIL image adds its own wraps.
+radio_cal_define=-DLAUNCHLAB_RADIO_CAL_WRAP=1
+radio_cal_link=-Wl,--wrap=nvs_open
+
+# build <dir> <extra C++ flags> [extra linker flags]
 build() {
-  local dir=$1 extra=$2
-  shift 2
+  local dir=$1 extra=$2 link=${3:-}
   rm -f "$dir/build-info.json"
   # -mtext-section-literals keeps each function's literal pool beside its code:
   # the sketch is one object with over 256 KB of code since 0.17's effects, and
@@ -84,8 +89,9 @@ build() {
   "$CLI" compile --config-file "$CACHE/launchlab-config.yaml" \
     --fqbn 'esp32:esp32:esp32s3:CDCOnBoot=cdc,USBMode=hwcdc,FlashSize=8M,PartitionScheme=default_8MB,PSRAM=opi' \
     --build-property "tools.esp32-arduino-libs.path=$LAUNCHLAB_PM_SDK" \
-    --build-property "compiler.cpp.extra_flags=-DVQF_SINGLE_PRECISION -fstack-usage -mtext-section-literals -DLAUNCHLAB_MOTION_ADC_GATE=1 -DLAUNCHLAB_CPU_PM=1${extra:+ $extra}" \
-    --build-path "$PWD/$dir" "$@" build-source/LaunchLabMini
+    --build-property "compiler.cpp.extra_flags=-DVQF_SINGLE_PRECISION -fstack-usage -mtext-section-literals -DLAUNCHLAB_MOTION_ADC_GATE=1 -DLAUNCHLAB_CPU_PM=1 $radio_cal_define${extra:+ $extra}" \
+    --build-property "compiler.c.elf.extra_flags=$radio_cal_link${link:+ $link}" \
+    --build-path "$PWD/$dir" build-source/LaunchLabMini
   # loop() runs on an 8 KB task; 0.11.0 overflowed it. -fstack-usage does not change code.
   python3 tools/check_stack_usage.py "$PWD/$dir"
   # Static internal RAM taken before boot: too much leaves the ADC's DMA without memory.
@@ -100,8 +106,7 @@ build() {
 build build ''
 if [[ $hil == 1 ]]; then
   # Preferences' NVS setters are wrapped so tests can force failed or slow writes.
-  build build-hil '-DLAUNCHLAB_HIL=1' \
-    --build-property 'compiler.c.elf.extra_flags=-Wl,--wrap=nvs_set_blob -Wl,--wrap=nvs_set_u8 -Wl,--wrap=nvs_set_u32'
+  build build-hil '-DLAUNCHLAB_HIL=1' '-Wl,--wrap=nvs_set_blob -Wl,--wrap=nvs_set_u8 -Wl,--wrap=nvs_set_u32'
   # The internal RAM the HIL image takes beyond production's, for the songs scenario's heap floor.
   python3 tools/hil_overhead.py build-hil build
 fi
