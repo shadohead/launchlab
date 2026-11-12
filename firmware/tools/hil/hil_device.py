@@ -228,7 +228,9 @@ class Device:
         """
         if isinstance(predicate, str):
             tag = predicate
-            predicate = lambda line: line.text.startswith(tag)
+
+            def predicate(line):
+                return line.text.startswith(tag)
         index = self.mark() if since is None else since
         deadline = time.monotonic() + timeout
         with self.cond:

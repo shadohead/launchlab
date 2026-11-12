@@ -8,7 +8,6 @@ identical. Only three fields may differ, and each is reported:
 - the image checksum byte and the appended image SHA-256, both derived from it.
 Build both images with the same SOURCE_DATE_EPOCH so __DATE__/__TIME__ match.
 """
-import hashlib
 import struct
 import sys
 from pathlib import Path

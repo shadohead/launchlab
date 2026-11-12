@@ -7,8 +7,10 @@ command after it with the same prefix (`fxcut`, the loaded-effect power cut)
 would never run. This checks no exact command sits behind a prefix that
 takes it, and that every command a scenario sends is one hil.h handles.
 
-It also holds the rig's letter list (hil_device.GUARDED_COMMAND, which waits
-out the guard's quiet window before each one) to usb_command_guard.h's.
+It also checks the rig's letter list (hil_device.GUARDED_COMMAND, which waits
+out the guard's quiet window before each one) holds every letter
+usb_command_guard.h guards. It may hold more: a letter this tree's guard does
+not hold only costs the wait, and the rig also drives other releases' images.
 """
 import re
 from pathlib import Path
@@ -38,8 +40,9 @@ def main():
             problems.append(f'tools/hil sends "!{name}", which hil.h does not handle')
     firmware = re.search(r'strchr\("(\w+)",c\)', GUARD.read_text()).group(1)
     rig = re.search(r"GUARDED_COMMAND = re.compile\(rb'\^\[(\w+)\]", (TOOLS / 'hil_device.py').read_text())
-    if not rig or rig.group(1) != firmware:
-        problems.append(f'hil_device.GUARDED_COMMAND letters {rig.group(1) if rig else None!r} are not the guard\'s {firmware!r}')
+    missing = sorted(set(firmware) - set(rig.group(1))) if rig else firmware
+    if missing:
+        problems.append(f'hil_device.GUARDED_COMMAND does not wait before the guard\'s {"".join(missing)!r}')
     if problems:
         print('FAIL: ' + '; '.join(problems))
         return 1

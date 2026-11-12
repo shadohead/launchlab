@@ -13,6 +13,7 @@ from pathlib import Path
 
 import fx_client
 import milestones
+import ble_scenarios
 import signals
 import themes
 from hil_device import DeviceError, Line, number
@@ -43,7 +44,40 @@ def drain_history(rig, timeout=25):
 
 
 def counter(block, tag, key):
+    """A status count, for a before/after difference: most counts are since boot (SINCE_BOOT)."""
     return int(number(block.get(tag, {}).get(key), 0))
+
+
+# Status figures that count from boot: low-water marks, maxima and counters the
+# firmware resets only at a restart (a whole line when the tag has no fields:
+# every status reprints the recent MOTION_GAP lines). In HIL all they hold what
+# every earlier scenario did, so a check decided on one reboots first (reboot()),
+# takes a before/after difference (counter()), or is listed in SINCE_BOOT_OK
+# with how it guards against an earlier scenario. check_hil_since_boot.py
+# enforces it; 0.20.7's gate lost two reruns to such reads.
+SINCE_BOOT = {
+    'HEAP_STATUS': ('internal_min_free', 'dma_min_free'),  # heap_caps_get_minimum_free_size()
+    'STACK': ('loop_min_free_bytes',),  # uxTaskGetStackHighWaterMark()
+    'PERF': ('max_batch_us', 'max_read_gap_us', 'invalid_frames', 'lost_events', 'adc_stalls', 'ui_stalls',
+             'usb_drain_timeouts', 'usb_rejected_commands', 'adc_retimes'),
+    'MOTION_STATUS': ('max_gap_us', 'gaps', 'max_poll_us', 'gate_misses', 'late_polls', 'missed_polls'),
+    'IMU_FIFO_STATUS': ('errors', 'skipped_frames', 'anchors', 'max_bytes', 'length_errors', 'data_errors', 'parse_errors',
+                        'oversize', 'overflows', 'stalls'),
+    'HISTORY_STATUS': ('save_errors', 'max_save_us'),
+    'SOUND_STATUS': ('max_slice_us', 'max_begin_us', 'max_end_us', 'lock_misses', 'codec_failures'),
+    # mic_listener.h keeps these over every session (only the interval pair resets, at each status).
+    'MIC_STATUS': ('samples', 'late_chunks', 'record_misses', 'restarts', 'starts', 'stop_max_ms', 'gate_max_us',
+                   'heap_low', 'behind_max_ms', 'overruns', 'late_starts', 'lost_steps', 'reading_us_max'),
+    'MOTION_GAP': (),
+}
+# {scenario: {figure: how the scenario guards it}}: deliberate since-boot reads with no reboot first.
+_WORST_SONG_LOW = ("worst_song reads the low-water mark before its plays (earlier) and counts the one after "
+                   "them only when an earlier scenario had not already taken it under the floor; otherwise that "
+                   "check is recorded as not covered (HIL all), and production_songs.py covers it after a boot")
+SINCE_BOOT_OK = {
+    'songs': {'HEAP_STATUS dma_min_free': _WORST_SONG_LOW, 'HEAP_STATUS internal_min_free': _WORST_SONG_LOW},
+    'sound_sync': {'SOUND_STATUS max_begin_us': 'only noted (each preview\'s begin time in the closing note), never checked'},
+}
 
 
 # --------------------------------------------------------------------------- 1
@@ -229,6 +263,7 @@ def pull_during_long_save(rig, delays_ms=(-150, 0, 300, 700, 1200)):
     and the save succeeds, however long it takes."""
     settle(rig)
     d = rig.dev
+    stalls = counter(d.status(), 'PERF', 'adc_stalls')
     for i, delay in enumerate(delays_ms):
         first = rig.pull(signals.standard_pull(6000, label=f'priming pull {i}'))
         rig.check(f'priming pull {i}: recorded', first.added is not None)
@@ -248,7 +283,9 @@ def pull_during_long_save(rig, delays_ms=(-150, 0, 300, 700, 1200)):
         drain_history(rig)
     d.hil('nvs clear')
     status = d.status()
-    rig.check('no ADC stall or overflow', status.get('PERF', {}).get('adc_stalls') == '0', str(status.get('PERF', {})))
+    # adc_stalls counts from boot, and adc_stall (after this in all) adds one on purpose.
+    rig.check('no ADC stall or overflow', counter(status, 'PERF', 'adc_stalls') == stalls,
+              f'adc_stalls {stalls} -> {status.get("PERF", {}).get("adc_stalls")}: {status.get("PERF", {})}')
 
 
 def adc_stall(rig):
@@ -259,11 +296,11 @@ def adc_stall(rig):
     back to READY, and the next pull read correctly."""
     settle(rig)
     d = rig.dev
-    before = int(number(d.status().get('PERF', {}).get('adc_stalls'), 0))
+    before = counter(d.status(), 'PERF', 'adc_stalls')
     line = d.hil('adcstall 300', expect='HIL_OK adcstall')
     rig.check('frames stopped for 300 ms', line is not None, line.text if line else 'none')
     time.sleep(1.5)
-    after = int(number(d.status().get('PERF', {}).get('adc_stalls'), 0))
+    after = counter(d.status(), 'PERF', 'adc_stalls')
     rig.check('the stall is counted (adc_stalls)', after == before + 1, f'{before} -> {after}')
     rig.check('sampling again: READY', rig.wait_ready(10) is not None)
     # The restart configures the ADC while DFS may hold the CPU at 40 MHz and
@@ -301,6 +338,48 @@ def pull_during_power_log_save(rig, delays_ms=(-100, 0, 150, 280, 450)):
 
 
 SHAKE_ROW, SLEEP_ROW = 10, 0  # Controls::Setting::ShakeWake and Sleep (0.20.2)
+
+
+def preflight(rig):
+    """Before the first scenario, put back what a stopped run or the owner's
+    own settings leave on the unit: the HIL fault modes (`!reset`), nvs_tight's
+    filler (a 0.20.8 gate run stopped inside nvs_tight left 45 entries, and the
+    next HIL all's themes failed 21 checks on nvs_space) and Mounting Top, which
+    the scenarios assume (the owner's unit is set to Sidecar, and the 0.20.8
+    gate's first HIL all failed 54 wear_check checks on it). Bluetooth On, which
+    the owner's unit may have from 0.20.9, is turned Off first, with the restart
+    that applies it: the scenarios assume it Off and turn it on themselves.
+    Returns what it found, for run.json."""
+    d = rig.dev
+    bluetooth = d.status().get('BLE_STATUS', {}).get('started')
+    if bluetooth not in (None, '0'):
+        start = d.mark()
+        line = d.hil(f'set {BLUETOOTH_ROW} 0', expect='HIL_SET', timeout=8)
+        if line is None or line.f.get('error') != '0':
+            raise RuntimeError(f'preflight: Bluetooth Off refused: {line.text if line else "no HIL_SET"}')
+        if d.wait('HIL_BOOT', 15, since=start) is None:
+            d.reopen()  # a reset can leave the USB link silent
+        time.sleep(1.5)
+        rig.boot_id = rig.hil_boot().get('boot_id')
+        if d.status().get('BLE_STATUS', {}).get('started') != '0':
+            raise RuntimeError('preflight: Bluetooth is still on after its restart')
+    reset = d.hil('reset', expect='HIL_OK reset')
+    before = d.status().get('NVS_STATUS', {}).get('used_entries')
+    fill = d.hil('nvsfill 0', expect='HIL_OK nvsfill', timeout=8)
+    status = d.status()
+    mounting = status.get('MOUNT_STATUS', {}).get('selected')
+    if mounting != 'Top':
+        line = d.hil(f'set {MOUNT_ROW} 0', expect='HIL_SET', timeout=8)
+        if line is None or line.f.get('error') != '0':
+            raise RuntimeError(f'preflight: Mounting Top refused: {line.text if line else "no HIL_SET"}')
+        d.hil('home')
+    after = status.get('NVS_STATUS', {}).get('used_entries')
+    if reset is None or fill is None or fill.f.get('keys') != '0':
+        raise RuntimeError(f'preflight: reset {reset.text if reset else None}, filler {fill.text if fill else None}')
+    found = {'mounting_was': mounting, 'nvs_used_before': before, 'nvs_used_after_filler': after}
+    if bluetooth not in (None, '0'):
+        found['bluetooth_was'] = 'On'
+    return found
 
 
 def standby_dry_run(rig, wait_s, request=False, timeout=20):
@@ -402,6 +481,29 @@ MOTION_LIMIT_S = 300  # InactivityTimer::MOTION_LIMIT_MS (0.20.6)
 MEASURE_LIMIT_S = 30  # OpticalSleepGuard::MEASURE_LIMIT_MS
 FORCE_AFTER = 2       # OpticalSleepGuard::FORCE_AFTER
 MIC_STOP_LIMIT_S = 30  # MicSession::STOP_LIMIT_MS (0.20.7)
+SLEEP_RETRY_S = 60    # autoPowerOff's retry after a deferred sleep
+# sleep_blockers waits for each sleep with every sleep limit divided by this
+# (!sleepscale, power_status.h sleepLimit()): seconds, not the real minutes.
+# standby keeps the real limits, so one sleep in every gate runs at them.
+SLEEP_SCALE = 10
+
+
+class sleep_scale:
+    """`with sleep_scale(rig):` every sleep limit divided by SLEEP_SCALE inside the
+    block, the real ones again after it (also on an error)."""
+
+    def __init__(self, rig, scale=SLEEP_SCALE):
+        self.rig, self.scale = rig, scale
+
+    def __enter__(self):
+        line = self.rig.dev.hil(f'sleepscale {self.scale}', expect='HIL_OK sleepscale')
+        self.rig.check(f'sleep limits divided by {self.scale}', line is not None and line.text.endswith(f' {self.scale}'),
+                       line.text if line else 'no HIL_OK sleepscale')
+        return self.scale
+
+    def __exit__(self, *exc):
+        self.rig.dev.hil('sleepscale 1', expect='HIL_OK sleepscale')
+        return False
 
 
 def mic_stop_wait(lines, asked):
@@ -440,6 +542,12 @@ def sleep_blockers(rig):
        goes on.
     Then a pull is measured as ever. Leaves Shake to wake On, Sleep after 1 min
     and no dry run.
+
+    Cases 1 and 3 wait for their sleeps with every sleep limit divided by
+    SLEEP_SCALE (`!sleepscale`): 30 s for the 5-minute movement limit, 3 s
+    for the 30 s measured-pull limit and 6 s between refused sleeps, about a
+    minute and a half in all instead of nine. Case 4 waits the real 30 s:
+    MicSession::STOP_LIMIT_MS is not a sleepLimit().
     """
     settle(rig)
     d = rig.dev
@@ -460,13 +568,17 @@ def sleep_blockers(rig):
         time.sleep(3)
         activity = d.status().get('MOTION_ACTIVITY', {})
         rig.check('the injected jostling counts as movement', activity.get('moving') == '1', str(activity))
-        lines, end = standby_dry_run(rig, MOTION_LIMIT_S + 60 - (time.monotonic() - pulled), timeout=30)
+        # Scaled once the unit moves: the 6 s timeout alone would have run out first.
+        with sleep_scale(rig) as scale:
+            limit, timeout = MOTION_LIMIT_S / scale, 60 / scale
+            lines, end = standby_dry_run(rig, limit + timeout - (time.monotonic() - pulled), timeout=30)
         off = next((l for l in lines if l.text.startswith('POWER_OFF reason=inactivity')), None)
         after = (off.t if off else time.monotonic()) - pulled
-        rig.note(f'moving after a pull: sleep {"ran" if off else "never ran"} {after:.0f} s after the pull')
-        rig.check('moving: still awake past the 1-minute timeout (movement extends it)', off is None or after >= 0.8 * MOTION_LIMIT_S, f'{after:.0f} s')
-        rig.check(f'moving: the sleep runs within {MOTION_LIMIT_S // 60} minutes of the last use',
-                  off is not None and end is not None and after <= MOTION_LIMIT_S + 30, f'{after:.0f} s, {end.text if end else "no sleep"}')
+        rig.note(f'moving after a pull: sleep {"ran" if off else "never ran"} {after:.0f} s after the pull '
+                 f'(limits / {scale}: {limit:.0f} s for movement, {timeout:.0f} s Sleep after)')
+        rig.check(f'moving: still awake past the {timeout:.0f} s timeout (movement extends it)', off is None or after >= 0.8 * limit, f'{after:.1f} s')
+        rig.check(f'moving: the sleep runs within the {limit:.0f} s movement limit of the last use',
+                  off is not None and end is not None and after <= limit + 5, f'{after:.1f} s, {end.text if end else "no sleep"}')
         d.hil(still)
         # 2. NVS refuses the history copy once the log holds the pull.
         time.sleep(2)
@@ -488,14 +600,18 @@ def sleep_blockers(rig):
         signals.program_optical(d, steady)
         d.hil('pull 60', expect='HIL_PULL')
         started = time.monotonic()
-        time.sleep(3)
-        rig.note(f"steady marks: detector {d.status().get('RPM_STATUS', {}).get('state')}")
-        wait = MEASURE_LIMIT_S + 60 * (FORCE_AFTER + 1)
-        lines, end = standby_dry_run(rig, wait - (time.monotonic() - started), timeout=60)
+        # Scaled once the marks hold the detector: before them the 6 s timeout
+        # since the last dry run could run out and sleep without a refusal.
+        with sleep_scale(rig) as scale:
+            time.sleep(1)
+            rig.note(f"steady marks: detector {d.status().get('RPM_STATUS', {}).get('state')}")
+            wait = (MEASURE_LIMIT_S + SLEEP_RETRY_S * (FORCE_AFTER + 1)) / scale
+            lines, end = standby_dry_run(rig, wait - (time.monotonic() - started), timeout=20)
         off = next((l for l in lines if l.text.startswith('POWER_OFF reason=inactivity')), None)
         busy = [l for l in lines if l.text.startswith('POWER_OFF_DEFERRED optical_busy')]
         after = (off.t if off else time.monotonic()) - started
-        rig.note(f'steady marks: sleep {"ran" if off else "never ran"} {after:.0f} s after they began; refusals {[l.text for l in busy]}')
+        rig.note(f'steady marks: sleep {"ran" if off else "never ran"} {after:.1f} s after they began (limits / {scale}); '
+                 f'refusals {[l.text for l in busy]}')
         rig.check('steady marks: the sleep runs anyway', off is not None and end is not None, f'{after:.0f} s')
         rig.check(f'steady marks: refused {FORCE_AFTER} times first, then forced',
                   len(busy) == FORCE_AFTER and off is not None and 'forced=1' in off.text, [l.text for l in busy] + [off.text if off else 'no POWER_OFF'])
@@ -534,6 +650,7 @@ def sleep_blockers(rig):
         r = rig.pull(signals.standard_pull(9000), signals.launch_motion(tilt_rate_dps=300, pull_g=4, seed=85))
         rig.check_pull(r, tolerance=0.03)
     finally:
+        d.hil('sleepscale 1', expect='HIL_OK sleepscale')
         d.hil('micstall 0')
         d.hil('micfloor')  # MicSession::FLOOR_BYTES again
         d.hil('nvs clear')
@@ -755,7 +872,6 @@ def settings_saves(rig):
     brightness = [50, 40]
     def apply(label, value=None, severity='fail', expect_saved=True):
         v = value if value is not None else brightness[len(rig.scenario['checks']) % 2]
-        start = d.mark()
         line = d.hil(f'set 2 {v}', expect='HIL_SET', timeout=6)
         f = line.f
         saved = f.get('error') == '0'
@@ -1806,6 +1922,33 @@ KNOWN_SLOW_EFFECTS = {'Orbit', 'Flames', 'Shockwave', 'Lightning'}
 DEFAULT_SET_MASK = sum(1 << i for i in range(18) if milestones.EFFECTS[i] not in ('Off', 'Random'))
 
 
+HISTORY_RECORDS = 128  # the history's capacity
+
+
+def fill_history(rig, full=HISTORY_RECORDS):
+    """Pulls until the history holds `full` records; returns the count it reached.
+
+    nvs_tight needs a full history and used to count on the scenarios before
+    it for one. In HIL all they leave it full, but a resumed gate
+    (release_gate.py --resume) starts after them: the 0.20.9 gate's resume ran
+    nvs_tight on 107 records and failed on that alone. A history that is
+    already full costs one status read."""
+    def records():
+        return int(number(rig.dev.status().get('HISTORY_STATUS', {}).get('records'), 0))
+    have = records()
+    for i in range(full):
+        if have >= full:
+            break
+        r = rig.pull(signals.standard_pull(6000 + 250 * (i % 16), label=f'history fill {i + 1}'), signals.launch_motion(seed=300 + i))
+        rig.check_pull(r, tolerance=0.03)
+        drain_history(rig)
+        after = records()
+        if after <= have:
+            break  # a pull that adds nothing will not fill it: the caller's check says so
+        have = after
+    return have
+
+
 def nvs_tight(rig, delays_ms=(-150, 0, 100, 250, 380)):
     """NVS at the reserve edge (NvsBudget::RESERVE_ENTRIES): a full history,
     a twelve-row table of every effect and an effect set in both slots, 0.15's
@@ -1838,8 +1981,8 @@ def nvs_tight(rig, delays_ms=(-150, 0, 100, 250, 380)):
         rig.check(f'effect set of {len(effects)} saved', text.startswith('MILESTONE_OK'), text)
     line = d.hil('legacytable write', expect='HIL_OK legacytable')
     rig.check("0.15's table in both of its slots", line is not None and line.f.get('ok') == '1', line.text if line else 'none')
-    history = d.status().get('HISTORY_STATUS', {})
-    rig.check('a full history (128 records)', history.get('records') == '128', history.get('records'))
+    records = fill_history(rig)
+    rig.check('a full history (128 records)', records == HISTORY_RECORDS, str(records))
     free = int(number(d.status().get('NVS_STATUS', {}).get('available_entries'), -1))
     rig.note(f'records in place, before filler: available_entries={free}')
     # Blob overhead and page packing vary with the store's layout (a freshly
@@ -2293,11 +2436,13 @@ def worst_song(rig, kind, floor, until_save=False, short_frames=False):
     history save (the pull just before leaves one pending, 10-60 s later)
     lands inside a play, 90 s at most. A save waits while a celebration is
     shown, so for that the song comes after 1 s of frames (`short_frames`). Every play streams every block with no
-    underrun; IDLE0 keeps running; the music task's share stays near the
-    model's; the `kind` heap stays above `floor`, sampled every second, and
-    its low-water mark after the last play."""
+    underrun; IDLE0 keeps running; the music task's share while the song
+    plays (1-5 s into each play) is within the budget plus noise and near the
+    cost model's over the same window; the `kind` heap stays above `floor`,
+    sampled every second, and its low-water mark after the last play."""
     d = rig.dev
-    reply = fx_client.put(d, fx_client.compile_text(fx_client.worst_song_source(short_frames)), timeout=60)
+    source = fx_client.worst_song_source(short_frames)
+    reply = fx_client.put(d, fx_client.compile_text(source), timeout=60)
     rig.check('worst song: installed', reply.text.startswith('FX_OK'), reply.text)
     if not reply.text.startswith('FX_OK'):
         return None
@@ -2305,16 +2450,20 @@ def worst_song(rig, kind, floor, until_save=False, short_frames=False):
     expected = -(-round(seconds * 16000) // 512)
     earlier = int(number(d.status().get('HEAP_STATUS', {}).get(f'{kind}_min_free'), 0))
     d.hil('idle0 reset', expect='HIL_IDLE0')
-    tasks0, t0 = task_run_us(rig), time.monotonic()
-    samples, plays, saves, inside = [], [], [], False
+    t0 = time.monotonic()
+    samples, plays, saves, inside, busy = [], [], [], False, []
     while not plays or (until_save and not inside and time.monotonic() - t0 < 90):
         before = d.status().get('MUSIC_STATUS', {})
         start = d.mark()
         d.write(f"E{reply.f['id']}\n")
         preview = d.wait('EFFECT_PREVIEW', 8, since=start)
         played_from = time.monotonic()
+        window = []
         while time.monotonic() - played_from < seconds + 0.8:
             time.sleep(1)
+            # The music task's run time 1 s and 5 s in: its share while the song plays.
+            if len(window) < 2 and time.monotonic() - played_from >= (1.0, 5.0)[len(window)]:
+                window.append((task_run_us(rig).get('music', 0), time.monotonic()))
             # !heap, not a full status: that prints from the loop that feeds the speaker.
             mark = d.mark()
             d.hil('heap', expect='HIL_OK heap')
@@ -2328,26 +2477,31 @@ def worst_song(rig, kind, floor, until_save=False, short_frames=False):
         here = [l.text for l in d.since(start, 'HISTORY_SAVE ') if l.t <= end]
         saves += [l.text for l in d.since(start, 'HISTORY_SAVE ')]
         inside = inside or bool(here)
+        if len(window) == 2:
+            busy.append((window[1][0] - window[0][0], window[1][1] - window[0][1]))
         plays.append({'preview': preview is not None and 'effect=Worst Song' in preview.text,
                       'plays': int(number(after.get('plays'), 0)) - int(number(before.get('plays'), 0)),
                       'underruns': int(number(after.get('underruns'), 0)),  # start() resets the count
                       'blocks': int(number(after.get('played_blocks'), 0)), 'streaming': after.get('streaming'), 'saves_inside': len(here),
                       'max_dry_ms': int(number(after.get('max_dry_ms'), -1)), 'begin_ms': int(number(after.get('begin_ms'), -1))})
-    tasks1, wall = task_run_us(rig), time.monotonic() - t0
     idle = d.hil('idle0', expect='HIL_IDLE0')
     gap = int(number(idle.f.get('max_gap_us'), -1)) if idle else -1
-    share = (tasks1.get('music', 0) - tasks0.get('music', 0)) / (wall * 1e6)
+    share = sum(u for u, _ in busy) / (sum(w for _, w in busy) * 1e6) if busy else -1
+    model = fx_client.song_model(source, 1000, 5000)
     rig.check('worst song: every preview started', all(p['preview'] for p in plays), plays)
     # At the render budget (20% of core 0 by the cost model) the song plays with no underrun,
     # IDLE0 runs throughout, and the music task's measured share stays near the model's.
     rig.check('worst song: IDLE0 kept running (watchdog margin)', 0 <= gap < 1000000, f'max_gap_us={gap}')
-    # The model reads it 20.0%; the device measured 22.7% (2026-10-23): within a fifth.
-    # Back to back the song plays about 6 s of every 6.8: the share is of the wall clock.
-    rig.check('worst song: music task near its modelled 20% of core 0 (at most 24%)', 0 <= share <= 0.24, f'{share:.1%}', severity='warn')
+    # The model refitted in 0.21 reads the device within a few percent (2.2% rms over 31
+    # songs; repeated runs differ by up to 0.5 points): the budget plus a point of noise.
+    rig.check('worst song: the music task within the 20% budget plus noise while it plays (at most 21%)', 0 <= share <= 0.21,
+              f'{share:.1%} over {len(busy)} plays, modelled {model:.1%} over the same window')
+    rig.check('worst song: the music task within a point of the cost model', 0 <= share and abs(share - model) <= 0.01,
+              f'{share:.1%} measured, {model:.1%} modelled', severity='warn')
     rig.check(f'worst song: each of {len(plays)} plays streamed its 6 s without an underrun',
               all(p['plays'] == 1 and p['underruns'] == 0 and p['streaming'] == '0' and p['blocks'] == expected for p in plays),
               [(p['plays'], p['underruns'], p['streaming'], p['blocks']) for p in plays] + [f'blocks expected {expected}'])
-    rig.check(f'worst song: its channel never empty long enough for the speaker to write silence',
+    rig.check('worst song: its channel never empty long enough for the speaker to write silence',
               all(0 <= p['max_dry_ms'] < fx_client.MUSIC_DRY_LIMIT_MS for p in plays),
               [(p['max_dry_ms'], p['begin_ms']) for p in plays] + [f'max_dry_ms, begin_ms; limit {fx_client.MUSIC_DRY_LIMIT_MS}'])
     playing = [x for x in samples if x['streaming'] == '1']
@@ -2661,6 +2815,7 @@ WEAR_LEVEL, WEAR_DOWN, WEAR_UP, WEAR_OFF = (0.0, 0.0, 1.0), (0.0, -1.0, 0.0), (0
 # screen faces up only with the launcher on end). The ripcord poses are as Top.
 WEAR_SIDECAR_LEVEL = (1.0, 0.0, 0.0)
 MOUNT_ROW = 9  # Controls::Setting::Mount
+BLUETOOTH_ROW = 14  # Controls::Setting::Bluetooth: no Settings row, changed on the Bluetooth page
 
 
 def ui_state(rig):
@@ -2673,10 +2828,15 @@ def key(rig, letter, wait=0.4):
     time.sleep(wait)
 
 
+# The Menu top to bottom (Controls::MenuRow, 0.20.9's order): B from Main opens it on
+# row 0, and each B after that goes one row down.
+MENU_ROWS = ['History', 'New session', 'Tournament', 'String wear check', 'Mic RPM', 'Battery', 'Bluetooth', 'Settings', 'Back']
+SETTINGS_MENU_ROW, BATTERY_MENU_ROW, WEAR_MENU_ROW = MENU_ROWS.index('Settings'), MENU_ROWS.index('Battery'), MENU_ROWS.index('String wear check')
+
 ABOUT_PAGE, SETTINGS_PAGE, ABOUT_ROW = '12', '5', '12'  # Controls::Page::About, Page::Settings, Setting::About
 # The Settings rows top to bottom (Controls::ORDER, then Back as SETTING_COUNT):
 # Battery icon after Mounting, then Wipe all and About.
-SETTINGS_ORDER = ['0', '10', '1', '2', '4', '3', '5', '6', '7', '8', '9', '13', '11', '12', '14']
+SETTINGS_ORDER = ['0', '10', '1', '2', '4', '3', '5', '6', '7', '8', '9', '13', '11', '12', '15']
 
 
 def settings_walk(rig, target):
@@ -2695,6 +2855,21 @@ def settings_walk(rig, target):
     return rows == [SETTINGS_ORDER[(start + i) % len(SETTINGS_ORDER)] for i in range(steps + 1)], rows
 
 
+def bluetooth_off(rig):
+    """Bluetooth (0.20.9, experimental) is Off unless the owner turns it on
+    under Menu, Bluetooth. Off, nothing of it runs: the stack was never started
+    (no init task, no reply buffer, no controller, so no radio and no
+    advertising), from boot. The rig's unit never has it on: a unit that does
+    fails here; run_hil's preflight turns it off, with a restart, before the
+    first scenario."""
+    settle(rig)
+    b = rig.dev.status().get('BLE_STATUS', {})
+    rig.check('Bluetooth is Off: its status line is there and the stack never started',
+              b.get('started') == '0' and b.get('init_failed') == '0' and b.get('state') == '0', str(b))
+    rig.check('no radio: not advertising, no link since boot, nothing allocated for it',
+              b.get('adv_active') == '-1' and b.get('connects') == '0' and b.get('notifies') == '0' and b.get('heap_before') == '0', str(b))
+
+
 def about_page(rig):
     """Settings, About (0.20.8), by the buttons as an owner reaches it: the row
     after Wipe all opens a page of the firmware, the unit's ID and its saved
@@ -2704,7 +2879,7 @@ def about_page(rig):
     d = rig.dev
     d.hil('home')
     key(rig, 'h')  # Main: B opens the Menu on its first row
-    for _ in range(3):  # Menu row 3: Settings
+    for _ in range(SETTINGS_MENU_ROW):  # down to Settings
         key(rig, 'h', 0.2)
     key(rig, 'a')
     u = ui_state(rig)
@@ -2742,7 +2917,8 @@ def corner(rig, name):
     """The top right corner of the frame on screen (ControlsUI::CornerBattery:
     an 18 x 8 outline from 24 px left of the right edge, 2 px down, and a
     1-column terminal): the outline's and terminal's pixels, the fill's width
-    in its middle row, and whether anything is drawn just left of it."""
+    in its middle row, whether the charging bolt is drawn, and whether
+    anything is drawn just left of it."""
     time.sleep(0.4)
     snap = rig.dev.snapshot()
     if snap is None:
@@ -2752,11 +2928,13 @@ def corner(rig, name):
         i = (y * snap.width + x) * 2
         return snap.data[i] << 8 | snap.data[i + 1]
     background, x0 = pixel(2, 120), snap.width - 24
-    outline = all(pixel(x, y) != background for x, y in ((x0 + 8, 2), (x0 + 8, 9), (x0, 5), (x0 + 17, 5), (x0 + 18, 5)))
+    outline = all(pixel(x, y) != background for x, y in ((x0 + 3, 2), (x0 + 3, 9), (x0, 5), (x0 + 17, 5), (x0 + 18, 5)))
     fill = sum(1 for x in range(x0 + 2, x0 + 2 + CORNER_FILL) if pixel(x, 5) != background)
+    # The charging bolt's two ends, a row above and below the outline.
+    bolt = all(pixel(x, y) != background for x, y in ((x0 + 10, 1), (x0 + 11, 1), (x0 + 6, 10), (x0 + 7, 10)))
     beside = any(pixel(x, y) != background for x in range(x0 - 4, x0) for y in range(0, 11))
     blank = not any(pixel(x, y) != background for x in range(x0, snap.width) for y in range(0, 11))
-    return {'outline': outline, 'fill': fill, 'beside': beside, 'blank': blank}
+    return {'outline': outline, 'fill': fill, 'beside': beside, 'blank': blank, 'bolt': bolt}
 
 
 def expected_fill(status):
@@ -2766,11 +2944,25 @@ def expected_fill(status):
     return max(1, (min(pct, 100) * CORNER_FILL + 50) // 100) if power.get('battery_valid') == '1' and pct >= 0 else 0
 
 
+def charging(status):
+    return status.get('POWER_STATUS', {}).get('charging') == 'charging'
+
+
+def expected_fill_pixels(status):
+    """What corner() counts in the icon's middle row: the fill, or while the
+    unit charges the fill outside the bolt's halo (columns 5 to 12 of the
+    icon) and the bolt's own five columns."""
+    fill = expected_fill(status)
+    if not fill or not charging(status):
+        return fill
+    return sum(1 for column in range(2, 2 + fill) if column < 5 or column > 12) + 5
+
+
 def battery_icon(rig):
     """Battery icon (0.20.8): the charge in the top right corner of the Menu
-    and Settings pages, on by default, and never on Main. The Menu's corner
-    holds the outline and a fill as wide as the unit's reading; Main and the
-    Battery page have none. Settings by the buttons: the row after Mounting
+    and Settings pages, on by default. The Menu's corner holds the outline and
+    a fill as wide as the unit's reading, with a bolt through it while the unit
+    charges; Main has it only while charging, and the Battery page never. Settings by the buttons: the row after Mounting
     edits it, B previews Off in the corner, hold B cancels, A applies and
     saves; Off survives a reboot, and On brings it back."""
     settle(rig)
@@ -2778,27 +2970,38 @@ def battery_icon(rig):
     try:
         d.hil('set 13 1', expect='HIL_SET')
         d.hil('home')
+        time.sleep(5.5)  # a battery poll on Main, so the corner follows the charge state read below
+        status = d.status()
         c = corner(rig, 'battery_icon_main')
-        u = ui_state(rig)
+        u = status.get('UI_STATUS', {})
         rig.check('Battery icon is On', u.get('battery_icon') == '1', str(u))
-        rig.check('Main has no corner battery', c['blank'] and u.get('corner_fill') == '0', f'{c} {u}')
+        # Main shows the corner battery only while the unit charges (0.20.9), with the bolt.
+        if charging(status):
+            rig.check('Main, charging: the corner battery with its bolt',
+                      c['outline'] and c['bolt'] and not c['beside'] and u.get('corner_bolt') == '1' and u.get('corner_fill') == str(expected_fill(status)),
+                      f"{c} {u} {status.get('POWER_STATUS')}")
+        else:
+            rig.check('Main, not charging: no corner battery', c['blank'] and u.get('corner_fill') == '0' and u.get('corner_bolt') == '0',
+                      f"{c} {u} {status.get('POWER_STATUS')}")
         key(rig, 'h')  # Main: B opens the Menu
         status = d.status()
         c = corner(rig, 'battery_icon_menu')
         u = status.get('UI_STATUS', {})
         want = expected_fill(status)
         rig.check('the Menu draws the corner battery: outline and terminal', u.get('page') == MENU_PAGE and c['outline'] and not c['beside'], f'{c} {u}')
-        rig.check('the fill is as wide as the reading', want > 0 and c['fill'] == want and u.get('corner_fill') == str(want),
+        rig.check('the fill is as wide as the reading', want > 0 and c['fill'] == expected_fill_pixels(status) and u.get('corner_fill') == str(want),
                   f"{c} corner_fill={u.get('corner_fill')} want={want} {status.get('POWER_STATUS', {}).get('battery_pct')}%")
+        rig.check('the bolt shows exactly while the unit charges', c['bolt'] == charging(status) and u.get('corner_bolt') == ('1' if charging(status) else '0'),
+                  f"{c} {u} {status.get('POWER_STATUS')}")
         # The Battery page shows its own battery, not the corner one.
-        key(rig, 'h', 0.2)
-        key(rig, 'h', 0.2)  # Menu row 2: Battery
+        for _ in range(BATTERY_MENU_ROW):  # down to Battery
+            key(rig, 'h', 0.2)
         key(rig, 'a')
         u = ui_state(rig)
         rig.check('the Battery page has no corner battery', u.get('page') == BATTERY_PAGE and u.get('corner_fill') == '0', str(u))
         d.hil('home')
         key(rig, 'h')
-        for _ in range(3):  # Menu row 3: Settings
+        for _ in range(SETTINGS_MENU_ROW):  # down to Settings
             key(rig, 'h', 0.2)
         key(rig, 'a')
         ordered, rows = settings_walk(rig, BATTERY_ICON_ROW)
@@ -2936,7 +3139,8 @@ def wear_pull(rig, optical, outcomes, stage, count, out_rpm=4800, tolerance=0.03
     d.hil('imu const')
     start = d.mark()
     d.hil('pull 60', expect='HIL_PULL')
-    final = lambda l: l.text.startswith('WEAR_CHECK_PULL') and l.f.get('outcome') != 'extension'
+    def final(l):
+        return l.text.startswith('WEAR_CHECK_PULL') and l.f.get('outcome') != 'extension'
     label = f'{optical.label}: {" then ".join(outcomes)}'
     if 'hold' in shots:
         out = d.wait(lambda l: l.text.startswith('WEAR_CHECK_PULL') and l.f.get('outcome') == 'extension', optical.duration_ms / 1000, since=start)
@@ -2974,7 +3178,7 @@ def wear_pull(rig, optical, outcomes, stage, count, out_rpm=4800, tolerance=0.03
 
 
 def wear_check(rig):
-    """Wear check through the real buttons: Menu row 5 opens it; three pulls
+    """Wear check through the real buttons: its Menu row opens it; three pulls
     level, three with the ripcord down, three with it up. Each pull is pulled
     out (a measured burst), held, and let go (0.20.4): only the retraction is
     judged, the pull out is never counted. A pull 30 degrees off level and one
@@ -2997,10 +3201,10 @@ def wear_check(rig):
     bests = d.hil('bests', expect='HIL_OK bests').f
     start = d.mark()
     key(rig, 'h')
-    for _ in range(5):
+    for _ in range(WEAR_MENU_ROW):
         key(rig, 'h', 0.3)
     u = ui_state(rig)
-    rig.check('menu row 5 reached with five B presses', u.get('page') == MENU_PAGE and u.get('menu') == '5', str(u))
+    rig.check('B goes down the Menu to String wear check', u.get('page') == MENU_PAGE and u.get('menu') == str(WEAR_MENU_ROW), str(u))
     key(rig, 'a')
     u = ui_state(rig)
     rig.check('A on row 5 opens Wear check', u.get('page') == WEAR_PAGE, str(u))
@@ -3077,7 +3281,7 @@ def wear_check(rig):
     wear_pull(rig, signals.wear_pull(2050), ok, 'pull_down', 1)
     key(rig, 'b', 0.6)
     u = ui_state(rig)
-    rig.check('hold B leaves Wear check for its Menu row', u.get('page') == MENU_PAGE and u.get('menu') == '5', str(u))
+    rig.check('hold B leaves Wear check for its Menu row', u.get('page') == MENU_PAGE and u.get('menu') == str(WEAR_MENU_ROW), str(u))
     key(rig, 'b', 0.6)
     rig.check('hold B again returns to Main', ui_state(rig).get('page') == '0')
     hold_still(rig, WEAR_LEVEL, 0)
@@ -3098,11 +3302,11 @@ def wear_check(rig):
 
 
 def open_wear_check(rig):
-    """From Main: B until the Menu shows row 5 (a recap still on Main takes
+    """From Main: B until the Menu is on its row (a recap still on Main takes
     the first B), then A opens it."""
     for _ in range(10):
         u = ui_state(rig)
-        if u.get('page') == MENU_PAGE and u.get('menu') == '5':
+        if u.get('page') == MENU_PAGE and u.get('menu') == str(WEAR_MENU_ROW):
             break
         key(rig, 'h', 0.3)
     key(rig, 'a')
@@ -3123,7 +3327,7 @@ def wear_check_sidecar(rig):
         rig.check('IMU maps the Sidecar frame to the launcher', mount.get('selected') == 'Sidecar' and mount.get('imu_frame') == 'Sidecar'
                   and mount.get('accel_gyro_frame') == 'launcher', str(mount))
         hold_still(rig, WEAR_SIDECAR_LEVEL, 0)
-        rig.check('Sidecar: Menu row 5 opens String wear check', open_wear_check(rig))
+        rig.check('Sidecar: the Menu row opens String wear check', open_wear_check(rig))
         rig.screenshot('wear_check_sidecar')
         ok = ('extension', 'accepted')
         wear_pull(rig, signals.wear_pull(3150), ok, 'level', 1)
@@ -3146,7 +3350,7 @@ def wear_check_sidecar(rig):
 
 MIC_PAGE = '11'  # Controls::Page::MicRpm
 MIC_WARMUP_S = 1.0  # MicListener::WARMUP_MS: the ES8311 gives zeros until then
-MIC_ROW = 6
+MIC_ROW = MENU_ROWS.index('Mic RPM')
 
 
 def mic_wait(rig, state, timeout, since):
@@ -3180,8 +3384,8 @@ def mic_spin(rig, launch, timeout, since):
     return rig.dev.wait(lambda l: l.text.startswith('MIC_SPIN ') and l.f.get('launch') == launch, timeout, since=since)
 
 
-def mic_gaps_beyond_saves(rig, launch_line, start, before=0):
-    """The IMU gaps since `start` that a history log save does not explain.
+def gaps_beyond_saves(lines, before=0):
+    """The IMU gaps in `lines` that a history log save does not explain.
 
     Every status reprints the unit's recent gaps (MOTION_GAP n=...), so only
     those numbered past `before`, the gaps count when the window opened, are
@@ -3190,20 +3394,51 @@ def mic_gaps_beyond_saves(rig, launch_line, start, before=0):
     A log append runs without an IMU quiet window (its comment says why), so its
     flash stall can stretch a poll past the 35 ms that counts as a gap. The
     0.20.5 release gate's run, with no mic, has two: 41,872 and 44,799 us, polls
-    of 17-19 ms, on saves. Only that shape, on a save, passes here."""
-    d = rig.dev
-    offset = launch_line.t - int(launch_line.f.get('t_us')) / 1e6
-    saves = [l.t for l in d.since(start, 'HISTORY_SAVE ')]
+    of 17-19 ms, on saves. Only that shape, on a save, passes here.
+
+    A gap carries the unit's uptime (at_ms) and a save only the host's read
+    time, so the two clocks are tied by the HIL_STATUS lines in the window:
+    each prints uptime_ms as it is sent, and the smallest difference is the one
+    the host read soonest. LAUNCH_RESULT cannot tie them: its t_us is the
+    launch and it prints when the pull has ended, a second later, which put a
+    save's gap a second after its save (0.20.9 gate: 1.04 s against 0.03 s)."""
+    offsets = [l.t - number(l.f.get('uptime_ms'), 0) / 1000 for l in lines
+               if l.text.startswith('HIL_STATUS ') and 'uptime_ms' in l.f]
+    saves = [l.t for l in lines if l.text.startswith('HISTORY_SAVE ')]
     seen, unexplained = {}, []
-    for line in d.since(start, 'MOTION_GAP '):
-        if number(line.f.get('n'), 0) > before:
+    for line in lines:
+        if line.text.startswith('MOTION_GAP ') and number(line.f.get('n'), 0) > before:
             seen[line.f.get('at_ms')] = line.f
     for at, f in seen.items():
-        when = int(at) / 1000 + offset
         stretched = number(f.get('gap_us'), 1e9) < 60000 and number(f.get('polls'), 99) <= 4 and number(f.get('max_poll_us'), 0) >= 10000
-        if not (stretched and any(abs(t - when) < 0.3 for t in saves)):
+        when = int(at) / 1000 + min(offsets) if offsets else None
+        if not (stretched and when is not None and any(abs(t - when) < 0.3 for t in saves)):
             unexplained.append(f)
     return len(seen), unexplained
+
+
+def mic_gaps_beyond_saves(rig, start, before=0):
+    """gaps_beyond_saves over the rig's lines since `start`; the caller reads a
+    status inside that window first, for the clock tie."""
+    return gaps_beyond_saves(rig.dev.since(start), before)
+
+
+SAVE_STALL_POLLS = 3  # a save's stall counts under 60 ms (gaps_beyond_saves) and a poll is 20 ms
+
+
+def missed_polls_beyond_saves(lines, base, after):
+    """The polls the IMU task missed between two counter readings that the
+    history log saves in `lines` do not cover.
+
+    The same flash stall that stretches a poll into a gap (gaps_beyond_saves)
+    can instead fall while the task sleeps and wake it a period late: a late
+    poll that skips ahead, with nothing lost (the FIFO holds the samples). On
+    the 14:C1 rig every save in mic_page did that (0.20.9 gate: nine saves of
+    17-24 ms, one missed poll each, no gap), where the 7C:E8 rig's saves made
+    none. Each save covers what a stall under 60 ms can skip; anything past
+    that, or with no save, is the mic's."""
+    saves = sum(1 for l in lines if l.text.startswith('HISTORY_SAVE '))
+    return max(0, after['missed_polls'] - base['missed_polls'] - SAVE_STALL_POLLS * saves)
 
 
 def mic_counters(block):
@@ -3287,7 +3522,6 @@ def mic_page(rig):
     base = mic_counters(block)
     start = d.mark()
     r = mic_tone_pull(rig, 7500, (118, 1, 30, 0.5))
-    launch_line = d.wait('LAUNCH_RESULT', 1, since=start)
     rig.check('a pull on the page is measured', r.valid and abs(r.rpm - 7500) <= 7500 * 0.03, r.summary())
     spin = mic_spin(rig, r.launch.get('launches'), 50, start)
     rig.check('MIC_SPIN reports the spin', spin is not None)
@@ -3309,9 +3543,11 @@ def mic_page(rig):
     rig.check('a locked reading costs under 50 ms with the page open', 0 < number(near.get('mean_us'), 0) < 50000, str(near))
     rig.check('a search reading fits its 100 ms hop', 0 < number(readings.get('prior', {}).get('mean_us'), 0) < 100000, str(readings.get('prior')))
     after = mic_counters(block)
-    gaps, unexplained = mic_gaps_beyond_saves(rig, launch_line, start, base['gaps'])
+    gaps, unexplained = mic_gaps_beyond_saves(rig, start, base['gaps'])
     rig.check('no IMU gap with the mic on, beyond a history save\'s', after['gaps'] - base['gaps'] == gaps and not unexplained, f'{base} -> {after}; {gaps} logged; unexplained {unexplained}')
-    rig.check('no missed poll or gate miss with the mic on', after['missed_polls'] == base['missed_polls'] and after['gate_misses'] == base['gate_misses'], f'{base} -> {after}')
+    beyond = missed_polls_beyond_saves(d.since(start), base, after)
+    rig.check('no missed poll or gate miss with the mic on, beyond a history save\'s', beyond == 0 and after['gate_misses'] == base['gate_misses'],
+              f'{base} -> {after}; {beyond} missed beyond the saves')
     rig.check('the UI did not stall', int(number(block.get('PERF', {}).get('ui_stalls'), 0)) == stalls, str(block.get('PERF')))
 
     # The page's worst frame, with the tracker idle.
@@ -3508,6 +3744,9 @@ SCENARIOS = {
     'imu_backlog': imu_backlog,
     'settings': settings_saves,
     'about_page': about_page,
+    'bluetooth_off': bluetooth_off,
+    'ble_tap': ble_scenarios.ble_tap,
+    'bluetooth_storage': ble_scenarios.bluetooth_storage,
     'battery_icon': battery_icon,
     'corpus': corpus_replay,
     'soak': soak,

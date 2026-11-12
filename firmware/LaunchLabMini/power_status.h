@@ -2,6 +2,21 @@
 #include <algorithm>
 #include <cstdint>
 
+// Every limit below that ends a keep-awake path goes through sleepLimit().
+// In production it is the limit itself, a constant. A HIL build's
+// !sleepscale <n> divides them all by n, so the rig's sleep_blockers waits
+// seconds where a unit waits minutes; it is 1 from boot, and !reset and the
+// end of every HIL scenario put it back. The host tests pin the real limits
+// (test_motion_activity, check_keep_awake.py) and that production has no
+// divisor (check_sleep_scale.py).
+#if LAUNCHLAB_HIL
+#include <atomic>
+namespace Hil {inline std::atomic<uint16_t> sleepScale{1};}
+inline uint32_t sleepLimit(uint32_t ms){return ms/Hil::sleepScale.load(std::memory_order_relaxed);}
+#else
+constexpr uint32_t sleepLimit(uint32_t ms){return ms;}
+#endif
+
 class InactivityTimer {
 public:
   // A unit with no saved choice (1 minute from 0.20.2, 3 before; a saved
@@ -30,7 +45,7 @@ public:
     minutes_=minutes;return true;
   }
   uint8_t minutes()const{return minutes_;}
-  uint32_t timeout()const{return uint32_t(minutes_)*60*1000;}
+  uint32_t timeout()const{return sleepLimit(uint32_t(minutes_)*60*1000);}
   // A shake can be transport/handling rather than an intended practice session.
   // Buttons, an accepted pull or an interactive USB command establish use.
   void begin(uint32_t now,bool shakeWake=false){lastActivity_=lastUse_=wokeAt_=now;unusedShake_=shakeWake;}
@@ -41,7 +56,7 @@ public:
   // the last use otherwise).
   void motion(uint32_t now){lastActivity_=now;}
   bool unusedShake()const{return unusedShake_;}
-  uint32_t activeTimeout()const{return unusedShake_?std::min(timeout(),UNUSED_SHAKE_MS):timeout();}
+  uint32_t activeTimeout()const{return unusedShake_?std::min(timeout(),sleepLimit(UNUSED_SHAKE_MS)):timeout();}
   uint32_t elapsed(uint32_t now)const{return now-lastActivity_;}
   // Since the last button, pull or command (touch), movement not counted.
   uint32_t sinceUse(uint32_t now)const{return now-lastUse_;}
@@ -49,7 +64,7 @@ public:
     const uint32_t idle=elapsed(now),limit=activeTimeout();
     const uint32_t left=idle>=limit?0:limit-idle;
     const uint32_t since=unusedShake_?now-wokeAt_:sinceUse(now);
-    const uint32_t cap=unusedShake_?UNUSED_SHAKE_LIMIT_MS:std::max(timeout(),MOTION_LIMIT_MS);
+    const uint32_t cap=unusedShake_?sleepLimit(UNUSED_SHAKE_LIMIT_MS):std::max(timeout(),sleepLimit(MOTION_LIMIT_MS));
     return std::min(left,since>=cap?0:cap-since);
   }
   bool due(uint32_t now,bool measuring=false)const{return !measuring && !remaining(now);}
@@ -74,7 +89,7 @@ public:
   bool measuring(uint32_t now,bool launch) {
     if(!launch){inLaunch_=false;return false;}
     if(!inLaunch_){inLaunch_=true;launchSince_=now;}
-    return now-launchSince_<MEASURE_LIMIT_MS;
+    return now-launchSince_<sleepLimit(MEASURE_LIMIT_MS);
   }
   void refused(){if(refusals_<FORCE_AFTER)++refusals_;}
   // A sleep that went ahead, or use since: the count starts again.
@@ -94,10 +109,24 @@ public:
   bool use(uint32_t now,bool held,bool released) {
     if(!held){holding_=false;return released;}
     if(!holding_){holding_=true;since_=now;}
-    return released || now-since_<LIMIT_MS;
+    return released || now-since_<sleepLimit(LIMIT_MS);
   }
 private:
   uint32_t since_=0;bool holding_=false;
+};
+
+// A connected phone (Bluetooth, 0.20.9) holds the sleep off, but only for
+// LIMIT_MS after the last button or accepted pull on the stick. What the phone
+// sends is not use: an app left open, or a phone left in range, would repeat
+// it until the battery is flat. The prototype stayed awake for as long as a
+// phone stayed connected. The sleep then ends the link.
+struct PhoneLinkAwake {
+  static constexpr uint32_t LIMIT_MS=600000;
+  static bool holds(bool connected,uint32_t sinceUse){return connected && sinceUse<sleepLimit(LIMIT_MS);}
+  // Until the sleep, given what the timer itself has left.
+  static uint32_t remaining(bool connected,uint32_t sinceUse,uint32_t timerLeft) {
+    return holds(connected,sinceUse)?std::max(timerLeft,sleepLimit(LIMIT_MS)-sinceUse):timerLeft;
+  }
 };
 
 // How an inactivity sleep wakes. On: the IMU's motion interrupt is armed and

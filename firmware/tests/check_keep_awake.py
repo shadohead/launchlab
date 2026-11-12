@@ -87,7 +87,10 @@ KEEP_AWAKE = [
     ('autoPowerOff', 'if(!Hil::allowSleep.load())return;', 'HIL builds only, never shipped'),
     ('autoPowerOff', 'if(usbAwake.inhibited(now) && !dry)return;',
      'a computer attached: USB power, not battery (check_usb_pipeline)'),
-    ('autoPowerOff', 'if(motionPending || !inactivity.due(now,measuring) || (lastShutdownTry && now-lastShutdownTry<60000))return;',
+    ('autoPowerOff', 'if(PhoneLinkAwake::holds(BleLink::connected(),inactivity.sinceUse(now)))return;',
+     'a connected phone (Bluetooth On only): PhoneLinkAwake::LIMIT_MS after the last button or pull on the stick, and what the '
+     'phone sends is not use (test_motion_activity)'),
+    ('autoPowerOff', 'if(motionPending || !inactivity.due(now,measuring) || (lastShutdownTry && now-lastShutdownTry<sleepLimit(60000)))return;',
      'the timer (each renewal above is bounded), a motion capture that finishes or gives up, and a 60 s retry gap'),
     ('autoPowerOff', 'if((usbAwake.inhibited(now) && !dry) || !inactivity.due(now,measuring))return;', 'as the two lines above'),
     ('autoPowerOff', 'Serial.printf("POWER_OFF_DEFERRED optical_busy refusals=%u launch=%d force_next=%d retry_s=60\\n",',

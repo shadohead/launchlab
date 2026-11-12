@@ -23,7 +23,11 @@ def extract(text, signature):
 
 prefix = r'''
 #include "analog_tachometer.h"
+#include "launch_motion.h"
 #include "mount_orientation.h"
+#include <esp_heap_caps.h>
+#include <esp_memory_utils.h>
+#include <new>
 #include <cmath>
 #include <cassert>
 #include <cstdint>
@@ -76,6 +80,7 @@ public:
   bool running(){return task_!=nullptr;}
   bool setMount(MountOrientation::Mode){return true;}
   bool gateBusy=false;bool lock(){return !gateBusy;}void unlock(){}
+  LaunchMotion::Ring *ring_=nullptr;
 '''
 globals_ = r'''
 };
@@ -91,7 +96,7 @@ struct Snapshot {AnalogTachometer::Phase phase=AnalogTachometer::Phase::Ready;};
 tests = r'''
 static void reset(){
   clockMs=100;M5=FakeM5{};imuAcquisition=FakeAcquisition{};motionRestoreNeeded=false;motionRestoreFailures=0;shakeWake={};rangeConfigs=rangeFailures=0;
-  mutexCalls=taskCalls=mutexFailures=taskFailures=0;
+  mutexCalls=taskCalls=mutexFailures=taskFailures=0;FakeHeap::reset();
   motionInitAttempts=lastMotionInit=0;
   motionInitPaired=motionInitSuccess=motionPending=dirty=false;
 }
@@ -107,6 +112,20 @@ int main(){
   assert(!imuAcquisition.begin() && mutexCalls==2 && !imuAcquisition.running());
   assert(imuAcquisition.begin() && mutexCalls==2 && taskCalls==2);
   std::cout<<"owner: disabled/allocation failures retry without leaked gates or duplicate tasks\n";
+
+  // The ring prefers PSRAM, falls back to internal RAM, is allocated once, and
+  // no IMU task may start without it.
+  reset();M5.Imu.enabled=true;FakeHeap::psram=true;unsigned blocks=FakeHeap::allocations();
+  assert(imuAcquisition.begin() && esp_ptr_external_ram(imuAcquisition.ring_) && FakeHeap::allocations()==blocks+1);
+  reset();M5.Imu.enabled=true;blocks=FakeHeap::allocations();
+  assert(imuAcquisition.begin() && imuAcquisition.ring_ && !esp_ptr_external_ram(imuAcquisition.ring_) && FakeHeap::allocations()==blocks+1);
+  reset();M5.Imu.enabled=true;FakeHeap::internal=false;
+  assert(!imuAcquisition.begin() && !imuAcquisition.ring_ && !imuAcquisition.running() && mutexCalls==2 && taskCalls==0 && !M5.Imu.calibrations);
+  FakeHeap::internal=true;blocks=FakeHeap::allocations();
+  assert(imuAcquisition.begin() && imuAcquisition.ring_ && mutexCalls==2 && taskCalls==1 && FakeHeap::allocations()==blocks+1);
+  reset();M5.Imu.enabled=true;taskFailures=1;blocks=FakeHeap::allocations();
+  assert(!imuAcquisition.begin() && imuAcquisition.begin() && taskCalls==2 && FakeHeap::allocations()==blocks+1);
+  std::cout<<"owner: ring prefers PSRAM, falls back to internal, retries without a second allocation, and no task starts without it\n";
 
   reset();M5.Imu.failures=2;boot();
   assert(motionInitAttempts==3 && imuAcquisition.running() && motionInitPaired);
@@ -174,7 +193,7 @@ with tempfile.TemporaryDirectory(prefix='launchlab-imu-startup-') as temporary:
     temporary = Path(temporary)
     (temporary / 'test.cpp').write_text(cpp)
     subprocess.run(['c++', '-std=c++17', '-O1', '-g', '-fsanitize=address,undefined',
-                    '-fno-omit-frame-pointer', '-I' + str(root / 'LaunchLabRpm'),
+                    '-fno-omit-frame-pointer', '-I' + str(root / 'tests/fakes'), '-I' + str(root / 'LaunchLabRpm'),
                     '-I' + str(root / 'LaunchLabMini'),
                     str(temporary / 'test.cpp'), '-o', str(temporary / 'test')], check=True)
     subprocess.run([str(temporary / 'test')], check=True)

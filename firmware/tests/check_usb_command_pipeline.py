@@ -53,7 +53,7 @@ struct SerialFake {
   void println(const char *s){output.emplace_back(s);}
   template<class... T>void printf(const char *f,T...){output.emplace_back(f);}
 }Serial;
-namespace Controls {enum class Page:uint8_t{Main,History,Settings,Edit,Wipe,Battery,Tournament,Menu,MicRpm};constexpr uint8_t MIC_ROW=6;}
+namespace Controls {enum class Page:uint8_t{Main,History,Settings,Edit,Wipe,Battery,Tournament,Menu,MicRpm};constexpr uint8_t MIC_ROW=4;}
 static struct {Controls::Page page=Controls::Page::Main;uint8_t menu=0;}controls;
 static struct {void dump(){}void askBench(){}void armTape(){}void sendTape(){}}micListener;
 static bool wipeBlocked=false,dirty=false,diagnostics=false,tournamentMode=false,historyPage=false,motionDemo=false;

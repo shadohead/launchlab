@@ -201,7 +201,7 @@ static void sameState(const StickS3MotionAcquisition &owner,
                       const StickS3MotionAcquisition::Snapshot &saved,
                       unsigned ringSize,uint64_t latest,uint32_t frame,uint32_t resets) {
   assert(owner.frame_==frame && owner.mode_==saved.mount);
-  assert(owner.ring_.size()==ringSize && owner.ring_.latest()==latest);
+  assert(owner.ring_->size()==ringSize && owner.ring_->latest()==latest);
   assert(owner.orientation_.resets()==resets);
   const auto &s=owner.snapshot_;
   assert(s.mount==saved.mount && s.fusedUs==saved.fusedUs && s.pairedUs==saved.pairedUs);
@@ -223,9 +223,9 @@ static void validationAndSerialization() {
   assert(owner->setMount(Mode::Sidecar) && owner->frame_==1);
   assert(owner->begin() && owner->running() && M5.Imu.calibrations==1);
   M5.Imu.data.accel={1,0,0};runFor(*owner,400);
-  assert(owner->snapshot_.orientationReady && owner->ring_.size()>150);
+  assert(owner->snapshot_.orientationReady && owner->ring_->size()>150);
   const auto saved=owner->snapshot_;const auto frame=owner->frame_,resets=owner->orientation_.resets();
-  const unsigned size=owner->ring_.size();const uint64_t latest=owner->ring_.latest();
+  const unsigned size=owner->ring_->size();const uint64_t latest=owner->ring_->latest();
   assert(owner->setMount(Mode::Sidecar));sameState(*owner,saved,size,latest,frame,resets);
   const unsigned attempts=owner->ringGate_->attempts;
   assert(!owner->setMount(Mode(2)) && owner->ringGate_->attempts==attempts);
@@ -237,11 +237,28 @@ static void validationAndSerialization() {
   assert(!changed);sameState(*owner,saved,size,latest,frame,resets);
   xSemaphoreGive(owner->ringGate_);
   assert(owner->setMount(Mode::Top) && owner->frame_==frame+1);
-  assert(owner->ring_.size()==0 && owner->ring_.latest()==0);
+  assert(owner->ring_->size()==0 && owner->ring_->latest()==0);
   const auto cleared=owner->snapshot();
   assert(cleared.mount==Mode::Top && !cleared.fusedUs && !cleared.pairedUs && !cleared.orientationReady);
   LaunchMotion::Trace trace;assert(owner->capture(latest-100000,latest-50000,6000,1,trace));
   assert(trace.quality==LaunchMotion::Quality::Missing);
+}
+// The 57 KB ring lives in PSRAM when there is any (it leaves internal RAM for
+// BLE), else in internal RAM. startMotion sets the mount before begin.
+static void ringAllocation() {
+  cleanRuntime();FakeHeap::reset();
+  auto owner=std::make_unique<StickS3MotionAcquisition>();
+  assert(owner->setMount(Mode::Sidecar) && !owner->ring_ && !owner->ringInPsram());
+  assert(owner->begin() && owner->ring_ && !owner->ringInPsram() && owner->mode_==Mode::Sidecar);
+  cleanRuntime();FakeHeap::psram=true;owner=std::make_unique<StickS3MotionAcquisition>();
+  assert(owner->begin() && owner->ringInPsram());
+  runFor(*owner,80);const uint64_t latest=owner->ring_->latest();assert(latest);
+  LaunchMotion::Trace trace;assert(owner->capture(latest-100000,latest-50000,6000,1,trace));
+  assert(owner->setMount(Mode::Sidecar) && !owner->ring_->size() && owner->ringInPsram());
+  cleanRuntime();FakeHeap::psram=false;FakeHeap::internal=false;owner=std::make_unique<StickS3MotionAcquisition>();
+  assert(!owner->begin() && !owner->running() && !owner->ring_ && !M5.Imu.calibrations);
+  FakeHeap::internal=true;assert(owner->begin() && owner->running() && owner->ring_);
+  FakeHeap::reset();
 }
 static void continuousOwnerWarmup() {
   cleanRuntime();auto owner=std::make_unique<StickS3MotionAcquisition>();assert(owner->begin());
@@ -253,7 +270,7 @@ static void continuousOwnerWarmup() {
     if(iteration==SWITCH) {
       assert(owner->snapshot_.orientationReady && std::fabs(owner->snapshot_.gravity[0])>.1f);
       oldResets=owner->orientation_.resets();assert(owner->setMount(Mode::Sidecar));
-      assert(!owner->snapshot().fusedUs && !owner->ring_.size());
+      assert(!owner->snapshot().fusedUs && !owner->ring_->size());
       // The new values begin with an accelerometer frame (it comes every second gyro frame).
       M5.Imu.data.accel={1,0,0};M5.Imu.data.gyro={0,0,0};FakeFifo::sensorFrames=0;
     }
@@ -264,9 +281,9 @@ static void continuousOwnerWarmup() {
     if(iteration==SWITCH+1) {
       // The first read after the switch holds one poll's frames; the oldest starts the warmup.
       // Fusion emits the first frame, then one sample per 10 ms grid step.
-      assert(owner->ring_.size()==1+(FRAMES-1)*5000/LauncherOrientation::STEP_US);firstNew=owner->ring_.at(0).us;
+      assert(owner->ring_->size()==1+(FRAMES-1)*5000/LauncherOrientation::STEP_US);firstNew=owner->ring_->at(0).us;
       assert(Fake::now-firstNew==(FRAMES-1)*5000);
-      const auto &sample=owner->ring_.at(0);vectorIs(sample.a,0,0,1);vectorIs(sample.g,0,0,0);
+      const auto &sample=owner->ring_->at(0);vectorIs(sample.a,0,0,1);vectorIs(sample.g,0,0,0);
       assert(!sample.settled && !s.orientationReady && s.fusionResets==oldResets+1);
       LauncherOrientation fresh;LaunchMotion::Sample raw;raw.us=firstNew;raw.a[2]=1;
       fresh.feed(raw,[&](const LaunchMotion::Sample &expected) {
@@ -276,7 +293,7 @@ static void continuousOwnerWarmup() {
       float freshBias[3];const float sigma=fresh.biasDegrees(freshBias);
       assert(near(s.biasSigma,sigma));for(unsigned j=0;j<3;++j)assert(near(s.bias[j],freshBias[j]));
     }
-    assert(owner->ring_.at(0).us==firstNew);
+    assert(owner->ring_->at(0).us==firstNew);
     const uint64_t age=Fake::now-firstNew;
     assert(s.orientationReady==(age>=1500000));
     if(!s.orientationReady)sawWarming=true;else sawReady=true;
@@ -298,11 +315,11 @@ static void currentModeAtFusion() {
   Fake::released=[&](FakeMutex *gate) {
     if(gate==owner->gate_ && !changed){changed=true;assert(owner->setMount(Mode::Sidecar));}
   };
-  runFor(*owner,1);assert(changed && owner->ring_.size()==1);
-  vectorIs(owner->ring_.at(0).a,-3,2,1);
+  runFor(*owner,1);assert(changed && owner->ring_->size()==1);
+  vectorIs(owner->ring_->at(0).a,-3,2,1);
   const auto s=owner->snapshot();assert(s.mount==Mode::Sidecar && s.fusedUs==1000000);
   // Ring rates are canonical AND bias-corrected by the actual VQF owner.
-  vectorIs(owner->ring_.at(0).g,-7.32421875f-s.bias[0],6.103515625f-s.bias[1],4.8828125f-s.bias[2]);
+  vectorIs(owner->ring_->at(0).g,-7.32421875f-s.bias[0],6.103515625f-s.bias[1],4.8828125f-s.bias[2]);
   vectorIs(s.a,1,2,3);vectorIs(s.g,4.8828125f,6.103515625f,7.32421875f);
 }
 static void stalePublication(bool returnToTop) {
@@ -317,7 +334,7 @@ static void stalePublication(bool returnToTop) {
   runFor(*owner,4,[&](unsigned iteration) {
     if(iteration<=3) {
       const auto s=owner->snapshot();assert(s.mount==target && !s.fusedUs && !s.pairedUs);
-      assert(!s.orientationReady && !owner->ring_.size());
+      assert(!s.orientationReady && !owner->ring_->size());
       // An empty read, then an accel-only frame, cannot republish old pose.
       M5.Imu.fresh=iteration==1?0:iteration==2?1:3;
       if(returnToTop)M5.Imu.data.accel={0,0,1};
@@ -328,18 +345,18 @@ static void stalePublication(bool returnToTop) {
   // The fourth poll brings one poll's gyro frames: the first fuses at once, then one per grid step.
   constexpr uint64_t POLL_US=StickS3MotionAcquisition::POLL_MS*1000;constexpr unsigned FRAMES=POLL_US/5000;
   const auto s=owner->snapshot();assert(s.mount==target && s.fusedUs>1000000 && s.fusedUs<=1000000+3*POLL_US && !s.orientationReady);
-  assert(owner->ring_.size()==1+(FRAMES-1)*5000/LauncherOrientation::STEP_US && owner->ring_.latest()==s.fusedUs);
-  for(unsigned i=0;i<owner->ring_.size();++i)vectorIs(owner->ring_.at(i).a,0,0,1);
+  assert(owner->ring_->size()==1+(FRAMES-1)*5000/LauncherOrientation::STEP_US && owner->ring_->latest()==s.fusedUs);
+  for(unsigned i=0;i<owner->ring_->size();++i)vectorIs(owner->ring_->at(i).a,0,0,1);
 }
 static void flashQuiet() {
   // No FIFO transfer starts inside a flash-write window; reads resume at its
   // end or, if no end arrives, after the bounded maximum.
   cleanRuntime();auto owner=std::make_unique<StickS3MotionAcquisition>();assert(owner->begin());
-  runFor(*owner,20);const unsigned before=M5.Imu.updates,samples=owner->ring_.size();
+  runFor(*owner,20);const unsigned before=M5.Imu.updates,samples=owner->ring_->size();
   // Each runFor re-enters run(), whose diagnostics counters are per run.
   owner->quiet();runFor(*owner,10);
-  assert(M5.Imu.updates==before && owner->snapshot_.quietPolls==10 && owner->ring_.size()==samples);
-  owner->endQuiet();runFor(*owner,3);assert(M5.Imu.updates==before+3 && owner->ring_.size()>samples);
+  assert(M5.Imu.updates==before && owner->snapshot_.quietPolls==10 && owner->ring_->size()==samples);
+  owner->endQuiet();runFor(*owner,3);assert(M5.Imu.updates==before+3 && owner->ring_->size()>samples);
   // Window lengths in polls: 40 ms, and the 10 s cap on a window that never ends.
   constexpr unsigned POLL=StickS3MotionAcquisition::POLL_MS,SHORT=40/POLL,CAP=StickS3MotionAcquisition::QUIET_MAX_MS/POLL;
   owner->quiet(40);runFor(*owner,20);
@@ -347,18 +364,18 @@ static void flashQuiet() {
   owner->quiet(60000);runFor(*owner,CAP+20);
   assert(owner->snapshot_.quietPolls==CAP && M5.Imu.updates==before+3+(20-SHORT)+20);
   // A (nearly) full FIFO may begin inside a payload: flushed, never parsed.
-  const unsigned flushes=FakeFifo::flushes,size=owner->ring_.size();
+  const unsigned flushes=FakeFifo::flushes,size=owner->ring_->size();
   FakeFifo::forcedLength=Bmi270Fifo::CAPACITY-8;runFor(*owner,1);FakeFifo::forcedLength=0;
   assert(FakeFifo::flushes==flushes+1 && owner->snapshot_.fifoOverflows==1 && owner->snapshot_.fifoErrors==0);
-  assert(owner->ring_.size()==size);
+  assert(owner->ring_->size()==size);
   // A transfer stalled 8 ms past its bus time is suspect even though it
   // reported success. The read after the flush holds one poll's frames.
   const unsigned bytes=Bmi270Fifo::fillBytes(POLL);
   FakeFifo::stallUs=Bmi270Fifo::transferBudgetUs(bytes)+1;runFor(*owner,1);FakeFifo::stallUs=0;
   assert(FakeFifo::flushes==flushes+2 && owner->snapshot_.fifoStalls==1 && owner->snapshot_.lastStallUs==Bmi270Fifo::transferBudgetUs(bytes)+1);
-  assert(owner->ring_.size()==size && owner->snapshot_.fifoErrors==0);
+  assert(owner->ring_->size()==size && owner->snapshot_.fifoErrors==0);
   FakeFifo::stallUs=Bmi270Fifo::transferBudgetUs(bytes)-1;runFor(*owner,1);FakeFifo::stallUs=0;
-  assert(owner->snapshot_.fifoStalls==0 && owner->ring_.size()>size);
+  assert(owner->snapshot_.fifoStalls==0 && owner->ring_->size()>size);
 }
 static void quietBarrierAndAnchoring() {
   // A read in flight longer than lock()'s 20 ms is waited out, not raced.
@@ -381,7 +398,7 @@ static void quietBarrierAndAnchoring() {
   // Frames are stamped when the FIFO length is read, not after a long transfer.
   cleanRuntime();owner=std::make_unique<StickS3MotionAcquisition>();assert(owner->begin());
   FakeFifo::stallUs=9000;runFor(*owner,1);FakeFifo::stallUs=0;
-  assert(owner->snapshot_.fifoStalls==0 && owner->ring_.size()==1 && owner->ring_.at(0).us==1000000);
+  assert(owner->snapshot_.fifoStalls==0 && owner->ring_->size()==1 && owner->ring_->at(0).us==1000000);
 }
 // Runs the owner in the realistic scheduler until the virtual clock reaches
 // end. step sees every loop iteration as it reaches its period wait.
@@ -409,7 +426,7 @@ static void lateLoopYields() {
       // Settled and on schedule before the hold.
       assert(owner->snapshot_.orientationReady && Fake::longestBusyUs<POLL_US);
       assert(owner->snapshot_.latePolls==0 && owner->snapshot_.missedPolls==0);
-      before=owner->ring_.size();owner->gate_->heldByOtherMs=owner->ringGate_->heldByOtherMs=60000;return;
+      before=owner->ring_->size();owner->gate_->heldByOtherMs=owner->ringGate_->heldByOtherMs=60000;return;
     }
     if(owner->gate_->heldByOtherMs && Fake::now>=release)owner->gate_->heldByOtherMs=owner->ringGate_->heldByOtherMs=0;
     if(Fake::now<release)return;
@@ -425,7 +442,7 @@ static void lateLoopYields() {
   assert(polls+5>=expected && polls<=expected+2 && steady+3>=polls);
   // Fusion and the ring carried on from the FIFO; the hold is one honest gap.
   assert(before && s.gaps==1 && s.maxGapUs>60000000 && s.orientationReady);
-  assert(owner->ring_.latest()+POLL_US>=Fake::now);
+  assert(owner->ring_->latest()+POLL_US>=Fake::now);
   // A loop whose every poll costs more than its period (core 0 overloaded)
   // still blocks once per poll.
   cleanRuntime();Fake::realistic=true;Fake::transferUs=POLL_US*3/4;
@@ -486,7 +503,7 @@ static void fifoHeadroom() {
   Fake::delayed={};
   const auto &s=owner->snapshot_;
   assert(quiets==3 && s.fifoOverflows==1 && s.gaps==1 && s.orientationReady);
-  assert(owner->ring_.latest()+POLL_US>=Fake::now);
+  assert(owner->ring_->latest()+POLL_US>=Fake::now);
 }
 static StickS3MotionAcquisition imuAcquisition;
 static StickS3Level level;
@@ -632,7 +649,7 @@ static void activityAndStillnessTiming() {
 }
 int main() {
   ownerActivity();
-  validationAndSerialization();continuousOwnerWarmup();currentModeAtFusion();
+  ringAllocation();validationAndSerialization();continuousOwnerWarmup();currentModeAtFusion();
   stalePublication(false);stalePublication(true);flashQuiet();quietBarrierAndAnchoring();lateLoopYields();pollCost();fifoHeadroom();fallbackLevel();activityAndStillnessTiming();
   std::cout<<"PASS: actual mount owner; mutex exclusion, invalid/failure/noop preservation, "
               "frame invalidation, fresh fusion warmup, canonical capture, late/current mapping, "
@@ -659,7 +676,8 @@ def main():
         executable = build / "test"
         subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17", "-O1", "-g", "-pthread",
                         "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
-                        "-I" + str(build), "-I" + str(HEADERS), "-I" + str(HEADERS.parent / "LaunchLabRpm"), str(cpp),
+                        "-I" + str(build), "-I" + str(HEADERS), "-I" + str(HEADERS.parent / "LaunchLabRpm"),
+                        "-I" + str(ROOT / "tests/fakes"), str(cpp),
                         str(HEADERS / "src/vqf/vqf.cpp"), "-o", str(executable)], check=True)
         subprocess.run([str(executable)], check=True)
 

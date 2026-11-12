@@ -21,7 +21,7 @@ effect, must arrive whole however long it is. On the device this:
   of each song and after, and back within 1 KB after the songs besides 0.19's hot block (taken on the
   first added-effect play, 4,492 bytes measured, and kept);
 - then the worst case over a whole song: the heaviest frames the M5 accepts
-  with a 6 s song of every voice type at the render budget (a song is as
+  with a 6 s song of the five dearest voice kinds at the render budget (a song is as
   long as a celebration from 0.20.1), the heap sampled every second;
 - removes the songs (`X clear`). It starts only on a unit with no added
   effects (or with --replace-added), so nobody's effects are lost.
@@ -103,7 +103,7 @@ def dry_check(report, name, music):
 
 def worst_song(dev, report, heap):
     """The heaviest song effect the M5 accepts (fx_client.worst_song_source:
-    Boundless 0.17's frames and a 6 s song of every voice type) through the
+    Boundless 0.17's frames and a 6 s song of the five dearest voice kinds) through the
     page's path, previewed to its end with the heap sampled every second."""
     source = fx_client.worst_song_source()
     path = Path(fx_client.fxc()).parent / 'worst_song.fx'
