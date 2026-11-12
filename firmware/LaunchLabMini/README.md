@@ -1,6 +1,6 @@
 # LaunchLab for M5StickS3
 
-Current revision: **<!-- current-release:start runtime -->0.20.8-sticks3-songs-pm<!-- current-release:end -->**, the recommended stable release, for **M5StickS3 K150 (ESP32-S3, 8 MB flash / 8 MB OPI PSRAM)**. <!-- current-release:start source -->This folder holds the source of the newer **0.20.9-sticks3-songs-pm** beta release: see its [0.20.9 release notes](../releases/0.20.9-sticks3-songs-pm/README.md) and [build context](../../docs/FIRMWARE_0.20.9.md).<!-- current-release:end -->
+Current revision: **<!-- current-release:start runtime -->0.20.8-sticks3-songs-pm<!-- current-release:end -->**, the recommended stable release, for **M5StickS3 K150 (ESP32-S3, 8 MB flash / 8 MB OPI PSRAM)**. <!-- current-release:start source -->This folder holds the source of the newer **0.20.10-sticks3-songs-pm** beta release: see its [0.20.10 release notes](../releases/0.20.10-sticks3-songs-pm/README.md) and [build context](../../docs/FIRMWARE_0.20.10.md).<!-- current-release:end -->
 One application supports analog QRE1113 and TCRT5000 through the saved Sensor profile setting.
 See <!-- current-release:start build-context -->[build context](../../docs/FIRMWARE_0.20.8.md)<!-- current-release:end --> and <!-- current-release:start release-notes -->[0.20.8 release notes](../releases/0.20.8-sticks3-songs-pm/README.md)<!-- current-release:end -->.
 

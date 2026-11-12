@@ -107,6 +107,7 @@ struct IdleFake {
 static IdleFake &pm1Idle(){static IdleFake idle;return idle;}
 struct Settings {std::map<std::string,uint32_t> values;unsigned writes=0;bool full=false;
   size_t putUInt(const char *key,uint32_t value){++writes;if(full)return 0;values[key]=value;return 4;}
+  size_t putUChar(const char *key,uint8_t value){++writes;if(full)return 0;values[key]=value;return 1;}
   bool remove(const char *key){return values.erase(key)>0;}
 } prefs;
 static uint8_t backlightValue(){return 100;}
@@ -124,7 +125,7 @@ struct ShakeWake {unsigned arms=0,sleeps=0,restores=0,clears=0;bool armOk=true,k
     assert(recheckUs==900000000 && !practiceStore.pending(practice) && soundPlayer.shutdowns && usbStandby.magic==UsbStandby::MAGIC);
     keyOnly=usbStandby.keyOnly;++sleeps;return false;}
 } shakeWake;
-static bool shakeToWake=true;
+static bool shakeToWake=true;static uint8_t unusedWakes=0;
 static unsigned restoreFailureNotes=0;static void noteMotionRestoreFailure(){++restoreFailureNotes;}
 static void prepareMotion(const Snapshot&){motionPending=true;}
 static void logLaunchMetrics(const Snapshot&){}static void noteStartMark(const Snapshot&){}static void saveStartMarks(){}
@@ -136,7 +137,7 @@ static bool saveWakeNavigation(){return true;}
 tests=r'''
 static void at(uint32_t now){clockUs=uint64_t(now)*1000;}
 static void reset(){
-  controls={};wipeBlocked=false;
+  controls={};wipeBlocked=false;unusedWakes=0;
   clockUs=1000000;hardwareSof=false;powerReadOk=mutexAvailable=true;powerSource=4;attachOnPowerSave=false;
   hostReads=powerReads=locks=unlocks=flashWrites=powerSaves=0;
   BleLink::linkUp=false;usbAwake=UsbHostAwake{};usbAutoOffInhibited=false;inactivity=InactivityTimer{};inactivity.setMinutes(1);inactivity.touch(millis());
@@ -157,8 +158,36 @@ int main(){
   reset();inactivity.begin(1000,true);hardwareSof=true;powerSource=4;
   poll(1000);poll(1250);assert(usbAwake.remembered() && inactivity.unusedShake());
   hardwareSof=false;poll(1500);
-  assert(inactivity.unusedShake() && inactivity.remaining(1500)==29500);
+  assert(inactivity.unusedShake() && inactivity.remaining(1500)==14500);
   at(31000);off();assert(shakeWake.sleeps==1 && !shakeWake.keyOnly && !usbStandby.magic);
+  // A carried unit is shaken awake again as soon as it sleeps. Each shake
+  // wake nobody used is counted and kept; the third sleep in a row is for the
+  // side key alone (through 0.20.9 every one armed the shake wake again).
+  reset();
+  for(unsigned i=1;i<=UnusedWakes::LIMIT;++i) {
+    shakeWake=ShakeWake{};lastShutdownTry=0;inactivity.begin(1000,true);at(31000);off();
+    assert(shakeWake.sleeps==1 && unusedWakes==i && prefs.values["idle_wakes"]==i);
+    if(i==UnusedWakes::LIMIT && !shakeWake.keyOnly)std::cout<<"a carried unit armed its shake wake after every unused wake\n";
+    assert(shakeWake.keyOnly==(i==UnusedWakes::LIMIT) && shakeWake.arms==(i<UnusedWakes::LIMIT?1u:0u));
+  }
+  // The side key's wake is use: the next sleep arms the shake wake and the count starts again.
+  shakeWake=ShakeWake{};lastShutdownTry=0;inactivity.begin(1000,false);at(60999);off();assert(!shakeWake.sleeps);
+  at(61000);off();assert(shakeWake.sleeps==1 && shakeWake.arms==1 && !shakeWake.keyOnly && !unusedWakes && !prefs.values["idle_wakes"]);
+  // A shake wake that was used (a button, a pull, a command) does not count.
+  shakeWake=ShakeWake{};lastShutdownTry=0;inactivity.begin(1000,true);inactivity.touch(2000);at(62000);off();
+  assert(shakeWake.sleeps==1 && !shakeWake.keyOnly && !unusedWakes);
+  // A session that leaves the count at 0 writes nothing for it.
+  {const unsigned before=prefs.writes;shakeWake=ShakeWake{};lastShutdownTry=0;inactivity.begin(1000,false);at(61000);off();
+   assert(shakeWake.sleeps==1 && prefs.writes==before+1);}  // the wake marker only
+  // Shake to wake Off: counted, never armed either way.
+  reset();shakeToWake=false;inactivity.begin(1000,true);at(31000);off();
+  assert(shakeWake.sleeps==1 && shakeWake.keyOnly && !shakeWake.arms && unusedWakes==1);shakeToWake=true;
+  // An NVS that refuses the count never holds the sleep.
+  reset();unusedWakes=1;prefs.full=true;inactivity.begin(1000,true);at(31000);off();
+  assert(shakeWake.sleeps==1 && !shakeWake.keyOnly && unusedWakes==1);
+  assert(Serial.lines.find("POWER_OFF_NOTICE unused_wakes_save_failed\n")!=std::string::npos);
+  unusedWakes=0;
+  std::cout<<"PASS: three unused shake wakes in a row sleep for the side key alone; use starts the count again; a refused count never holds the sleep\n";
   // A timeout on the Mic RPM page leaves it and sleeps once the mic has stopped.
   reset();inactivity.begin(1000,true);micListener.running=true;
   at(31000);off();assert(micPageLeaves==1 && !shakeWake.sleeps && !acquisition.begins);
@@ -181,7 +210,7 @@ int main(){
   std::cout<<"PASS: multi-poll optimistic SOF with battery-only power preserves shake grace; verified VIN recovery promotes real USB use\n";
   reset();inactivity.begin(1000,true);hardwareSof=true;powerSource=1;poll(1000);
   assert(inactivity.unusedShake());hardwareSof=false;poll(1250);
-  assert(inactivity.unusedShake() && inactivity.remaining(1250)==29750);
+  assert(inactivity.unusedShake() && inactivity.remaining(1250)==14750);
   at(31000);off();assert(shakeWake.sleeps==1);
   reset();inactivity.begin(1000,true);confirmedHost();assert(!inactivity.unusedShake());
   hardwareSof=false;powerSource=4;poll(2000);

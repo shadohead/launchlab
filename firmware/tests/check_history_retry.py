@@ -119,7 +119,7 @@ enum class TournamentView:uint8_t {RecordingOnly,Rpm};static TournamentView tour
 namespace PracticeUI {enum class View:uint8_t {Recent};}static PracticeUI::View historyView=PracticeUI::View::Recent;
 struct {struct {void setBrightness(unsigned){}void sleep(){}void wakeup(){}}Display;
   struct {void setExtOutput(bool){}}Power;} M5;
-struct {size_t putUInt(const char*,uint32_t){return 4;}bool remove(const char*){return true;}} prefs;
+struct {size_t putUInt(const char*,uint32_t){return 4;}size_t putUChar(const char*,uint8_t){return 1;}bool remove(const char*){return true;}} prefs;
 static uint8_t backlightValue(){return 100;}
 static void powerRecord(uint8_t){}static bool savePowerLog(){return true;}
 struct SleepReceipt{uint32_t magic;int64_t atUs;};static SleepReceipt sleepReceipt;
@@ -128,7 +128,7 @@ static UsbStandby usbStandby{};static uint64_t standbyRecheckUs(){return 9000000
 static struct {bool configure(){return true;}} keyFake;static auto &powerKey(){return keyFake;}
 struct {bool arm(){return true;}bool restore(){return true;}bool clear(){return true;}
   bool sleep(uint64_t){assert(!practiceStore.pending(practice));reachedSleep=true;return false;}} shakeWake;
-static bool shakeToWake=true;
+static bool shakeToWake=true;static uint8_t unusedWakes=0;
 static unsigned restoreFailureNotes=0;static void noteMotionRestoreFailure(){++restoreFailureNotes;}
 static void logLaunchMetrics(const Snapshot&){}static void noteStartMark(const Snapshot&){}static void saveStartMarks(){}
 // Settings persistence has its own production harness (check_save_paths.py).

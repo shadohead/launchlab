@@ -36,21 +36,25 @@ int main() {
 
   // A 3-minute session (the default is 1 minute from 0.20.2).
   InactivityTimer timer;assert(timer.setMinutes(3));timer.begin(1000,true);
-  for(uint32_t t=1000;t<91000;t+=100)timer.motion(t);
-  assert(timer.unusedShake() && timer.activeTimeout()==30000 && !timer.due(91000));
-  assert(!timer.due(120899) && timer.due(120900));
-  timer.touch(121000);assert(!timer.unusedShake() && timer.activeTimeout()==180000);
+  for(uint32_t t=1000;t<41000;t+=100)timer.motion(t);
+  assert(timer.unusedShake() && timer.activeTimeout()==15000 && !timer.due(41000));
+  // 15 s after the movement stops (30 s through 0.20.9).
+  assert(!timer.due(55899) && timer.due(55900));
+  timer.touch(56000);assert(!timer.unusedShake() && timer.activeTimeout()==180000);
   timer.motion(140000);assert(timer.remaining(140000)==180000);
   timer.begin(UINT32_MAX-15000,true);timer.motion(UINT32_MAX-10000);
-  assert(!timer.due(19998) && timer.due(19999));
-  // A unit shaken awake in a moving bag: movement extends the 30 s window,
-  // but it sleeps two minutes after the wake however long the movement lasts.
+  assert(!timer.due(4998) && timer.due(4999));
+  // A unit shaken awake in a moving bag: movement extends the 15 s window,
+  // but it sleeps one minute after the wake however long the movement lasts
+  // (two through 0.20.9).
+  static_assert(InactivityTimer::UNUSED_SHAKE_MS==15000 && InactivityTimer::UNUSED_SHAKE_LIMIT_MS==60000);
   timer.begin(500000,true);
   for(uint32_t t=500000;t<500000+InactivityTimer::UNUSED_SHAKE_LIMIT_MS;t+=100) {
     timer.motion(t);assert(!timer.due(t) && timer.remaining(t)<=InactivityTimer::UNUSED_SHAKE_LIMIT_MS-(t-500000));
   }
-  timer.motion(620000);assert(timer.due(620000) && !timer.remaining(620000) && timer.unusedShake());
-  assert(!timer.due(620000,true));  // never during a measured pull
+  const uint32_t bagEnd=500000+InactivityTimer::UNUSED_SHAKE_LIMIT_MS;
+  timer.motion(bagEnd);assert(timer.due(bagEnd) && !timer.remaining(bagEnd) && timer.unusedShake());
+  assert(!timer.due(bagEnd,true));  // never during a measured pull
   // A button, pull or USB command before the limit makes it a session: the
   // shake limit is gone, and movement keeps it awake up to MOTION_LIMIT_MS
   // after that use, never longer (through 0.20.5 a used unit carried in a
@@ -78,9 +82,24 @@ int main() {
   assert(timer.due(2000000));timer.motion(2000100);assert(timer.due(2000100) && timer.unusedShake());
   timer.touch(2000200);assert(!timer.due(2000200) && !timer.unusedShake());
   // The limit holds across the millisecond counter's wrap.
-  timer.begin(UINT32_MAX-60000,true);
-  for(uint32_t t=UINT32_MAX-60000,n=0;n<1200;t+=100,++n)timer.motion(t);
-  assert(timer.due(uint32_t(UINT32_MAX-60000+120000)) && !timer.due(uint32_t(UINT32_MAX-60000+119900)));
+  timer.begin(UINT32_MAX-30000,true);
+  for(uint32_t t=UINT32_MAX-30000,n=0;n<600;t+=100,++n)timer.motion(t);
+  assert(timer.due(uint32_t(UINT32_MAX-30000+InactivityTimer::UNUSED_SHAKE_LIMIT_MS)) &&
+         !timer.due(uint32_t(UINT32_MAX-30000+InactivityTimer::UNUSED_SHAKE_LIMIT_MS-100)));
+  // A carried unit: each shake wake nobody uses counts, the third sleep
+  // leaves the shake wake unarmed, and any use starts the count again.
+  {
+    uint8_t count=0;
+    count=UnusedWakes::next(count,true);assert(count==1 && UnusedWakes::armsShake(count));
+    count=UnusedWakes::next(count,true);assert(count==2 && UnusedWakes::armsShake(count));
+    count=UnusedWakes::next(count,true);assert(count==UnusedWakes::LIMIT && !UnusedWakes::armsShake(count));
+    count=UnusedWakes::next(count,true);assert(count==UnusedWakes::LIMIT);  // never past the limit
+    assert(UnusedWakes::next(255,true)==UnusedWakes::LIMIT);                 // nor from a damaged byte
+    count=UnusedWakes::next(count,false);assert(!count && UnusedWakes::armsShake(count));
+    assert(!UnusedWakes::next(2,false) && UnusedWakes::next(0,true)==1);
+    // A walk of 30 minutes: three one-minute wakes, then nothing until the side key.
+    static_assert(UnusedWakes::LIMIT*InactivityTimer::UNUSED_SHAKE_LIMIT_MS<=180000);
+  }
   // Optical activity that is not a pull (power_status.h OpticalSleepGuard).
   {
     OpticalSleepGuard guard;

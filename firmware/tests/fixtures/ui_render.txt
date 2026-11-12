@@ -19,7 +19,7 @@ theme0-menu-charging 36f184eaaad28dea
 theme0-menu-settings 25e2f8a064e460ed
 theme0-menu-wear-check e6dc5aeb9cf57bbd
 theme0-history-menu 82c8ae8fb83daf25
-theme0-settings 4caa41436776aeab
+theme0-settings 73c336ce59e5c259
 theme0-settings-appearance bd12b200e9a701fd
 theme0-settings-more 8c432b5a8ab5afb1
 theme0-about 280bf9048440df37
@@ -79,7 +79,7 @@ theme0-flip-menu-charging 36f184eaaad28dea
 theme0-flip-menu-settings 25e2f8a064e460ed
 theme0-flip-menu-wear-check e6dc5aeb9cf57bbd
 theme0-flip-history-menu 82c8ae8fb83daf25
-theme0-flip-settings 4caa41436776aeab
+theme0-flip-settings 73c336ce59e5c259
 theme0-flip-settings-appearance 57dc199daf2ce28d
 theme0-flip-settings-more 8c432b5a8ab5afb1
 theme0-flip-about 280bf9048440df37
@@ -139,7 +139,7 @@ theme1-menu-charging 31f891b7e079b5ec
 theme1-menu-settings 53f5ceb8dd85f879
 theme1-menu-wear-check a1232ecb6834ce09
 theme1-history-menu fc530165bea72157
-theme1-settings d6f37a1a6e10c359
+theme1-settings 686f0e9847a8526f
 theme1-settings-appearance 21eb591e8ac153f1
 theme1-settings-more 179639bf6aea9ef1
 theme1-about 50baa705b7858d6b
@@ -199,7 +199,7 @@ theme1-flip-menu-charging 31f891b7e079b5ec
 theme1-flip-menu-settings 53f5ceb8dd85f879
 theme1-flip-menu-wear-check a1232ecb6834ce09
 theme1-flip-history-menu fc530165bea72157
-theme1-flip-settings d6f37a1a6e10c359
+theme1-flip-settings 686f0e9847a8526f
 theme1-flip-settings-appearance 861aee7e815497f1
 theme1-flip-settings-more 179639bf6aea9ef1
 theme1-flip-about 50baa705b7858d6b
@@ -259,7 +259,7 @@ theme2-menu-charging a68044d50f172527
 theme2-menu-settings 0f25f55df5c735c9
 theme2-menu-wear-check 027911b54b480329
 theme2-history-menu 45838faf8c3fc5d4
-theme2-settings 646fb0b9398e1b2e
+theme2-settings 35ba08f130058b6c
 theme2-settings-appearance 92644b38db826b52
 theme2-settings-more 18af8667fab9b129
 theme2-about b808221525a58cdb
@@ -319,7 +319,7 @@ theme2-flip-menu-charging a68044d50f172527
 theme2-flip-menu-settings 0f25f55df5c735c9
 theme2-flip-menu-wear-check 027911b54b480329
 theme2-flip-history-menu 45838faf8c3fc5d4
-theme2-flip-settings 646fb0b9398e1b2e
+theme2-flip-settings 35ba08f130058b6c
 theme2-flip-settings-appearance 5e3e7d2a558c40da
 theme2-flip-settings-more 18af8667fab9b129
 theme2-flip-about b808221525a58cdb
@@ -379,7 +379,7 @@ theme3-menu-charging f1793bd77606f980
 theme3-menu-settings 71390669f35778a9
 theme3-menu-wear-check 17efd47d5f8adb91
 theme3-history-menu 31edd1a453744b97
-theme3-settings f99e1c50583eb1f1
+theme3-settings aa63855075d42667
 theme3-settings-appearance 56ab7a4594318ae7
 theme3-settings-more fe4928ee97511741
 theme3-about 18b1e06cbf626b73
@@ -439,7 +439,7 @@ theme3-flip-menu-charging f1793bd77606f980
 theme3-flip-menu-settings 71390669f35778a9
 theme3-flip-menu-wear-check 17efd47d5f8adb91
 theme3-flip-history-menu 31edd1a453744b97
-theme3-flip-settings f99e1c50583eb1f1
+theme3-flip-settings aa63855075d42667
 theme3-flip-settings-appearance cad5730ca2fb7fb7
 theme3-flip-settings-more fe4928ee97511741
 theme3-flip-about 18b1e06cbf626b73
@@ -499,7 +499,7 @@ theme4-menu-charging f8ed3dca068361b5
 theme4-menu-settings 5448e8dd9b5a2dfd
 theme4-menu-wear-check 1c0cf569adf6923d
 theme4-history-menu 75b9e3042fed6922
-theme4-settings a0c418fe8cd1b348
+theme4-settings 80c7268d0b84585e
 theme4-settings-appearance 8c0cfce2991b5e0a
 theme4-settings-more c84e8ed210fa3d39
 theme4-about 8d49ff8aab860f47
@@ -559,7 +559,7 @@ theme4-flip-menu-charging f8ed3dca068361b5
 theme4-flip-menu-settings 5448e8dd9b5a2dfd
 theme4-flip-menu-wear-check 1c0cf569adf6923d
 theme4-flip-history-menu 75b9e3042fed6922
-theme4-flip-settings a0c418fe8cd1b348
+theme4-flip-settings 80c7268d0b84585e
 theme4-flip-settings-appearance 2e2af9253ba17542
 theme4-flip-settings-more c84e8ed210fa3d39
 theme4-flip-about 8d49ff8aab860f47
@@ -619,7 +619,7 @@ theme5-menu-charging eb5b2402e6f27098
 theme5-menu-settings d2440f048dfdff19
 theme5-menu-wear-check 41c87c7b7ff2a099
 theme5-history-menu e54007a510c943cb
-theme5-settings de00ea82689341b9
+theme5-settings f3539e6d821be4cf
 theme5-settings-appearance 06fecb2e456ea051
 theme5-settings-more 05e555e9cee1e0f1
 theme5-about 6a9c90a4f69d96db
@@ -679,7 +679,7 @@ theme5-flip-menu-charging eb5b2402e6f27098
 theme5-flip-menu-settings d2440f048dfdff19
 theme5-flip-menu-wear-check 41c87c7b7ff2a099
 theme5-flip-history-menu e54007a510c943cb
-theme5-flip-settings de00ea82689341b9
+theme5-flip-settings f3539e6d821be4cf
 theme5-flip-settings-appearance 0737c0172993e971
 theme5-flip-settings-more 05e555e9cee1e0f1
 theme5-flip-about 6a9c90a4f69d96db
@@ -739,7 +739,7 @@ theme6-menu-charging 2498fe940d7e82c1
 theme6-menu-settings a8c4ea56ef699cf9
 theme6-menu-wear-check a3ee8060b9767861
 theme6-history-menu 02350ffa3048902e
-theme6-settings bcde9b3b5ba33630
+theme6-settings a9f430764fec6c66
 theme6-settings-appearance 4961f91a555d67a4
 theme6-settings-more 17747ff16b8b7959
 theme6-about 6f4637e302035293
@@ -799,7 +799,7 @@ theme6-flip-menu-charging 2498fe940d7e82c1
 theme6-flip-menu-settings a8c4ea56ef699cf9
 theme6-flip-menu-wear-check a3ee8060b9767861
 theme6-flip-history-menu 02350ffa3048902e
-theme6-flip-settings bcde9b3b5ba33630
+theme6-flip-settings a9f430764fec6c66
 theme6-flip-settings-appearance 59bc22721e421a0c
 theme6-flip-settings-more 17747ff16b8b7959
 theme6-flip-about 6f4637e302035293
@@ -859,7 +859,7 @@ theme7-menu-charging cb720967e8e15086
 theme7-menu-settings 5ce4d7360d7f67c5
 theme7-menu-wear-check e3c8cea7352ff0ad
 theme7-history-menu 856c2740c92add91
-theme7-settings 904c4b4419204c17
+theme7-settings dd8fe8210937b075
 theme7-settings-appearance 01194bed4a6b7b51
 theme7-settings-more f72eeec2cbbb7d61
 theme7-about 008658b679fc94a7
@@ -919,7 +919,7 @@ theme7-flip-menu-charging cb720967e8e15086
 theme7-flip-menu-settings 5ce4d7360d7f67c5
 theme7-flip-menu-wear-check e3c8cea7352ff0ad
 theme7-flip-history-menu 856c2740c92add91
-theme7-flip-settings 904c4b4419204c17
+theme7-flip-settings dd8fe8210937b075
 theme7-flip-settings-appearance fe2a308f6bd6a7f1
 theme7-flip-settings-more f72eeec2cbbb7d61
 theme7-flip-about 008658b679fc94a7
@@ -979,7 +979,7 @@ theme8-menu-charging cc1fa578046b0c82
 theme8-menu-settings 86be856077419b8d
 theme8-menu-wear-check b249548036ae742d
 theme8-history-menu 4bcb8d6043b30e0d
-theme8-settings e79ca2ef0be63e43
+theme8-settings 8646fb0209f13371
 theme8-settings-appearance cccfff716c1d7c23
 theme8-settings-more 2ce95cc5b8f98a81
 theme8-about 200eecd096815a67
@@ -1039,7 +1039,7 @@ theme8-flip-menu-charging cc1fa578046b0c82
 theme8-flip-menu-settings 86be856077419b8d
 theme8-flip-menu-wear-check b249548036ae742d
 theme8-flip-history-menu 4bcb8d6043b30e0d
-theme8-flip-settings e79ca2ef0be63e43
+theme8-flip-settings 8646fb0209f13371
 theme8-flip-settings-appearance b55254dd893b6523
 theme8-flip-settings-more 2ce95cc5b8f98a81
 theme8-flip-about 200eecd096815a67
@@ -1099,7 +1099,7 @@ theme9-menu-charging 7b5b948d8d314b89
 theme9-menu-settings 2db5f469b00196c9
 theme9-menu-wear-check ebf0375ad851c609
 theme9-history-menu 2b26a505d9c2e026
-theme9-settings 28a7efb485140d34
+theme9-settings 69ba29d29e712cca
 theme9-settings-appearance 9e7118b2fcdf6638
 theme9-settings-more d65e1f8c190c75b9
 theme9-about a24b26ab38dc561b
@@ -1159,7 +1159,7 @@ theme9-flip-menu-charging 7b5b948d8d314b89
 theme9-flip-menu-settings 2db5f469b00196c9
 theme9-flip-menu-wear-check ebf0375ad851c609
 theme9-flip-history-menu 2b26a505d9c2e026
-theme9-flip-settings 28a7efb485140d34
+theme9-flip-settings 69ba29d29e712cca
 theme9-flip-settings-appearance ca21c87475d888d0
 theme9-flip-settings-more d65e1f8c190c75b9
 theme9-flip-about a24b26ab38dc561b
@@ -1219,7 +1219,7 @@ custom-menu-charging 24b90bb6dfeceaf6
 custom-menu-settings 4ff6da5379908ae1
 custom-menu-wear-check e5705431b85b9539
 custom-history-menu 8c8c0628e6b92917
-custom-settings e1986f8006bd2d7e
+custom-settings 351834074a781f9e
 custom-settings-appearance 5c85f035f428b6e2
 custom-settings-more 5a90ad8875ad6e09
 custom-about 112bb42a73fe8298
@@ -1279,7 +1279,7 @@ custom-flip-menu-charging 24b90bb6dfeceaf6
 custom-flip-menu-settings 4ff6da5379908ae1
 custom-flip-menu-wear-check e5705431b85b9539
 custom-flip-history-menu 8c8c0628e6b92917
-custom-flip-settings e1986f8006bd2d7e
+custom-flip-settings 351834074a781f9e
 custom-flip-settings-appearance 6c26d8ff97a059a6
 custom-flip-settings-more 5a90ad8875ad6e09
 custom-flip-about 112bb42a73fe8298
