@@ -555,6 +555,18 @@ LOOP_HELPER static void hilCommand(char *line) {
   if(!strcmp(cmd,"usbidle")){Hil::usbIdle=num(1)!=0;Hil::reply("HIL_OK usbidle %d\n",Hil::usbIdle);return;}
   if(!strcmp(cmd,"sleepok")){Hil::allowSleep=num(1)!=0;Hil::reply("HIL_OK sleepok %d\n",Hil::allowSleep.load());return;}
   if(!strcmp(cmd,"sleepdry")){Hil::sleepDry=num(1)!=0;Hil::reply("HIL_OK sleepdry %d\n",Hil::sleepDry.load());return;}
+  if(!strcmp(cmd,"shakewake")) {
+    // The sleep timer as a shake wake nobody has used yet starts it: the rig
+    // cannot be shaken awake.
+    inactivity.begin(millis(),true);
+    Hil::reply("HIL_OK shakewake unused_wakes=%u\n",unsigned(unusedWakes));return;
+  }
+  if(!strcmp(cmd,"unusedwakes")) {
+    // The saved count of shake wakes in a row that nobody used (UnusedWakes).
+    unusedWakes=uint8_t(num(0));
+    const bool ok=prefs.putUChar(UnusedWakes::KEY,unusedWakes)==1;
+    Hil::reply("HIL_OK unusedwakes %u saved=%d\n",unsigned(unusedWakes),ok);return;
+  }
   if(!strcmp(cmd,"sleepscale")) {
     // Every sleep limit (power_status.h, sleepLimit()) divided by n, 1 to 60:
     // sleep_blockers waits seconds, not the real minutes. 1 is the real limits.

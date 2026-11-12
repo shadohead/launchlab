@@ -19,7 +19,7 @@ custom-menu-charging 82de0b8396624682
 custom-menu-settings d7685f54a0b15331
 custom-menu-wear-check 30a7859d035902d1
 custom-history-menu 83441f71328e6248
-custom-settings 8cda476bea18f6c3
+custom-settings 7dc7154a083352cd
 custom-settings-appearance 4a748262944693f9
 custom-settings-more 5e0c5873a5e1329d
 custom-about 7f08c5b542a32ffa
@@ -79,7 +79,7 @@ custom-flip-menu-charging 82de0b8396624682
 custom-flip-menu-settings d7685f54a0b15331
 custom-flip-menu-wear-check 30a7859d035902d1
 custom-flip-history-menu 83441f71328e6248
-custom-flip-settings 8cda476bea18f6c3
+custom-flip-settings 7dc7154a083352cd
 custom-flip-settings-appearance e4a9acc21f80c85d
 custom-flip-settings-more 5e0c5873a5e1329d
 custom-flip-about 7f08c5b542a32ffa

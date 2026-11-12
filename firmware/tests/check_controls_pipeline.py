@@ -67,6 +67,7 @@ static struct {void cancel(){}}restoreRx;
 static void beginWipe();static void cancelWipe();
 // The start-mark reference (its saves are checked by check_save_paths).
 static StartMarkReference::Reference startMarks;static bool startMarksDirty=false;static void loadStartMarks(){}static void saveStartMarks(){}
+static uint8_t unusedWakes=0;
 static bool tournamentMode=false,historyPage=false,dirty=false,diagnostics=false,demo=false,motionDemo=false,motionPending=false,settingsSaveError=false,restorePreview=false,displayFlipped=false,shakeToWake=ShakeWakeSetting::DEFAULT_ON,
   batteryIcon=BatteryIconSetting::DEFAULT_ON,bluetoothOn=BluetoothSetting::DEFAULT_ON;static bool bluetoothAtBoot=false;
 static uint8_t brightnessPercent=Brightness::DEFAULT_PERCENT;
@@ -194,7 +195,7 @@ struct WipeStore {
 };
 static void bootDefaults() {
   // The owner's choice for a unit with no saved value (2026-10-21).
-  static_assert(RpmEstimator::DEFAULT_MODE==RpmEstimator::Mode::SingleTurn && Brightness::DEFAULT_PERCENT==30);
+  static_assert(RpmEstimator::DEFAULT_MODE==RpmEstimator::Mode::SingleTurn && Brightness::DEFAULT_PERCENT==20);
   static_assert(Milestones::DEFAULT_MODE==Milestones::Mode::Both);
   static_assert(Brightness::valid(Brightness::DEFAULT_PERCENT));
   // New unit: the defaults, and nothing is written.

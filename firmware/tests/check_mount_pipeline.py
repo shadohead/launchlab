@@ -553,14 +553,14 @@ static void fallbackLevel() {
   for(unsigned i=0;i<1800;++i) {
     Fake::now+=20000;s.activity.sampleUs=s.activity.lastMotionUs=Fake::now;
     s.activity.valid=s.activity.moving=true;pollLevel(millis());
-    assert(inactivity.unusedShake() && inactivity.remaining(millis())==30000);
+    assert(inactivity.unusedShake() && inactivity.remaining(millis())==15000);
   }
   const auto lastUsed=lastActivityMotionUs;Fake::now+=1000000;pollLevel(millis());
-  assert(lastActivityMotionUs==lastUsed && inactivity.remaining(millis())==29000);
+  assert(lastActivityMotionUs==lastUsed && inactivity.remaining(millis())==14000);
   // A current snapshot with an old movement marker cannot renew the timer.
   Fake::now+=1000000;s.activity.sampleUs=Fake::now;s.activity.lastMotionUs=lastUsed+1;
-  pollLevel(millis());assert(lastActivityMotionUs==lastUsed && inactivity.remaining(millis())==28000);
-  Fake::now+=28000000;pollLevel(millis());assert(inactivity.due(millis()));
+  pollLevel(millis());assert(lastActivityMotionUs==lastUsed && inactivity.remaining(millis())==13000);
+  Fake::now+=13000000;pollLevel(millis());assert(inactivity.due(millis()));
   // Repeated fusion warmup hides the dot but is not activity. Execute the
   // production consumer for an unused shake wake, with fresh quiet samples
   // and periodic 1.5-second orientation resets, through its sleep deadline.

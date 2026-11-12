@@ -8,7 +8,7 @@ Ordinary Update blocks downgrades and unknown or incomplete applications. Repair
 
 <!-- current-release:start summary -->
 The current stable release is **0.20.8** (`0.20.8-sticks3-songs-pm`): [0.20.8 release notes](../firmware/releases/0.20.8-sticks3-songs-pm/README.md) and [build context](FIRMWARE_0.20.8.md).
-The current beta is **0.20.9** (`0.20.9-sticks3-songs-pm`): [0.20.9 release notes](../firmware/releases/0.20.9-sticks3-songs-pm/README.md) and [build context](FIRMWARE_0.20.9.md).
+The current beta is **0.20.10** (`0.20.10-sticks3-songs-pm`): [0.20.10 release notes](../firmware/releases/0.20.10-sticks3-songs-pm/README.md) and [build context](FIRMWARE_0.20.10.md).
 <!-- current-release:end -->
 These lines are generated from [`site/public/firmware/versions.json`](../site/public/firmware/versions.json), the file the updater reads, by `scripts/render-current-release.py`.
 Every other document that shows the current release is generated the same way, and each release's own build context points here instead of naming a newer release.

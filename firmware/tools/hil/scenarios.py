@@ -478,6 +478,9 @@ def standby(rig):
 
 
 MOTION_LIMIT_S = 300  # InactivityTimer::MOTION_LIMIT_MS (0.20.6)
+UNUSED_SHAKE_S = 15   # InactivityTimer::UNUSED_SHAKE_MS (30 through 0.20.9)
+UNUSED_SHAKE_LIMIT_S = 60  # InactivityTimer::UNUSED_SHAKE_LIMIT_MS (120 through 0.20.9)
+UNUSED_WAKES_LIMIT = 3     # UnusedWakes::LIMIT
 MEASURE_LIMIT_S = 30  # OpticalSleepGuard::MEASURE_LIMIT_MS
 FORCE_AFTER = 2       # OpticalSleepGuard::FORCE_AFTER
 MIC_STOP_LIMIT_S = 30  # MicSession::STOP_LIMIT_MS (0.20.7)
@@ -540,10 +543,15 @@ def sleep_blockers(rig):
        M5.Mic's end() would be), the sleep runs 30 s after the stop was asked,
        with POWER_OFF_NOTICE mic_stop_timeout, and the mic stops once the task
        goes on.
-    Then a pull is measured as ever. Leaves Shake to wake On, Sleep after 1 min
-    and no dry run.
+    5. A carried unit. A shake wake nobody uses (`!shakewake`: the rig cannot
+       be shaken) sleeps 15 s after the wake when still and 60 s after it while
+       it keeps moving (30 s and 2 minutes through 0.20.9). Each is counted;
+       the third in a row sleeps for the side key alone (no IMU wake armed),
+       and a sleep after use arms the shake wake again and clears the count.
+    Then a pull is measured as ever. Leaves Shake to wake On, Sleep after 1 min,
+    no unused wakes counted and no dry run.
 
-    Cases 1 and 3 wait for their sleeps with every sleep limit divided by
+    Cases 1, 3 and 5 wait for their sleeps with every sleep limit divided by
     SLEEP_SCALE (`!sleepscale`): 30 s for the 5-minute movement limit, 3 s
     for the 30 s measured-pull limit and 6 s between refused sleeps, about a
     minute and a half in all instead of nine. Case 4 waits the real 30 s:
@@ -647,10 +655,74 @@ def sleep_blockers(rig):
         d.hil('home')
         # The dry run restarts sampling and the IMU: its motion warms up again first.
         rig.check('READY again after the stuck stop\'s sleep', rig.wait_ready(25) is not None)
-        r = rig.pull(signals.standard_pull(9000), signals.launch_motion(tilt_rate_dps=300, pull_g=4, seed=85))
+        # 5. A carried unit: shake wakes nobody uses.
+        d.hil('unusedwakes 0', expect='HIL_OK unusedwakes')
+
+        def unused_wake(moving):
+            # One shake wake nobody uses, to its sleep: (seconds from wake to sleep, the sleep's lines).
+            if moving:
+                d.hil('const {:.4f} {:.4f} {:.4f} 0 0 0 0.03 20'.format(*GRAVITY))
+                d.hil('imu const')
+                time.sleep(3)
+            with sleep_scale(rig) as scale:
+                d.hil('shakewake', expect='HIL_OK shakewake')
+                woke = time.monotonic()
+                lines, end = standby_dry_run(rig, (UNUSED_SHAKE_LIMIT_S if moving else UNUSED_SHAKE_S) / scale, timeout=25)
+            if moving:
+                d.hil(still)
+            off = next((l for l in lines if l.text.startswith('POWER_OFF reason=inactivity')), None)
+            return (off.t - woke if off else None), lines, end, scale
+
+        def wake_state(lines):
+            count = next((l for l in lines if l.text.startswith('UNUSED_WAKES ')), None)
+            slept = next((l for l in lines if l.text.startswith('SHAKE_SLEEP ')), None)
+            dry = next((l for l in lines if l.text.startswith('SLEEP_DRY_RUN ')), None)
+            armed = any(l.text.startswith('SHAKE_WAKE_ARM ') for l in lines)
+            return count, slept, dry, armed
+
+        after, lines, end, scale = unused_wake(moving=False)
+        count, slept, dry, armed = wake_state(lines)
+        limit = UNUSED_SHAKE_S / scale
+        rig.note(f'unused shake wake, still: sleep {"ran" if after is not None else "never ran"} '
+                 f'{after if after is None else round(after, 1)} s after the wake (limit {limit:.1f} s)')
+        rig.check(f'unused wake, still: the sleep runs {limit:.1f} s after the wake',
+                  after is not None and end is not None and 0.8 * limit <= after <= limit + 4, f'{after} s')
+        rig.check('unused wake 1: counted, the shake wake armed',
+                  count is not None and count.f.get('count') == '1' and count.f.get('shake_armed') == '1' and armed and
+                  slept is not None and slept.f.get('wake') == 'imu_motion' and dry is not None and dry.f.get('imu_wake_armed') == '1',
+                  ' / '.join(l.text for l in (count, slept, dry) if l))
+        after, lines, end, scale = unused_wake(moving=True)
+        count, slept, dry, armed = wake_state(lines)
+        limit, quiet = UNUSED_SHAKE_LIMIT_S / scale, UNUSED_SHAKE_S / scale
+        rig.note(f'unused shake wake, moving: sleep {"ran" if after is not None else "never ran"} '
+                 f'{after if after is None else round(after, 1)} s after the wake (limit {limit:.1f} s)')
+        rig.check(f'unused wake, moving: awake past {quiet:.1f} s, asleep within {limit:.1f} s of the wake',
+                  after is not None and end is not None and after >= 0.8 * limit and after <= limit + 4, f'{after} s')
+        rig.check('unused wake 2: counted, the shake wake armed',
+                  count is not None and count.f.get('count') == '2' and count.f.get('shake_armed') == '1' and armed,
+                  count.text if count else 'none')
+        after, lines, end, scale = unused_wake(moving=False)
+        count, slept, dry, armed = wake_state(lines)
+        rig.check(f'unused wake {UNUSED_WAKES_LIMIT}: the sleep is for the side key alone',
+                  end is not None and count is not None and count.f.get('count') == str(UNUSED_WAKES_LIMIT) and count.f.get('shake_armed') == '0' and
+                  not armed and slept is not None and slept.f.get('wake') == 'side_key' and slept.f.get('mode') == 'power_off' and
+                  dry is not None and dry.f.get('imu_wake_armed') == '0',
+                  ' / '.join(l.text for l in (count, slept, dry) if l) or 'no sleep')
+        policy = d.status().get('POWER_POLICY', {})
+        rig.check('the count is kept', policy.get('unused_wakes') == str(UNUSED_WAKES_LIMIT), str(policy))
+        # Use (the USB S command), then its sleep: armed again, the count cleared.
+        lines, end = standby_dry_run(rig, 0, request=True, timeout=30)
+        count, slept, dry, armed = wake_state(lines)
+        rig.check('a sleep after use arms the shake wake again and clears the count',
+                  end is not None and count is not None and count.f.get('count') == '0' and count.f.get('shake_armed') == '1' and armed and
+                  slept is not None and slept.f.get('wake') == 'imu_motion' and dry is not None and dry.f.get('imu_wake_armed') == '1',
+                  ' / '.join(l.text for l in (count, slept, dry) if l) or 'no sleep')
+        rig.check('READY again after the unused wakes', rig.wait_ready(25) is not None)
+        r = rig.pull(signals.standard_pull(9000), signals.launch_motion(tilt_rate_dps=300, pull_g=4, seed=86))
         rig.check_pull(r, tolerance=0.03)
     finally:
         d.hil('sleepscale 1', expect='HIL_OK sleepscale')
+        d.hil('unusedwakes 0')
         d.hil('micstall 0')
         d.hil('micfloor')  # MicSession::FLOOR_BYTES again
         d.hil('nvs clear')

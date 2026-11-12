@@ -84,11 +84,11 @@ namespace Lab {inline PowerLab::Knobs knobs;inline bool running=false,displayAsl
 #define LOOP_HELPER __attribute__((noinline))
 #if LAUNCHLAB_HIL
 // Test-only hardware-in-the-loop build; never a release. See tools/hil.
-static constexpr char VERSION[] = "0.20.9-sticks3-songs-hil-pm";
+static constexpr char VERSION[] = "0.20.10-sticks3-songs-hil-pm";
 #elif LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = "0.20.9-sticks3-songs-pm";
+static constexpr char VERSION[] = "0.20.10-sticks3-songs-pm";
 #else
-static constexpr char VERSION[] = "0.20.9-sticks3-songs";
+static constexpr char VERSION[] = "0.20.10-sticks3-songs";
 #endif
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ
@@ -217,6 +217,8 @@ static uint8_t brightnessPercent=Brightness::DEFAULT_PERCENT;
 static bool displayFlipped=false;
 // Shake to wake (0.20.2, shake_wake_setting.h): whether an inactivity sleep arms the IMU wake.
 static bool shakeToWake=ShakeWakeSetting::DEFAULT_ON;
+// Shake wakes in a row that nobody used, as last saved (UnusedWakes, power_status.h).
+static uint8_t unusedWakes=0;
 // Battery icon (0.20.8, battery_icon_setting.h): the charge in the screens' top right corner.
 static bool batteryIcon=BatteryIconSetting::DEFAULT_ON;
 static ControlsUI::CornerBattery drawnCornerBattery;  // as last drawn
@@ -647,8 +649,8 @@ LOOP_HELPER static void status() {
   Serial.printf("CPU_PM requested=%d enabled=%d min_mhz=%u max_mhz=%d light_sleep=0 error=%s\n",
     LAUNCHLAB_CPU_PM,CpuPower::active(),CpuPower::active()?40u:80u,CpuPower::active()?CpuPower::maxMhz():80,CpuPower::errorName());
   const auto &savers=PowerSavers::settings;
-  Serial.printf("POWER_POLICY effective_timeout_s=%lu unused_shake=%d dim_after_ms=%lu dim_ignores_motion=%d dim_backlight=%u rest_after_ms=%lu changed_rows_only=%d imu_poll_ms=%lu level_poll_ms=%lu ui_poll_ms=%lu battery_estimate_mv=%u battery_estimate=voltage_median5\n",
-    (unsigned long)(inactivity.activeTimeout()/1000),inactivity.unusedShake(),
+  Serial.printf("POWER_POLICY effective_timeout_s=%lu unused_shake=%d unused_wakes=%u dim_after_ms=%lu dim_ignores_motion=%d dim_backlight=%u rest_after_ms=%lu changed_rows_only=%d imu_poll_ms=%lu level_poll_ms=%lu ui_poll_ms=%lu battery_estimate_mv=%u battery_estimate=voltage_median5\n",
+    (unsigned long)(inactivity.activeTimeout()/1000),inactivity.unusedShake(),unsigned(unusedWakes),
     (unsigned long)savers.dimMs,savers.dimIgnoresMotion,unsigned(savers.dimBacklight),(unsigned long)savers.restMs,
     savers.changedRowsOnly,(unsigned long)imuAcquisition.pollMs(),(unsigned long)IdlePowerPolicy::LEVEL_POLL_MS,
     (unsigned long)IdlePowerPolicy::UI_POLL_MS,unsigned(battery.estimateMillivolts));
@@ -725,7 +727,12 @@ LOOP_HELPER static void pollUsbAwake(uint32_t now,const Snapshot &s,bool force=f
   const bool inhibited=usbAwake.inhibited(now);
   // A confirmed computer connection establishes use, even if the initial
   // optimistic SOF already inhibited shutdown on the preceding poll.
-  if(inhibited && usbAwake.remembered() && usbAwake.powerKnown(now) &&
+  bool hostConfirmed=inhibited && usbAwake.remembered() && usbAwake.powerKnown(now);
+#if LAUNCHLAB_HIL
+  // The dry run's host is the rig, not a person: `!shakewake` stays an unused wake.
+  if(Hil::sleepDry.load())hostConfirmed=false;
+#endif
+  if(hostConfirmed &&
      (usbAwake.powerBits()&UsbHostAwake::VIN_MASK) && inactivity.unusedShake())inactivity.touch(now);
   if(inhibited!=usbAutoOffInhibited) {
     usbAutoOffInhibited=inhibited;
@@ -1954,8 +1961,18 @@ LOOP_HELPER static void autoPowerOff(uint32_t now,const Snapshot &s) {
   soundPlayer.shutdown();  // Neither the amplifier nor the codec stays on through standby.
   if(imuAcquisition.lock()) {
     bool usbCancelled=false;
+    // A carried unit is shaken awake again as soon as it sleeps: after
+    // UnusedWakes::LIMIT shake wakes in a row that nobody used, this sleep is
+    // for the side key alone. A count NVS refuses is only not kept.
+    const uint8_t wakes=UnusedWakes::next(unusedWakes,inactivity.unusedShake());
+    if(wakes!=unusedWakes) {
+      if(prefs.putUChar(UnusedWakes::KEY,wakes)==1)unusedWakes=wakes;
+      else Serial.println("POWER_OFF_NOTICE unused_wakes_save_failed");
+    }
+    const bool carried=shakeToWake && !UnusedWakes::armsShake(wakes);
+    Serial.printf("UNUSED_WAKES count=%u limit=%u saved=%u shake_armed=%d\n",unsigned(wakes),unsigned(UnusedWakes::LIMIT),unsigned(unusedWakes),shakeToWake && !carried);
     // Shake to wake Off sleeps as the side key's power-off does: no IMU arm.
-    auto plan=sleepPlan(shakeToWake);
+    auto plan=sleepPlan(shakeToWake && !carried);
     // An IMU that cannot be armed must not keep the unit awake (through 0.20.5
     // it retried every minute, forever): sleep for the side key alone.
     if(plan.armImu && !shakeWake.arm()) {
@@ -2836,6 +2853,7 @@ void setup() {
   if(!BluetoothSetting::load(prefs,bluetoothOn))Serial.println("BLUETOOTH_SETTING_NOTICE invalid_saved_value_retained_using_off_default");
   bluetoothAtBoot=bluetoothOn;
   if(!ShakeWakeSetting::load(prefs,shakeToWake))Serial.println("SHAKE_WAKE_SETTING_NOTICE invalid_saved_value_retained_using_on");
+  unusedWakes=prefs.getUChar(UnusedWakes::KEY,0);
   if(!BatteryIconSetting::load(prefs,batteryIcon))Serial.println("BATTERY_ICON_SETTING_NOTICE invalid_saved_value_retained_using_on");
   if(!DisplayFlipSetting::load(prefs,displayFlipped))Serial.println("DISPLAY_SETTING_NOTICE invalid_record_retained_using_flip_off_default");
   if(!MountOrientationSetting::load(prefs,mountMode))Serial.println("MOUNT_SETTING_NOTICE invalid_record_retained_using_top_default");
