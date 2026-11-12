@@ -159,10 +159,11 @@ inline bool receive(uint8_t *out,size_t bytes,uint32_t expected) {
 
 inline void status() {
   auto &o=optical();auto &m=imu();auto &f=m.faults;auto &c=m.counters;float a[3],g[3];m.base(a,g);
-  Hil::reply("HIL_STATUS boot_id=%08lx reset=%s uptime_ms=%lu optical=%s idle=%.0f/%.1f buffer=%lu keys=%u replaced=%llu cursor=%lld resyncs=%lu pulls=%lu pull_start_us=%lld commands=%lu last=%s tx_short=%lu\n",
+  Hil::reply("HIL_STATUS boot_id=%08lx reset=%s uptime_ms=%lu optical=%s idle=%.0f/%.1f buffer=%lu keys=%u replaced=%llu cursor=%lld resyncs=%lu pulls=%lu pull_start_us=%lld commands=%lu last=%s tx_short=%lu sleep_scale=%u\n",
     (unsigned long)bootId,resetName(esp_reset_reason()),(unsigned long)millis(),Optical::name(o.mode()),o.baseline(),o.idleNoise(),
     (unsigned long)o.bufferLength(),o.keyCount(),(unsigned long long)o.replaced(),(long long)o.cursor(),(unsigned long)o.resyncs(),
-    (unsigned long)pullCount.load(),(long long)pullStartUs.load(),(unsigned long)commands,lastCommand,(unsigned long)txShort);
+    (unsigned long)pullCount.load(),(long long)pullStartUs.load(),(unsigned long)commands,lastCommand,(unsigned long)txShort,
+    unsigned(sleepScale.load()));
   Hil::reply("HIL_IMU mode=%s base_g=%.3f,%.3f,%.3f base_dps=%.1f,%.1f,%.1f profile=%lu offset_ms=%ld frames=%lu activations=%lu flushes=%lu length_fails=%lu data_fails=%lu corrupts=%lu garbles=%lu overflows=%lu natural_overflows=%lu oversizes=%lu stalls=%lu skips=%lu pending_faults=%lu,%lu,%lu,%lu,%lu,%lu,%lu jitter_us=%lu sensor_jitter_us=%lu drift_ppm=%ld freeze=%lu\n",
     Imu::name(m.mode()),a[0],a[1],a[2],g[0],g[1],g[2],(unsigned long)m.profileLength(),(long)m.offsetMs(),
     (unsigned long)c.frames.load(),(unsigned long)c.activations.load(),(unsigned long)c.flushes.load(),(unsigned long)c.lengthFails.load(),
@@ -274,6 +275,7 @@ LOOP_HELPER static void hilCommand(char *line) {
   if(!strcmp(cmd,"reset")) {
     Hil::pullStartUs=0;optical().setMode(Hil::Optical::Mode::Pass);imu().setMode(Hil::Imu::Mode::Pass);
     imu().faults.clear();Hil::nvs.fail=Hil::nvs.slow=0;Hil::nvs.armed=false;Hil::usbIdle=false;Hil::allowSleep=false;Hil::sleepDry=false;Hil::micStall=false;
+    Hil::sleepScale=1;
     Hil::replyLine("HIL_OK reset");return;
   }
   if(!strcmp(cmd,"opt")) {
@@ -553,6 +555,13 @@ LOOP_HELPER static void hilCommand(char *line) {
   if(!strcmp(cmd,"usbidle")){Hil::usbIdle=num(1)!=0;Hil::reply("HIL_OK usbidle %d\n",Hil::usbIdle);return;}
   if(!strcmp(cmd,"sleepok")){Hil::allowSleep=num(1)!=0;Hil::reply("HIL_OK sleepok %d\n",Hil::allowSleep.load());return;}
   if(!strcmp(cmd,"sleepdry")){Hil::sleepDry=num(1)!=0;Hil::reply("HIL_OK sleepdry %d\n",Hil::sleepDry.load());return;}
+  if(!strcmp(cmd,"sleepscale")) {
+    // Every sleep limit (power_status.h, sleepLimit()) divided by n, 1 to 60:
+    // sleep_blockers waits seconds, not the real minutes. 1 is the real limits.
+    const long n=long(num(1));
+    if(n<1 || n>60){Hil::replyLine("HIL_ERR sleepscale 1-60");return;}
+    Hil::sleepScale=uint16_t(n);Hil::reply("HIL_OK sleepscale %u\n",unsigned(Hil::sleepScale.load()));return;
+  }
   if(!strcmp(cmd,"usbstandby")) {
     // A real USB-retained standby by the side key's power-off path; its timer
     // re-check after <s> seconds boots instead of sleeping again (usb_standby).
@@ -707,6 +716,19 @@ LOOP_HELPER static void hilCommand(char *line) {
     }
     holdB();controls.page=Controls::Page::Main;syncNavigation();
     Hil::replyLine(line);return;
+  }
+  // The Bluetooth tap (ble_link.h): both profiles without the radio, their
+  // packets printed as BLE_TAP lines. `blepass` and `blell` write hex bytes to
+  // the Battle Pass and the LaunchLab profile as a phone would.
+  if(!strcmp(cmd,"bletap")){const bool on=num(1)!=0;BleLink::setTap(on,millis());Hil::reply("HIL_OK bletap %d\n",on);return;}
+  if(!strcmp(cmd,"blepass") || !strcmp(cmd,"blell")) {
+    const bool pass=cmd[3]=='p';const char *text=arg();
+    uint8_t bytes[18];size_t n=0;
+    for(;text && text[0] && text[1] && n<sizeof(bytes);text+=2){char pair[3]={text[0],text[1],0};bytes[n++]=uint8_t(strtoul(pair,nullptr,16));}
+    if(!BleLink::tapped() || !n || (pass && n!=1)){Hil::replyLine("HIL_ERR ble tap off or bytes");return;}
+    if(pass)BleLink::tapPass(bytes[0]);
+    else if(!BleLink::tapCommand(bytes,n)){Hil::replyLine("HIL_ERR ble busy");return;}
+    Hil::reply("HIL_OK %s %u\n",cmd,unsigned(n));return;
   }
   if(!strcmp(cmd,"home")) {
     if(controls.page==Controls::Page::Edit)cancelSettingEdit();

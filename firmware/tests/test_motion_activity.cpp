@@ -113,5 +113,25 @@ int main() {
     assert(!held.use(0,false,false) && held.use(UINT32_MAX-1000,true,false) && held.use(1000,true,false) &&
            !held.use(HeldButtonUse::LIMIT_MS,true,false));
   }
-  std::cout<<"Motion activity: vibration, adjustment, translation, stale/invalid data rolling sleep windows, the movement limit, the optical sleep guard and held buttons passed\n";
+  // A connected phone (power_status.h PhoneLinkAwake, 0.20.9): it holds the
+  // sleep off for 10 minutes after the last button or pull on the stick, then
+  // no longer, however long it stays connected. The prototype had no limit.
+  {
+    using P=PhoneLinkAwake;
+    assert(P::LIMIT_MS==600000);
+    assert(!P::holds(false,0) && !P::holds(false,P::LIMIT_MS));  // no phone: the timer alone
+    assert(P::holds(true,0) && P::holds(true,P::LIMIT_MS-1));
+    if(P::holds(true,P::LIMIT_MS))std::cout<<"a connected phone kept the unit awake\n";
+    assert(!P::holds(true,P::LIMIT_MS) && !P::holds(true,UINT32_MAX));
+    // What the phone is told: the longer of the timer and the hold, then the timer.
+    assert(P::remaining(false,1000,59000)==59000 && P::remaining(true,1000,59000)==P::LIMIT_MS-1000);
+    assert(P::remaining(true,P::LIMIT_MS-1,0)==1 && P::remaining(true,P::LIMIT_MS,0)==0 && P::remaining(true,P::LIMIT_MS,5000)==5000);
+    // With the sleep itself: a one-minute timer and a phone that never leaves.
+    InactivityTimer timer;timer.begin(0);timer.touch(0);
+    uint32_t slept=0;
+    for(uint32_t now=0;now<=3600000 && !slept;now+=1000)
+      if(timer.due(now) && !P::holds(true,timer.sinceUse(now)))slept=now;
+    assert(slept==P::LIMIT_MS);
+  }
+  std::cout<<"Motion activity: vibration, adjustment, translation, stale/invalid data rolling sleep windows, the movement limit, the optical sleep guard, held buttons and a connected phone passed\n";
 }

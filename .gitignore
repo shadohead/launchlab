@@ -3,8 +3,11 @@ node_modules/
 site/dist/
 firmware/.arduino/
 firmware/build/
-firmware/build-source/
+# Build outputs, the HIL build and the host suite's compile cache.
+firmware/build-*/
 __pycache__/
 *.pyc
+# The contributor proof (firmware_proof.py) goes into the pull request, not the tree.
+/launchlab-proof.json
 
 .release-assets/

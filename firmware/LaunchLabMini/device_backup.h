@@ -232,7 +232,8 @@ inline bool decode(const uint8_t *data,size_t n,Contents &out) {
         // The first reserved byte now carries mounting. Legacy backups are
         // zero (Top); older firmware rejects Sidecar before writing anything.
         // The next carries Shake to wake Off (0.20.2), the same way, and the
-        // last Battery icon Off (0.20.8).
+        // last Battery icon Off (0.20.8). Bluetooth is not in backups: a restore
+        // never turns a radio on or off.
         if(length!=SETTINGS_BYTES || body[6]>1 || body[7]>1)break;
         auto &s=c->settings;
         ok=InactivityTimer::validMinutes(body[0]) && Brightness::valid(body[1]) &&

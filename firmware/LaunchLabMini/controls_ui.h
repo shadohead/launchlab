@@ -11,10 +11,12 @@
 #include "wipe_confirmation.h"
 
 namespace ControlsUI {
-static constexpr const char *MENU[]={"History","New session","Battery","Settings","Tournament","String wear check","Mic RPM","Back"};
+static constexpr const char *MENU[]={"History","New session","Tournament","String wear check","Mic RPM","Battery","Bluetooth","Settings","Back"};
+static_assert(sizeof(MENU)/sizeof(MENU[0])==Controls::MENU_COUNT,"one label per menu row");
 static constexpr const char *HISTORY[]={"Launches","Pull trend","Session trend","Back"};
 // By Controls::Setting value; the list shows them in Controls::ORDER.
-static constexpr const char *SETTINGS[]={"Sleep after","RPM method","Brightness","Flip display","Sensor profile","Theme","Best effect","Celebrate","Sound","Mounting","Shake to wake","Wipe all","About","Battery icon","Back"};
+static constexpr const char *SETTINGS[]={"Sleep after","RPM method","Brightness","Flip display","Sensor profile","Theme","Best effect","Celebrate","Sound","Mounting","Shake to wake","Wipe all","About","Battery icon","Bluetooth","Back"};
+static_assert(sizeof(SETTINGS)/sizeof(SETTINGS[0])==Controls::SETTING_COUNT+1,"one label per setting, then Back");
 // Set by the UI owner before rendering: the visible theme's colors, the
 // names the Theme row shows (custom themes; the built-in names otherwise),
 // the milestone table the Celebrate editor summarizes and the firmware's
@@ -34,11 +36,15 @@ inline void heading(lgfx::LGFXBase &g,const char *label) {
   g.setTextDatum(top_center);g.setTextColor(colors.text,colors.background);
   g.drawString(label,g.width()/2,8,2);
 }
-inline void list(lgfx::LGFXBase &g,const char *title,const char *const *labels,unsigned count,unsigned selected) {
+// `groups` (bit i: row i starts a group) puts a little space above those rows.
+inline void list(lgfx::LGFXBase &g,const char *title,const char *const *labels,unsigned count,unsigned selected,unsigned groups=0) {
   heading(g,title);
+  int space=0;
   for(unsigned i=0;i<count;++i) {
-    const int y=42+int(i)*(count>7?23:27);  // eight rows clear the footer
-    if(i==selected)g.drawRoundRect(4,y-4,g.width()-8,25,4,colors.accent);
+    // Eight rows close up to clear the footer; the Menu's nine, in groups, further.
+    if((groups>>i)&1u)space+=5;
+    const int pitch=count>8?20:count>7?23:27,y=(count>8?30:42)+int(i)*pitch+space;
+    if(i==selected)g.drawRoundRect(4,y-(count>8?2:4),g.width()-8,count>8?20:25,4,colors.accent);
     g.setTextColor(i==selected?colors.accent:colors.text,colors.background);
     g.drawString(labels[i],g.width()/2,y,2);
   }
@@ -57,6 +63,7 @@ inline void value(char *out,unsigned length,unsigned setting,unsigned value) {
     case Controls::Setting::Sound:snprintf(out,length,"%s",Appearance::label(Appearance::Sound(value)));break;
     case Controls::Setting::Mount:snprintf(out,length,"%s",MountOrientation::label(MountOrientation::Mode(value)));break;
     case Controls::Setting::ShakeWake:snprintf(out,length,"%s",value?"On":"Off");break;
+    case Controls::Setting::Bluetooth:snprintf(out,length,"%s",value?"On":"Off");break;
     case Controls::Setting::WipeAll:snprintf(out,length,"Erase device data");break;
     case Controls::Setting::About:snprintf(out,length,"Firmware %.*s",versionLength(runtime),runtime);break;
     case Controls::Setting::BatteryIcon:snprintf(out,length,"%s",value?"On":"Off");break;
@@ -66,7 +73,7 @@ inline void settings(lgfx::LGFXBase &g,const Controls::State &state,const uint8_
   heading(g,"Settings");char text[24];
   // Pages of five rows (Controls::ORDER): general, appearance, then
   // Mounting, Battery icon, Wipe all, About and Back.
-  const unsigned at=Controls::position(state.setting),first=at<5?0:at<10?5:10,last=std::min(first+4,Controls::SETTING_COUNT);
+  const unsigned at=Controls::position(state.setting),first=at<5?0:at<10?5:10,last=std::min(first+4,Controls::ROWS);
   for(unsigned p=first;p<=last;++p) {
     const unsigned i=Controls::rowAt(p);
     const int y=33+int(p-first)*31;
@@ -132,6 +139,79 @@ inline void session(lgfx::LGFXBase &g,bool start) {
   }
   footer(g,"A Choose  B Next");
 }
+// Saving, then restarting to apply Bluetooth.
+inline void restarting(lgfx::LGFXBase &g) {
+  g.fillRoundRect(6,90,g.width()-12,40,5,colors.background);
+  g.drawRoundRect(6,90,g.width()-12,40,5,colors.warning);
+  g.setTextColor(colors.warning,colors.background);
+  g.drawString("Saving, restarting",g.width()/2,103,1);
+}
+// The Bluetooth page: On or Off (A changes it, which restarts the stick), the
+// name the stick appears under, which is the Battle Pass's so that its apps
+// find it (on two lines if longer than the screen is wide), and Forget phones.
+inline void bluetoothPage(lgfx::LGFXBase &g,unsigned row,bool on,bool connected,const char *name,int bonds) {
+  heading(g,"Bluetooth");
+  const int cx=g.width()/2;
+  auto choice=[&](unsigned i,int y,int height,const char *label,const char *detail) {
+    if(i==row)g.drawRoundRect(4,y-3,g.width()-8,height,4,colors.accent);
+    g.setTextColor(i==row?colors.accent:colors.text,colors.background);
+    g.drawString(label,cx,y,2);
+    if(detail)g.drawString(detail,cx,y+18,1);
+  };
+  choice(0,33,30,"Bluetooth",on?"On, experimental":"Off");
+  g.setTextColor(colors.muted,colors.background);g.drawString("Appears as",cx,72,1);
+  g.setTextColor(colors.text,colors.background);g.drawString(name,cx,83,1);
+  g.setTextColor(connected?colors.ready:colors.muted,colors.background);
+  g.drawString(!on?"Radio off":connected?"Phone connected":"No phone connected",cx,97,1);
+  char line[24];snprintf(line,sizeof(line),"%d phone%s paired",bonds,bonds==1?"":"s");
+  g.setTextColor(colors.muted,colors.background);g.drawString(line,cx,109,1);
+  choice(1,128,24,"Forget phones",nullptr);
+  choice(2,160,24,"Back",nullptr);
+  footer(g,row==0?(on?"A Turn off  B Next":"A Turn on  B Next"):row==1?"A Open  B Next":"A Back  B Next");
+}
+// Forget phones: chosen like New session, since it needs the phone paired again.
+inline void forgetPhones(lgfx::LGFXBase &g,bool forget) {
+  heading(g,"Forget phones");g.setTextColor(colors.text,colors.background);
+  g.drawString("Pair again afterwards",g.width()/2,42,1);
+  const char *labels[]={"Cancel","Forget"};
+  for(unsigned i=0;i<2;++i) {
+    const int y=91+int(i)*42;
+    if(bool(i)==forget)g.drawRoundRect(12,y-5,g.width()-24,32,4,colors.accent);
+    g.setTextColor(bool(i)==forget?colors.accent:colors.text,colors.background);
+    g.drawString(labels[i],g.width()/2,y,2);
+  }
+  footer(g,"A Choose  B Next");
+}
+// Before Bluetooth turns on (0.20.9): it is experimental, and says so. Chosen
+// like New session, Cancel first, so a stray A changes nothing.
+inline void enableBluetooth(lgfx::LGFXBase &g,bool enable) {
+  heading(g,"Bluetooth");
+  const int cx=g.width()/2;
+  g.setTextColor(colors.warning,colors.background);g.drawString("Experimental",cx,34,2);
+  g.setTextColor(colors.text,colors.background);
+  g.drawString("Still being tested.",cx,58,1);
+  g.drawString("Uses more battery",cx,71,1);
+  g.drawString("while it is on.",cx,82,1);
+  const char *labels[]={"Cancel","Turn on"};
+  for(unsigned i=0;i<2;++i) {
+    const int y=112+int(i)*42;
+    if(bool(i)==enable)g.drawRoundRect(12,y-5,g.width()-24,32,4,colors.accent);
+    g.setTextColor(bool(i)==enable?colors.accent:colors.text,colors.background);
+    g.drawString(labels[i],cx,y,2);
+  }
+  footer(g,"A Choose  B Next");
+}
+// A phone asks to pair: over whatever was on screen, until answered or timed out.
+// Automatic: the stick has no bond, so it accepts by itself shortly; B still rejects.
+inline void comparison(lgfx::LGFXBase &g,uint32_t number,bool automatic) {
+  g.fillScreen(colors.background);
+  heading(g,"Pair phone?");
+  const int cx=g.width()/2;
+  g.setTextColor(colors.text,colors.background);g.drawString(automatic?"Check it on the phone":"Same number on phone?",cx,60,1);
+  char digits[8];snprintf(digits,sizeof(digits),"%03u %03u",unsigned(number/1000%1000),unsigned(number%1000));
+  g.setTextColor(colors.accent,colors.background);g.drawString(digits,cx,95,4);
+  footer(g,automatic?"B reject":"A confirm, B reject");
+}
 inline void hold(lgfx::LGFXBase &g,const char *label,unsigned elapsed,unsigned duration) {
   footer(g,label);
   g.fillRect(4,225,int((g.width()-8)*std::min(elapsed,duration)/duration),2,colors.accent);
@@ -139,9 +219,13 @@ inline void hold(lgfx::LGFXBase &g,const char *label,unsigned elapsed,unsigned d
 // The charge in the top right corner, as a phone shows it (Battery icon,
 // 0.20.8): an outline whose fill follows the charge, no percentage. The fill
 // takes the warning color at 20% or less, as the Battery page does, and the
-// ready color while charging; there is no icon without a fresh reading.
+// ready color while charging, with a bolt through the middle (0.20.9); there
+// is no icon without a fresh reading.
 struct CornerBattery {
   static constexpr int RIGHT=24,TOP=2,WIDTH=18,HEIGHT=8,FILL=WIDTH-4;
+  // The charging bolt: each row's first column and width, from BOLT_LEFT.
+  static constexpr int BOLT_ROWS=10,BOLT_LEFT=6;
+  static constexpr uint8_t BOLT[BOLT_ROWS][2]={{4,2},{3,2},{2,2},{1,2},{0,5},{1,5},{3,2},{2,2},{1,2},{0,2}};
   enum Tone:uint8_t {Normal,Low,Charging};
   uint8_t fill=0;  // columns of FILL; 0 draws nothing
   Tone tone=Normal;
@@ -162,6 +246,13 @@ inline void cornerBattery(lgfx::LGFXBase &g,CornerBattery b) {
   g.drawRoundRect(x,B::TOP,B::WIDTH,B::HEIGHT,2,colors.muted);
   g.fillRect(x+B::WIDTH,B::TOP+2,1,B::HEIGHT-4,colors.muted);  // the terminal
   g.fillRect(x+2,B::TOP+2,b.fill,B::HEIGHT-4,b.tone==B::Charging?colors.ready:b.tone==B::Low?colors.warning:colors.text);
+  if(b.tone!=B::Charging)return;
+  // The bolt through its middle, a row above and below the outline, on a
+  // background halo so it reads over the fill at any charge.
+  for(const bool halo:{true,false})for(int row=0;row<B::BOLT_ROWS;++row) {
+    const int left=x+B::BOLT_LEFT+B::BOLT[row][0],y=B::TOP-1+row,width=B::BOLT[row][1];
+    if(halo)g.fillRect(left-1,y-1,width+2,3,colors.background);else g.fillRect(left,y,width,1,colors.text);
+  }
 }
 inline void battery(lgfx::LGFXBase &g,bool valid,int percent,unsigned millivolts,bool chargeKnown,bool charging) {
   const int cx=g.width()/2;
@@ -244,8 +335,8 @@ inline void wipe(lgfx::LGFXBase &g,const WipeConfirmation &flow,uint32_t now,boo
 // second after a burst a release counts as that burst's rewind and is never
 // measured, so PULL OUT shows WAIT and LET GO waits for it (0.20.4).
 // mount: the Mounting setting the tilt is read in (Settings, Mounting); a
-// Sidecar install measured as Top reads its level 90 degrees off, and the
-// page then asks about the other one (otherMount).
+// Sidecar install measured as Top (or a turned Top) reads its level 90 degrees
+// off, and the page then asks about the other one (otherMount).
 inline void wearCheck(lgfx::LGFXBase &g,const WearCheck::Session &wear,const WearCheck::Tilt &rawTilt,const WearCheck::Tilt &displayTilt,
   bool detectorReady=true,const char *mount="Top mount",const char *otherMount="Sidecar install?") {
   const int cx=g.width()/2;

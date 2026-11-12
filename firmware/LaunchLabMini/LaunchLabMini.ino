@@ -46,12 +46,16 @@ namespace Lab {inline PowerLab::Knobs knobs;inline bool running=false,displayAsl
 #include "rpm_estimator_setting.h"
 #include "brightness.h"
 #include "display_flip_setting.h"
+#include "ble_link.h"
+#include "ble_motion.h"
+#include "bluetooth_setting.h"
 #include "shake_wake_setting.h"
 #include "battery_icon_setting.h"
 #include "display_orientation.h"
 #include "sensor_profile_setting.h"
 #include "start_mark_reference.h"
 #include "mount_orientation_setting.h"
+#include "dark_display.h"
 #include "controls_ui.h"
 #include "motion_acquisition.h"
 #include "i2c_bus_recovery.h"
@@ -68,6 +72,7 @@ namespace Lab {inline PowerLab::Knobs knobs;inline bool running=false,displayAsl
 #include "best_effect_speaker.h"
 #include "device_backup.h"
 #include "nvs_budget.h"
+#include "radio_calibration.h"
 #include "device_wipe_nvs.h"
 #include "wipe_confirmation.h"
 #include "settings_save.h"
@@ -79,11 +84,11 @@ namespace Lab {inline PowerLab::Knobs knobs;inline bool running=false,displayAsl
 #define LOOP_HELPER __attribute__((noinline))
 #if LAUNCHLAB_HIL
 // Test-only hardware-in-the-loop build; never a release. See tools/hil.
-static constexpr char VERSION[] = "0.20.8-sticks3-songs-hil-pm";
+static constexpr char VERSION[] = "0.20.9-sticks3-songs-hil-pm";
 #elif LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = "0.20.8-sticks3-songs-pm";
+static constexpr char VERSION[] = "0.20.9-sticks3-songs-pm";
 #else
-static constexpr char VERSION[] = "0.20.8-sticks3-songs";
+static constexpr char VERSION[] = "0.20.9-sticks3-songs";
 #endif
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ
@@ -215,6 +220,10 @@ static bool shakeToWake=ShakeWakeSetting::DEFAULT_ON;
 // Battery icon (0.20.8, battery_icon_setting.h): the charge in the screens' top right corner.
 static bool batteryIcon=BatteryIconSetting::DEFAULT_ON;
 static ControlsUI::CornerBattery drawnCornerBattery;  // as last drawn
+// Off until chosen under Settings; the stack then starts without a restart.
+static bool bluetoothOn=BluetoothSetting::DEFAULT_ON;
+// As read at boot: the layout and the stack follow this until a restart.
+static bool bluetoothAtBoot=BluetoothSetting::DEFAULT_ON;
 static RpmEstimator::Mode rpmEstimator=RpmEstimator::DEFAULT_MODE;
 static StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;
 static MountOrientation::Mode mountMode=MountOrientation::Mode::Top;
@@ -223,6 +232,7 @@ static MountOrientation::Mode mountMode=MountOrientation::Mode::Top;
 // must never happen during a pull or its capture.
 static MountOrientation::Mode liveMount=MountOrientation::Mode::Top;
 static StickS3Battery battery;
+static DarkDisplay darkDisplay;
 static uint32_t lastBatteryPoll=0,maxBatteryPollUs=0,lastShutdownTry=0;
 static bool batteryPolled=false;
 static bool powerConfigValid=false;
@@ -543,6 +553,9 @@ LOOP_HELPER static void status() {
 #if LAUNCHLAB_HIL
   ++hilStatusRuns;
 #endif
+  BleLink::status();
+  RadioCalibration::status();
+  Serial.printf("MOTION_RING psram=%d capture_max_us=%lu sizeof=%u\n",imuAcquisition.ringInPsram(),(unsigned long)imuAcquisition.maxCaptureUs,unsigned(sizeof(LaunchMotion::Ring)));
   const Snapshot s=acquisition.snapshot();
   // Least free stack the loop task has had since boot; 0.11.0 overflowed its 8 KB.
   Serial.printf("STACK loop_min_free_bytes=%u\n",unsigned(uxTaskGetStackHighWaterMark(nullptr)));
@@ -579,8 +592,9 @@ LOOP_HELPER static void status() {
   soundPlayer.feedSong();
   Serial.printf("SOUND_SYNC present_lag_us=%lu output_us=%lu clock_shift_ms=%ld skipped_samples=%lu\n",(unsigned long)presentLagUs,
     (unsigned long)soundPlayer.outputUs(),(long)soundShiftMs,(unsigned long)soundSkipped);
-  Serial.printf("UI_STATUS page=%u menu=%u history=%u setting=%u draft=%u battery_icon=%d corner_fill=%u recording=%s\n",
+  Serial.printf("UI_STATUS page=%u menu=%u history=%u setting=%u draft=%u battery_icon=%d corner_fill=%u corner_bolt=%d recording=%s\n",
     unsigned(controls.page),controls.menu,controls.history,controls.setting,controls.draft,batteryIcon,unsigned(drawnCornerBattery.fill),
+    drawnCornerBattery.tone==ControlsUI::CornerBattery::Charging,
     s.resting?"idle_paused":LAUNCHLAB_MOTION_ADC_GATE?"motion_gated":"always");
   soundPlayer.feedSong();
   Serial.printf("PERF acquisition_core=0 ui_core=%d processing_pct=%.2f max_batch_us=%lu frame_budget_us=%lu max_read_gap_us=%lu stack_free=%lu invalid_frames=%lu lost_events=%lu adc_stalls=%lu max_draw_us=%lu max_effect_us=%lu ui_stalls=%lu stress=%d heap_free=%lu psram_free=%lu usb_drain_timeouts=%lu usb_rejected_commands=%lu frames=%lu whole_frames=%lu unchanged_frames=%lu pushed_rows=%lu row_hashes=%d adc_retimes=%lu\n",
@@ -728,10 +742,13 @@ LOOP_HELPER static void pollUsbAwake(uint32_t now,const Snapshot &s,bool force=f
 
 // The corner battery (Battery icon) on the Menu and Settings pages
 // (Controls::showsCornerBattery), never over the tournament or the
-// diagnostics. Editing the row previews the choice.
+// diagnostics. Editing the row previews the choice. The live Main page shows
+// it only while the unit charges (0.20.9), not over a recap or the demo.
 static ControlsUI::CornerBattery cornerBattery(uint32_t now) {
   const bool editing=controls.page==Controls::Page::Edit && controls.setting==unsigned(Controls::Setting::BatteryIcon);
-  const bool shown=(editing?bool(controls.draft):batteryIcon) && !tournamentMode && !diagnostics && Controls::showsCornerBattery(controls.page);
+  const bool chargingMain=Controls::showsChargingBattery(controls.page) && battery.charging && !historyPage && !launchFeedback.shown();
+  const bool shown=(editing?bool(controls.draft):batteryIcon) && !tournamentMode && !diagnostics &&
+    (Controls::showsCornerBattery(controls.page) || chargingMain);
   return shown?ControlsUI::cornerBattery(battery.valid(now),battery.percent,battery.charging):ControlsUI::CornerBattery{};
 }
 
@@ -751,6 +768,24 @@ LOOP_HELPER static void pollBattery(uint32_t now,const Snapshot &s) {
   battery.update(mv,voltageRead,chargeRead,bits,now);
   maxBatteryPollUs=std::max(maxBatteryPollUs,uint32_t(esp_timer_get_time()-started));
   if((historyPage && historyView==PracticeUI::View::Battery) || cornerBattery(now)!=drawnCornerBattery)dirty=true;
+}
+
+// The pairing number and a wipe always show; so does anything being diagnosed.
+static bool displayDark(uint32_t now) {
+  if(!darkDisplay.dark(now) || wipeBlocked || diagnostics || stress)return false;
+  uint32_t number=0;bool automatic=false;
+  return !BleLink::comparison(number,automatic);
+}
+
+// A press that only wakes the screen does nothing else: its click comes at release, which the latch ignores.
+static void wakeDisplayOnPress(bool pressed) {
+  if(!pressed || !darkDisplay.press(millis()))return;
+  gestureA.consumed=gestureB.consumed=true;dirty=true;
+}
+
+static void tickDarkDisplay(uint32_t now) {
+  if(darkDisplay.requested && !BleLink::connected()){darkDisplay.set(false);dirty=true;}
+  darkDisplay.tick(now);
 }
 
 LOOP_HELPER static void tickDisplayPower(uint32_t now,const Snapshot &s) {
@@ -776,8 +811,8 @@ LOOP_HELPER static void tickDisplayPower(uint32_t now,const Snapshot &s) {
   const uint8_t selected=controls.page==Controls::Page::Edit && controls.setting==2?
     controls.draft:brightnessPercent;
   const uint32_t idle=savers.dimIgnoresMotion?inactivity.sinceUse(now):inactivity.elapsed(now);
-  const uint8_t percent=IdlePowerPolicy::brightness(selected,idle,usbAwake.inhibited(now),launchFeedback.shown(),savers.dimMs);
-  const uint8_t target=percent<selected && savers.dimBacklight?savers.dimBacklight:(unsigned(percent)*255+50)/100;
+  const uint8_t percent=displayDark(now)?0:IdlePowerPolicy::brightness(selected,idle,usbAwake.inhibited(now),launchFeedback.shown(),savers.dimMs);
+  const uint8_t target=percent && percent<selected && savers.dimBacklight?savers.dimBacklight:(unsigned(percent)*255+50)/100;
   if(M5.Display.getBrightness()==target)return;
   acquisition.displayBoundary(true);M5.Display.setBrightness(target);acquisition.displayBoundary(false);
   Serial.printf("DISPLAY_POWER selected_pct=%u actual_pct=%u backlight=%u idle_ms=%lu dimmed=%d\n",
@@ -810,6 +845,7 @@ static uint8_t settingValue(unsigned row) {
     case S::Mount:return uint8_t(mountMode);
     case S::ShakeWake:return uint8_t(shakeToWake);
     case S::BatteryIcon:return uint8_t(batteryIcon);
+    case S::Bluetooth:return uint8_t(bluetoothOn);
     case S::WipeAll:case S::About:break;
   }
   return 0;
@@ -904,7 +940,7 @@ LOOP_HELPER static void draw(const Snapshot &s) {
   } else if(historyPage) {
     view.fillScreen(colors.background);
     switch(controls.page) {
-      case Controls::Page::Menu:ControlsUI::list(view,"Menu",ControlsUI::MENU,Controls::MENU_COUNT,controls.menu);break;
+      case Controls::Page::Menu:ControlsUI::list(view,"Menu",ControlsUI::MENU,Controls::MENU_COUNT,controls.menu,Controls::MENU_GROUPS);break;
       case Controls::Page::HistoryMenu:ControlsUI::list(view,"History",ControlsUI::HISTORY,4,controls.history);break;
       case Controls::Page::Settings:drawSettings(view);break;
       case Controls::Page::Edit:ControlsUI::editor(view,controls,settingsSaveError,
@@ -933,6 +969,9 @@ LOOP_HELPER static void draw(const Snapshot &s) {
           liveMount==MountOrientation::Mode::Sidecar?"Top install?":"Sidecar install?");
         break;
       }
+      case Controls::Page::Bluetooth:ControlsUI::bluetoothPage(view,controls.bluetoothRow,bluetoothOn,BleLink::connected(),BattlePass::NAME,BleLink::bondCount());break;
+      case Controls::Page::ForgetPhones:ControlsUI::forgetPhones(view,controls.forgetChosen);break;
+      case Controls::Page::EnableBluetooth:ControlsUI::enableBluetooth(view,controls.enableChosen);break;
       default:PracticeUI::draw(view,demo?demoPractice:practice,historyView,historyOffset,demo,colors);break;
     }
   } else if(launchFeedback.shown()) {
@@ -981,6 +1020,9 @@ LOOP_HELPER static void draw(const Snapshot &s) {
   else if(M5.BtnB.isPressed() && !gestureB.consumed && (controls.page!=Controls::Page::Main || launchFeedback.shown()) && !tournamentMode)
     ControlsUI::hold(view,controls.page==Controls::Page::Edit?"Cancel change":"Back",now-M5.BtnB.lastChange(),1000);
   drawnCornerBattery=cornerBattery(now);ControlsUI::cornerBattery(view,drawnCornerBattery);
+  BleLink::drawIcon(view,colors.muted,colors.ready,colors.background,colors.text);
+  if(BluetoothSetting::restartNeeded(bluetoothOn,bluetoothAtBoot))ControlsUI::restarting(view);
+  {uint32_t pairingNumber=0;bool pairingAutomatic=false;if(BleLink::comparison(pairingNumber,pairingAutomatic))ControlsUI::comparison(view,pairingNumber,pairingAutomatic);}
   // An internal canvas is pushed by DMA, which endWrite does not wait for.
   // Wait so the transfer stays inside the boundary marks and the next frame
   // cannot overwrite pixels still being sent.
@@ -1297,6 +1339,9 @@ static void writeSettings() {
   if((items&SettingsSave::Flip) && DisplayFlipSetting::save(prefs,displayFlipped))saved|=SettingsSave::Flip;
   if((items&SettingsSave::ShakeWake) && ShakeWakeSetting::save(prefs,shakeToWake))saved|=SettingsSave::ShakeWake;
   if((items&SettingsSave::BatteryIcon) && BatteryIconSetting::save(prefs,batteryIcon))saved|=SettingsSave::BatteryIcon;
+  if((items&SettingsSave::Bluetooth) && BluetoothSetting::save(prefs,bluetoothOn))saved|=SettingsSave::Bluetooth;
+  if((items&SettingsSave::Bonds) && BleLink::saveBonds(prefs))saved|=SettingsSave::Bonds;
+  if((items&SettingsSave::Name) && BleLink::saveName(prefs))saved|=SettingsSave::Name;
   if(items&SettingsSave::Mount) {
     bool current=liveMount==mountMode;
     if(!current && imuAcquisition.setMount(mountMode)) {
@@ -1329,10 +1374,10 @@ LOOP_HELPER static void saveSettings(uint32_t now,const Snapshot &s,bool immedia
 // Apply takes the choice at once and queues its record for flash. It never
 // waits for an idle instant: pressing A can itself jiggle the launcher across
 // a mark, and that used to refuse Apply after Apply with "Try again when idle".
-static void commitSetting() {
-  const uint8_t value=controls.draft;
-  bool applied=true,changed=false;
-  switch(Controls::Setting(controls.setting)) {
+// Takes one setting's new value in RAM, from the editor or the phone.
+static bool applySetting(unsigned setting,uint8_t value,bool &changed) {
+  bool applied=true;changed=false;
+  switch(Controls::Setting(setting)) {
     case Controls::Setting::Sleep:
       changed=value!=inactivity.minutes();applied=inactivity.setMinutes(value);break;
     // The estimator, sensor profile and mount switch inside the save checkpoint.
@@ -1344,6 +1389,7 @@ static void commitSetting() {
     case Controls::Setting::Flip:changed=bool(value)!=displayFlipped;displayFlipped=value;break;
     case Controls::Setting::ShakeWake:changed=bool(value)!=shakeToWake;shakeToWake=value;break;
     case Controls::Setting::BatteryIcon:changed=bool(value)!=batteryIcon;batteryIcon=value;break;
+    case Controls::Setting::Bluetooth:changed=bool(value)!=bluetoothOn;bluetoothOn=value;break;
     case Controls::Setting::Sensor:
       applied=StickS3SensorProfile::valid(value);changed=applied && StickS3SensorProfile::Mode(value)!=sensorProfile;
       if(changed)sensorProfile=StickS3SensorProfile::Mode(value);
@@ -1355,7 +1401,7 @@ static void commitSetting() {
     case Controls::Setting::Theme:case Controls::Setting::BestEffect:case Controls::Setting::Sound: {
       // An unreadable stored look cannot be replaced; keep showing it rather
       // than a choice that would silently revert at the next boot.
-      using S=Controls::Setting;const auto row=S(controls.setting);
+      using S=Controls::Setting;const auto row=S(setting);
       auto next=appearance;
       applied=appearanceStore.ready() && (row!=S::Theme || themeLibrary.available(Appearance::Theme(value))) &&
         next.select(row==S::Theme?Appearance::Theme(value):appearance.theme,
@@ -1374,6 +1420,12 @@ static void commitSetting() {
     }
     case Controls::Setting::WipeAll:case Controls::Setting::About:applied=false;break; // Neither has an editor.
   }
+  return applied;
+}
+static void commitSetting() {
+  const uint8_t value=controls.draft;
+  bool changed=false;
+  const bool applied=applySetting(controls.setting,value,changed);
   settingsSaveError=!applied;
   Serial.printf("SETTING_APPLY row=%u value=%u applied=%d changed=%d\n",controls.setting,value,applied,changed);
   if(applied) {
@@ -1383,8 +1435,55 @@ static void commitSetting() {
   }
   syncNavigation();
 }
+// The Battle Pass profile's view of this stick (ble_battle_pass.h): what an
+// app for the BEYBATTLE PASS is told. Tournament mode hides RPM, so it tells
+// nothing then, like the LaunchLab profile.
+namespace BattlePassFeed {
+LOOP_HELPER static BattlePass::Shots shots() {
+  BattlePass::Shots out;
+  const unsigned kept=practice.size(),listed=std::min<unsigned>(kept,BattlePass::SHOTS);
+  for(unsigned i=listed;i>0;--i)out.add(BattlePass::shootPower(practice.recent(i-1)->rpm));
+  float best=0;for(float rpm:personalBests.rpm)best=std::max(best,rpm);
+  for(unsigned i=0;i<kept;++i)best=std::max(best,practice.recent(i)->rpm);
+  out.best=BattlePass::shootPower(best);
+  const auto *last=practice.recent();
+  out.total=uint16_t(std::min<uint32_t>(65535,last?last->number:0));
+  return out;
+}
+LOOP_HELPER static void sendStatus(bool attached,const BattlePass::Shots &s) {
+  uint8_t id[6]={};esp_efuse_mac_get_default(id);
+  const uint32_t now=millis();
+  BleLink::passSend(BattlePass::status(attached,battery.valid(now)?battery.percent:-1,s.best,s.total,id));
+}
+// The last 50 launches and the latest one's curve. No launch yet: nothing,
+// since apps refuse an empty set.
+LOOP_HELPER static void sendShots(const BattlePass::Shots &s) {
+  if(!s.count)return;
+  BattlePass::Packet list[8],turns[4];
+  BattlePass::shots(s,list);BattlePass::curve(latestCurve.rpm,latestCurve.count,turns);
+  for(const auto &packet:list)BleLink::passSend(packet);
+  for(const auto &packet:turns)BleLink::passSend(packet);
+}
+// After a pull: a top was on the launcher and has left (this stick has no
+// sensor for the top, and apps place the launch by that release), then its set.
+LOOP_HELPER static void launched() {
+  if(tournamentMode || !BleLink::passListening())return;
+  const auto s=shots();
+  BleLink::passClear();sendStatus(true,s);sendStatus(false,s);sendShots(s);
+}
+// What an app asked for since the last pass of the loop.
+LOOP_HELPER static void tick(uint32_t now) {
+  const bool status=BleLink::takePassStatus(now),all=BleLink::takePassShots();
+  if((!status && !all) || tournamentMode)return;
+  const auto s=shots();
+  if(status)sendStatus(false,s);
+  if(all)sendShots(s);
+}
+}
 LOOP_HELPER static void logLaunchMetrics(const Snapshot &s) {
   const auto *record=practice.recent();if(!record)return;
+  if(!tournamentMode)BleLink::publishLaunch(record->number,record->session,s.resultRpm);
+  BattlePassFeed::launched();
   Serial.printf("LAUNCH_METRICS number=%lu session=%lu selected_estimator=%s selected_rpm=%.1f three_turn_peak_rpm=%.1f single_turn_peak_rpm=%.1f units=rpm\n",
     (unsigned long)record->number,(unsigned long)record->session,RpmEstimator::name(s.estimator),
     s.resultRpm,s.sustainedPeakRpm,s.singlePeakRpm);
@@ -1457,6 +1556,8 @@ static void navigate(Controls::Effect effect,Controls::Page previous) {
     case Controls::Effect::BeginWipe:beginWipe();break;
     case Controls::Effect::ConfirmWipe:if(wipeConfirmation.confirm(millis()))dirty=true;break;
     case Controls::Effect::CancelWipe:cancelWipe();break;
+    case Controls::Effect::ForgetPhones:BleLink::forget();settingsSave.mark(SettingsSave::Bonds);break;
+    case Controls::Effect::ToggleBluetooth:bluetoothOn=!bluetoothOn;settingsSave.mark(SettingsSave::Bluetooth);dirty=true;break;
     case Controls::Effect::None:break;
   }
   syncNavigation();
@@ -1818,9 +1919,10 @@ LOOP_HELPER static void autoPowerOff(uint32_t now,const Snapshot &s) {
   constexpr bool dry=false;
 #endif
   if(usbAwake.inhibited(now) && !dry)return;
+  if(PhoneLinkAwake::holds(BleLink::connected(),inactivity.sinceUse(now)))return;
   const bool measuring=opticalGuard.measuring(now,s.phase==AnalogTachometer::Phase::Launch);
   if(!inactivity.due(now,measuring))opticalGuard.clear();
-  if(motionPending || !inactivity.due(now,measuring) || (lastShutdownTry && now-lastShutdownTry<60000))return;
+  if(motionPending || !inactivity.due(now,measuring) || (lastShutdownTry && now-lastShutdownTry<sleepLimit(60000)))return;
   // Recheck immediately at the timer boundary; periodic polling alone could
   // leave a just-attached computer unnoticed for up to 250ms.
   pollUsbAwake(now,s,true);
@@ -1962,6 +2064,24 @@ LOOP_HELPER static void powerKeyOff(uint32_t now,const Snapshot &s) {
   M5.Display.wakeup();frameRows.invalidate();M5.Display.setBrightness(backlightValue());dirty=true;
   Serial.println("POWER_KEY_OFF_FAILED pm1_power_off_refused");
   if(!acquisition.request(Action::CheckpointEnd))acquisition.request(Action::Pin,s.pin);
+}
+
+// Bluetooth changed in Settings: apply it by restarting, after what a power-off
+// saves. Never in a pull or its capture, and not until the choice itself is saved.
+LOOP_HELPER static void restartForBluetooth(uint32_t now,const Snapshot &s) {
+  static uint32_t lastTry=0;
+  if(!BluetoothSetting::restartNeeded(bluetoothOn,bluetoothAtBoot) || wipeBlocked ||
+     controls.page==Controls::Page::Edit || controls.page==Controls::Page::Wipe ||
+     s.phase==AnalogTachometer::Phase::Launch || motionPending || now-lastTry<1000 || !BleLink::replyFlushed(now))return;
+  lastTry=now;
+  if(flushForShutdown(now,s)!=ShutdownFlush::Ready)return;
+  if(settingsSave.pending()&SettingsSave::Bluetooth) {
+    if(!acquisition.request(Action::CheckpointEnd))acquisition.request(Action::Pin,s.pin);
+    return;
+  }
+  if(!savePowerLog())Serial.println("POWER_LOG_NOTICE restart_checkpoint_failed");
+  Serial.printf("BLUETOOTH_RESTART on=%d records=%u saved=1\n",bluetoothOn,practice.size());
+  UsbTx::drain(200);delay(150);ESP.restart();
 }
 
 // USB backup: everything a player would miss, read from RAM so pulls not yet
@@ -2712,6 +2832,9 @@ void setup() {
   }
   if(!Brightness::load(prefs,brightnessPercent))
     Serial.printf("BRIGHTNESS_SETTING_NOTICE invalid_saved_value_using_default_pct=%u\n",unsigned(Brightness::DEFAULT_PERCENT));
+  BleLink::bondPrefs=&prefs;BleLink::loadName(prefs);
+  if(!BluetoothSetting::load(prefs,bluetoothOn))Serial.println("BLUETOOTH_SETTING_NOTICE invalid_saved_value_retained_using_off_default");
+  bluetoothAtBoot=bluetoothOn;
   if(!ShakeWakeSetting::load(prefs,shakeToWake))Serial.println("SHAKE_WAKE_SETTING_NOTICE invalid_saved_value_retained_using_on");
   if(!BatteryIconSetting::load(prefs,batteryIcon))Serial.println("BATTERY_ICON_SETTING_NOTICE invalid_saved_value_retained_using_on");
   if(!DisplayFlipSetting::load(prefs,displayFlipped))Serial.println("DISPLAY_SETTING_NOTICE invalid_record_retained_using_flip_off_default");
@@ -2752,6 +2875,8 @@ void setup() {
   // Reclaim the orphaned RF calibration blob found in ll-practice; the history
   // save it would otherwise crowd out matters far more. Boot only, before ADC.
   if(practiceStore.hasOrphan())Serial.printf("NVS_RECLAIM key=ll-practice/%s removed=%d\n",PracticeStore::ORPHAN_KEY,practiceStore.removeOrphan());
+  // What the radio saved under an earlier or unwrapped build (radio_calibration.h).
+  RadioCalibration::reclaimAtBoot();
   practice.newSession(); // Boot starts a fresh metric/session boundary; old scalar history stays intact.
   referenceError=!motionStore.begin(referenceMotion);
   if(const auto *last=practice.recent()) {
@@ -2763,12 +2888,14 @@ void setup() {
   Serial.printf("PM1_IDLE_CONFIG ok=%d seconds=%u fallback_verified=%d\n",idleConfigured,
     unsigned(pm1Idle().stats().seconds),pm1Idle().stats().fallbackVerified);
   M5.Display.setRotation(DisplayOrientation::rotation(displayFlipped));M5.Display.setBrightness(backlightValue());M5.Display.setTextSize(1);
-  // Internal RAM first: at 80 MHz a PSRAM canvas made a recap frame about 8 ms
-  // slower to compose and push. M5Canvas defaults to PSRAM, which stays the
-  // fallback if 64.8 KB of internal RAM is not free.
-  screen.setColorDepth(16);screen.setPsram(false);
+  // Internal RAM first, as stock, unless Bluetooth was on at boot: at 80 MHz a PSRAM
+  // canvas made a recap frame about 8 ms slower to compose and push, but the stack
+  // needs the internal RAM. Either way the other kind is the fallback if 64.8 KB
+  // is not free there.
+  const bool canvasPsram=BluetoothSetting::canvasInPsram(bluetoothAtBoot);
+  screen.setColorDepth(16);screen.setPsram(canvasPsram);
   screenReady=screen.createSprite(M5.Display.width(),M5.Display.height())!=nullptr;
-  if(!screenReady){screen.setPsram(true);screenReady=screen.createSprite(M5.Display.width(),M5.Display.height())!=nullptr;}
+  if(!screenReady){screen.setPsram(!canvasPsram);screenReady=screen.createSprite(M5.Display.width(),M5.Display.height())!=nullptr;}
   if(!screenReady)Serial.println("DISPLAY_NOTICE direct_draw_fallback");
   if(saveError)Serial.println("HISTORY_ERROR storage unavailable; existing bytes retained");
   M5.BtnA.setHoldThresh(1000);M5.BtnB.setHoldThresh(1000);
@@ -3097,11 +3224,204 @@ LOOP_HELPER static void tickSensorIdle(uint32_t now,Snapshot &s) {
 }
 #endif
 
+// One phone command (docs/BLE_PROTOCOL.md), run from the loop.
+namespace BleCommands {
+constexpr int32_t OK=0,INVALID=1,BUSY=2,HIDDEN=3,UNKNOWN=4;
+static uint8_t *put32(uint8_t *p,uint32_t v){memcpy(p,&v,4);return p+4;}
+static uint8_t *put16(uint8_t *p,uint16_t v){memcpy(p,&v,2);return p+2;}
+static uint8_t *putF(uint8_t *p,float v){memcpy(p,&v,4);return p+4;}
+static bool editing(){return controls.page==Controls::Page::Edit || controls.page==Controls::Page::Wipe || wipeBlocked;}
+static bool validValue(unsigned id,uint8_t v) {
+  using S=Controls::Setting;
+  switch(S(id)) {
+    case S::Sleep:return InactivityTimer::validMinutes(v);
+    case S::Brightness:return Brightness::valid(v);
+    case S::Flip:case S::ShakeWake:case S::BatteryIcon:return v<=1;
+    case S::Theme:return v<Appearance::ALL_THEMES;
+    case S::Celebrate:case S::Sound:return v<3;
+    case S::Mount:return MountOrientation::valid(v);
+    default:return Controls::editable(id); // applySetting checks the rest.
+  }
+}
+LOOP_HELPER static int32_t setSetting(unsigned id,uint8_t value) {
+  // Bluetooth off from the phone: the status goes first, then the loop saves and
+  // restarts as the stick's own toggle does. On takes the stick: the radio is off then.
+  if(id==unsigned(Controls::Setting::Bluetooth)) {
+    if(value)return INVALID;
+    if(tournamentMode || editing() || motionPending || acquisition.snapshot().phase==AnalogTachometer::Phase::Launch)return BUSY;
+    if(bluetoothOn){bluetoothOn=false;settingsSave.mark(SettingsSave::Bluetooth);dirty=true;}
+    return OK;
+  }
+  if(!Controls::editable(id) || !validValue(id,value))return INVALID;
+  if(tournamentMode || editing())return BUSY;
+  bool changed=false;
+  if(!applySetting(id,value,changed))return INVALID;
+  if(changed)settingsSave.mark(SettingsSave::item(id));
+  restorePreview=true;previewSetting();saveSettings(millis(),acquisition.snapshot(),true);dirty=true;
+  return OK;
+}
+LOOP_HELPER static size_t putOption(uint8_t *out,size_t at,size_t capacity,unsigned id,uint8_t value) {
+  char label[24];ControlsUI::value(label,sizeof(label),id,value);
+  const size_t n=strlen(label);
+  if(at+2+n>capacity)return at;
+  out[at]=value;out[at+1]=uint8_t(n);memcpy(out+at+2,label,n);return at+2+n;
+}
+LOOP_HELPER static size_t options(unsigned id,uint8_t *out,size_t capacity) {
+  using S=Controls::Setting;size_t at=0;
+  switch(S(id)) {
+    case S::Sleep:for(unsigned v=1;v<=10;++v)at=putOption(out,at,capacity,id,v);break;
+    case S::Brightness:for(unsigned v=10;v<=100;v+=10)at=putOption(out,at,capacity,id,v);break;
+    case S::Rpm:case S::Flip:case S::Sensor:case S::Mount:case S::ShakeWake:case S::BatteryIcon:case S::Bluetooth:
+      for(unsigned v=0;v<2;++v)at=putOption(out,at,capacity,id,v);break;
+    case S::Celebrate:case S::Sound:for(unsigned v=0;v<3;++v)at=putOption(out,at,capacity,id,v);break;
+    case S::Theme:
+      for(unsigned v=0;v<Appearance::ALL_THEMES;++v)if(themeLibrary.available(Appearance::Theme(v)))at=putOption(out,at,capacity,id,v);
+      break;
+    case S::BestEffect: {
+      const auto first=appearance.effect;auto e=first;
+      do {at=putOption(out,at,capacity,id,uint8_t(e));e=EffectSet::next(e,effectSet.mask());} while(e!=first);
+      break;
+    }
+    case S::WipeAll:case S::About:break;
+  }
+  return at;
+}
+// Live orientation, event type 2: the fusion's latest pose about ten times a
+// second while a paired phone has asked for it. It keeps running at RESTING,
+// which pauses only the optical ADC, and stops for the length of a pull.
+LOOP_HELPER static void tickLiveOrientation(uint32_t now,const Snapshot &s) {
+  if(!BleLink::liveOrientationOn())return;
+  static BleMotion::Gate gate;LaunchMotion::Quaternion pose;
+  if(!gate.due(now,s.phase==AnalogTachometer::Phase::Launch,imuAcquisition.latestPose(pose,esp_timer_get_time())))return;
+  uint8_t event[BleMotion::POSE_BYTES];BleMotion::encodePose(pose,event);
+  BleLink::publishEvent(event,sizeof(event));
+}
+// A pairing's number on screen: A confirms and B rejects, and they do nothing else
+// meanwhile. A pull rejects it: the screen is frozen for the measurement. True while it shows.
+LOOP_HELPER static bool answerPairing(bool buttonsFresh,const Snapshot &s) {
+  uint32_t number=0;bool automatic=false;
+  if(!BleLink::comparison(number,automatic))return false;
+  bool answered=true;
+  if(s.phase==AnalogTachometer::Phase::Launch)BleLink::answerComparison(false);
+  else if(buttonsFresh && M5.BtnA.wasClicked())BleLink::answerComparison(true);
+  else if(buttonsFresh && M5.BtnB.wasClicked())BleLink::answerComparison(false);
+  else answered=false;
+  if(answered){gestureA.consumed=gestureB.consumed=true;dirty=true;}
+  return true;
+}
+LOOP_HELPER static int32_t run(uint8_t op,const uint8_t *args,size_t length,uint8_t *out,size_t capacity) {
+  const uint32_t now=millis();uint8_t *p=out;
+  const size_t room=capacity;
+  switch(op) {
+    case 1: {
+      const auto *last=practice.recent();const auto *session=practice.session(0);
+      *p++=1;p=put32(p,last?last->number:0);p=put32(p,session?session->number:0);
+      p=put16(p,uint16_t(practice.size()));p=put16(p,uint16_t(practice.sessions()));*p++=tournamentMode;
+      const size_t n=strlen(VERSION);*p++=uint8_t(n);memcpy(p,VERSION,n);p+=n;
+      const char *name=BleLink::fullName();const size_t nameLength=strlen(name);
+      *p++=uint8_t(nameLength);memcpy(p,name,nameLength);p+=nameLength;
+      *p++=0; // levelSet: no level reference in this firmware
+      break;
+    }
+    case 2:for(unsigned i=0;i<Controls::SETTING_COUNT;++i)if(Controls::editable(i)){*p++=uint8_t(i);*p++=settingValue(i);}break;
+    case 3:
+      if(length!=2)return -INVALID;
+      *p++=uint8_t(setSetting(args[0],args[1]));
+      break;
+    case 4: {
+      const auto s=acquisition.snapshot();const auto tilt=level.reading(now);
+      *p++=uint8_t(int8_t(battery.valid(now)?battery.percent:-1));p=put16(p,battery.millivolts);
+      *p++=battery.chargeName()[0]=='u'?2:battery.chargeName()[0]=='c'?1:0;
+      *p++=s.signalFault?3:s.phase==AnalogTachometer::Phase::Launch?1:s.resting?2:0;
+      p=putF(p,tilt.valid()?tilt.degrees:NAN);
+      p=put32(p,uint32_t((PhoneLinkAwake::remaining(BleLink::connected(),inactivity.sinceUse(now),inactivity.remaining(now))+999)/1000));
+      break;
+    }
+    case 5: {
+      if(tournamentMode)return -HIDDEN;
+      if(length!=4)return -INVALID;
+      uint32_t from=0;memcpy(&from,args,4);
+      for(unsigned i=practice.size();i>0 && size_t(p-out)+16<=room;--i) {
+        const auto &r=*practice.recent(i-1);
+        if(r.number<from)continue;
+        p=put32(p,r.number);p=put32(p,r.session);p=putF(p,r.rpm);p=put32(p,r.seconds);
+      }
+      break;
+    }
+    case 6:
+      if(tournamentMode)return -HIDDEN;
+      for(unsigned i=practice.sessions();i>0 && size_t(p-out)+20<=room;--i) {
+        const auto &r=*practice.session(i-1);
+        p=put32(p,r.number);p=put32(p,r.count);p=putF(p,r.mean());p=putF(p,r.best);p=put32(p,r.seconds);
+      }
+      break;
+    case 7:
+      if(length!=1 || !Controls::editable(args[0]))return -INVALID;
+      return int32_t(options(args[0],out,capacity));
+    case 8: {
+      if(tournamentMode)return -HIDDEN;
+      const auto &c=latestCurve;unsigned peak=0;
+      for(unsigned i=1;i<c.count;++i)if(c.rpm[i]>c.rpm[peak])peak=i;
+      p=put32(p,latestMotion.number);p=put16(p,c.count?c.rpm[peak]:0);p=put16(p,c.count);p=put16(p,0); // leadMs: the curve starts at its first point
+      for(unsigned i=0;i<c.count;++i){p=put16(p,c.ms[i]);p=put16(p,c.rpm[i]);}
+      break;
+    }
+    case 9:
+      if(tournamentMode || editing()){*p++=BUSY;break;}
+      newSession();dirty=true;*p++=OK;
+      break;
+    case 10:
+      for(unsigned i=0;i<powerLog.count && size_t(p-out)+13<=room;++i) {
+        const auto &r=powerLog.records[(powerLog.next+PowerDiagnostics::CAPACITY-powerLog.count+i)%PowerDiagnostics::CAPACITY];
+        p=put32(p,uint32_t(r.elapsedSeconds));p=put32(p,r.boot);p=put16(p,r.batteryMv);
+        *p++=r.event;*p++=r.flags;*p++=r.brightness;
+      }
+      break;
+    case 15:
+      if(length!=1 || args[0]>1){*p++=INVALID;break;}
+      darkDisplay.set(!args[0] && BleLink::secured());dirty=true;*p++=OK;
+      break;
+    case 13:
+      if(length<2 || size_t(args[0])!=length-1 || !BleName::valid(reinterpret_cast<const char *>(args)+1,args[0])){*p++=INVALID;break;}
+      if(tournamentMode || editing()){*p++=BUSY;break;}
+      BleLink::setName(reinterpret_cast<const char *>(args)+1,args[0]);
+      settingsSave.mark(SettingsSave::Name);saveSettings(millis(),acquisition.snapshot(),true);
+      *p++=OK;
+      break;
+    case 12:
+      if(length!=1 || args[0]>1){*p++=INVALID;break;}
+      if(tournamentMode){*p++=BUSY;break;}
+      BleLink::setLiveOrientation(args[0]);*p++=OK;
+      break;
+    case 11: {
+      if(tournamentMode)return -HIDDEN;
+      if(motionPending)return -BUSY;
+      // Off the loop stack, as exportMotion: the poses the recap itself draws.
+      auto replay=std::unique_ptr<MotionReplay::Replay>(new(std::nothrow) MotionReplay::Replay);
+      if(!replay)return -BUSY;
+      return int32_t(BleMotion::encodeReplay(latestMotion,*replay,out,capacity));
+    }
+    // 14 Set level reference is in the protocol but not in this firmware:
+    // unknown command, which an app reads as not supported.
+    default:return -UNKNOWN;
+  }
+  return int32_t(p-out);
+}
+}
+
 void loop() {
   CpuPower::Guard clock(CpuPower::Ui);
   bool buttonsFresh=false;
   if(imuAcquisition.lock()){M5.update();imuAcquisition.unlock();buttonsFresh=true;}
   Snapshot s=acquisition.snapshot();
+  BleLink::handler=BleCommands::run;controls.bluetoothOn=bluetoothOn;
+  BleLink::setPromptBusy(s.phase==AnalogTachometer::Phase::Launch || motionPending || tournamentMode || wipeBlocked ||
+    controls.page==Controls::Page::Edit || controls.page==Controls::Page::Wipe);
+  if(BleLink::tick(millis(),bluetoothAtBoot,s.phase==AnalogTachometer::Phase::Launch))dirty=true;
+  if(BleLink::takeBondsChanged()){settingsSave.mark(SettingsSave::Bonds);dirty=true;}
+  BattlePassFeed::tick(millis());
+  BleCommands::tickLiveOrientation(millis(),s);
+  restartForBluetooth(millis(),s);
   if(buttonsFresh && heldButtons.use(millis(),M5.BtnA.isPressed() || M5.BtnB.isPressed(),M5.BtnA.wasReleased() || M5.BtnB.wasReleased()))
     inactivity.touch(millis());
 #if LAUNCHLAB_HIL
@@ -3144,11 +3464,13 @@ void loop() {
   tickSensorIdle(millis(),s);
 #endif
   if(controls.page==Controls::Page::Wipe)pollWipe(millis(),buttonsFresh,s);
+  else if(BleCommands::answerPairing(buttonsFresh,s)){}
   else if(buttonsFresh) {
     const bool clickedA=gestureA.click(M5.BtnA.wasPressed(),M5.BtnA.wasHold(),M5.BtnA.wasClicked());
     const bool clickedB=gestureB.click(M5.BtnB.wasPressed(),M5.BtnB.wasHold(),M5.BtnB.wasClicked());
     if(M5.BtnA.wasHold())holdA();else if(clickedA){noteWearTap("button");buttonA();}
     if(M5.BtnB.wasHold())holdB();else if(clickedB)buttonB();
+    wakeDisplayOnPress(M5.BtnA.wasPressed() || M5.BtnB.wasPressed());
   }
   if(wipeBlocked)return;
   pollCommands(s);
@@ -3222,6 +3544,7 @@ void loop() {
   powerKeyOff(now,s);
   autoPowerOff(now,s);
   tickDisplayPower(millis(),acquisition.snapshot());
+  tickDarkDisplay(now);
   if(newSessionAt && now-newSessionAt>=1500){newSessionAt=0;dirty=true;}
   if(stress && now-lastDraw>=50)dirty=true;
   if((M5.BtnA.isPressed() || M5.BtnB.isPressed()) && now-lastDraw>=50)dirty=true;
@@ -3250,7 +3573,8 @@ void loop() {
 #endif
   // Avoid electrical display changes through an ordinary measured burst.
   // Stress mode intentionally exercises the screen even during a burst.
-  if(dirty && labDraw && (stress || s.phase!=AnalogTachometer::Phase::Launch)) {
+  // A dark screen stays due for its frame, so a press shows the latest at once.
+  if(dirty && labDraw && (stress || s.phase!=AnalogTachometer::Phase::Launch) && !displayDark(now)) {
     draw(s);lastDraw=millis();dirty=false;
   }
   if(Serial && now-lastStatus>=2000){lastStatus=now;status();}

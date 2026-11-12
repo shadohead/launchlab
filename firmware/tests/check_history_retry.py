@@ -111,6 +111,7 @@ struct ImuAcquisition {
   void feed(){LaunchMotion::Sample raw;raw.us=clockUs;raw.a[2]=1;raw.clipped=clipped;
     orientation.feed(raw,[&](const LaunchMotion::Sample &s){ring->feed(s);fused=s.us;});}
 } imuAcquisition;
+#include "ble_link_fake.h"
 static InactivityTimer inactivity;static OpticalSleepGuard opticalGuard;static UsbHostAwake usbAwake;static bool usbAutoOffInhibited=false;
 static void pollUsbAwake(uint32_t,const Snapshot&,bool=false){}static PowerDiagnostics::Image powerLog;static bool powerLogDirty=false;
 static bool extPower=false,reachedSleep=false;

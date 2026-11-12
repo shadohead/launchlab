@@ -2,22 +2,36 @@
 #include <cstdint>
 #include "appearance.h"
 #include "effect_set.h"
+#include "mount_orientation.h"
 #include "wear_check.h"
 
 // Navigation never starts/stops measurement. Effects are handled by the sketch
 // after the visible state changes; setting writes only happen on Apply.
 namespace Controls {
-enum class Page:uint8_t {Main,Menu,HistoryMenu,History,Battery,Settings,Edit,NewSession,Tournament,Wipe,WearCheck,MicRpm,About};
-enum class Effect:uint8_t {None,Recap,BeginEdit,Preview,Apply,CancelEdit,Older,NewSession,Tournament,BeginWipe,ConfirmWipe,CancelWipe};
-static constexpr unsigned MENU_COUNT=8;
-static constexpr uint8_t MIC_ROW=6;  // before Back
-// Values are stable (HIL `!set N`, saved wake navigation); the screen shows
-// them in ORDER. Shake to wake (0.20.2) is listed right after Sleep after.
+enum class Page:uint8_t {Main,Menu,HistoryMenu,History,Battery,Settings,Edit,NewSession,Tournament,Wipe,WearCheck,MicRpm,About,
+  Bluetooth,ForgetPhones,EnableBluetooth};
+enum class Effect:uint8_t {None,Recap,BeginEdit,Preview,Apply,CancelEdit,Older,NewSession,Tournament,BeginWipe,ConfirmWipe,CancelWipe,ForgetPhones,ToggleBluetooth};
+// The Menu, top to bottom, in three groups (0.20.9): what a session uses
+// (History, New session, Tournament), the tools (String wear check, Mic RPM),
+// then the device (Battery, Bluetooth, Settings), and Back. Through 0.20.8 the
+// rows were in the order they were added (MENU_ROWS_0208).
+enum MenuRow:uint8_t {HISTORY_ROW,NEW_SESSION_ROW,TOURNAMENT_ROW,WEAR_ROW,MIC_ROW,BATTERY_ROW,BLUETOOTH_ROW,SETTINGS_ROW,BACK_ROW};
+static constexpr unsigned MENU_COUNT=9;
+// Bit i: row i starts a group, drawn with a little space above it.
+static constexpr unsigned MENU_GROUPS=(1u<<WEAR_ROW)|(1u<<BATTERY_ROW)|(1u<<BACK_ROW);
+// 0.20.7-0.20.8's rows before their Back (0.20.3 had the first six, earlier the first five).
+static constexpr MenuRow MENU_ROWS_0208[]={HISTORY_ROW,NEW_SESSION_ROW,BATTERY_ROW,SETTINGS_ROW,TOURNAMENT_ROW,WEAR_ROW,MIC_ROW};
+// Values are stable (HIL `!set N`, saved wake navigation, the Bluetooth
+// protocol's setting ids); the screen shows them in ORDER. Shake to wake
+// (0.20.2) is listed right after Sleep after.
 // About (0.20.8) opens a page of what the unit runs; it edits nothing.
 // Battery icon (0.20.8) shows the charge in the top right corner of the
 // Menu and Settings pages, On by default.
-enum class Setting:uint8_t {Sleep,Rpm,Brightness,Flip,Sensor,Theme,BestEffect,Celebrate,Sound,Mount,ShakeWake,WipeAll,About,BatteryIcon};
-static constexpr unsigned SETTING_COUNT=14;
+// Bluetooth (0.20.9, experimental) keeps a value and an editor (the protocol's
+// id 14, HIL) but has no row here: it has its own Menu page, which asks before
+// turning it on. ROWS is the list's length; SETTING_COUNT stands for Back.
+enum class Setting:uint8_t {Sleep,Rpm,Brightness,Flip,Sensor,Theme,BestEffect,Celebrate,Sound,Mount,ShakeWake,WipeAll,About,BatteryIcon,Bluetooth};
+static constexpr unsigned SETTING_COUNT=15,ROWS=14;
 static constexpr bool BATTERY_ICON_DEFAULT=true;
 // The pages with the corner battery: the Menu and History lists, Settings, its
 // editors and About. Not Main (owner, 2026-11-05), the history graphs, the
@@ -25,26 +39,32 @@ static constexpr bool BATTERY_ICON_DEFAULT=true;
 constexpr bool showsCornerBattery(Page page) {
   return page==Page::Menu || page==Page::HistoryMenu || page==Page::Settings || page==Page::Edit || page==Page::About;
 }
+// Main shows it only while the unit charges (0.20.9), so a plugged-in unit says so.
+constexpr bool showsChargingBattery(Page page){return page==Page::Main;}
 // Every row but Wipe all and About has an editor and a value.
 constexpr bool editable(unsigned setting) {
   return setting<SETTING_COUNT && setting!=unsigned(Setting::WipeAll) && setting!=unsigned(Setting::About);
 }
 // The Settings list, five rows a page: general, appearance, then Mounting,
 // Battery icon, Wipe all, About and Back (SETTING_COUNT, after the last).
-static constexpr Setting ORDER[SETTING_COUNT]={Setting::Sleep,Setting::ShakeWake,Setting::Rpm,Setting::Brightness,Setting::Sensor,
+static constexpr Setting ORDER[ROWS]={Setting::Sleep,Setting::ShakeWake,Setting::Rpm,Setting::Brightness,Setting::Sensor,
   Setting::Flip,Setting::Theme,Setting::BestEffect,Setting::Celebrate,Setting::Sound,Setting::Mount,Setting::BatteryIcon,
   Setting::WipeAll,Setting::About};
 // A row's place in ORDER (Back, SETTING_COUNT, is last), and the row after it.
 constexpr unsigned position(unsigned setting) {
-  for(unsigned i=0;i<SETTING_COUNT;++i)if(unsigned(ORDER[i])==setting)return i;
-  return SETTING_COUNT;
+  for(unsigned i=0;i<ROWS;++i)if(unsigned(ORDER[i])==setting)return i;
+  return ROWS;
 }
-constexpr unsigned rowAt(unsigned position){return position<SETTING_COUNT?unsigned(ORDER[position]):SETTING_COUNT;}
-constexpr unsigned nextRow(unsigned setting){return rowAt((position(setting)+1)%(SETTING_COUNT+1));}
+constexpr unsigned rowAt(unsigned position){return position<ROWS?unsigned(ORDER[position]):SETTING_COUNT;}
+constexpr unsigned nextRow(unsigned setting){return rowAt((position(setting)+1)%(ROWS+1));}
 struct State {
   Page page=Page::Main;
   uint8_t menu=0,history=0,setting=0,draft=0;
-  bool startSession=false;
+  bool startSession=false,forgetChosen=false,enableChosen=false;
+  // Whether Bluetooth is on, kept current by the sketch: turning it on asks first.
+  bool bluetoothOn=false;
+  // The Bluetooth page's row: 0 On/Off, 1 Forget phones, 2 Back.
+  uint8_t bluetoothRow=0;
   // Valid custom theme slots (bit i: theme THEMES+i), kept current by the
   // sketch; Theme cycles through the built-ins and then these.
   uint8_t customThemes=0;
@@ -58,13 +78,14 @@ struct State {
       case Page::Main:return Effect::Recap;
       case Page::Menu:
         switch(menu) {
-          case 0:page=Page::HistoryMenu;break;
-          case 1:page=Page::NewSession;startSession=false;break;
-          case 2:page=Page::Battery;break;
-          case 3:page=Page::Settings;break;
-          case 4:page=Page::Tournament;return Effect::Tournament;
-          case 5:page=Page::WearCheck;wear.reset();break;
+          case HISTORY_ROW:page=Page::HistoryMenu;break;
+          case NEW_SESSION_ROW:page=Page::NewSession;startSession=false;break;
+          case TOURNAMENT_ROW:page=Page::Tournament;return Effect::Tournament;
+          case WEAR_ROW:page=Page::WearCheck;wear.reset();break;
           case MIC_ROW:page=Page::MicRpm;break;
+          case BATTERY_ROW:page=Page::Battery;break;
+          case BLUETOOTH_ROW:page=Page::Bluetooth;bluetoothRow=0;break;
+          case SETTINGS_ROW:page=Page::Settings;break;
           default:page=Page::Main;break;
         }break;
       case Page::HistoryMenu:page=history<3?Page::History:Page::Menu;break;
@@ -82,6 +103,14 @@ struct State {
       case Page::WearCheck:wear.reset();break;
       case Page::MicRpm:page=Page::Menu;break;
       case Page::About:page=Page::Settings;break;
+      case Page::Bluetooth:
+        // Turning it off is immediate; turning it on first says it is experimental.
+        if(bluetoothRow==0){if(bluetoothOn)return Effect::ToggleBluetooth;page=Page::EnableBluetooth;enableChosen=false;}
+        else if(bluetoothRow==1){page=Page::ForgetPhones;forgetChosen=false;}
+        else page=Page::Menu;
+        break;
+      case Page::ForgetPhones:page=Page::Bluetooth;return forgetChosen?Effect::ForgetPhones:Effect::None;
+      case Page::EnableBluetooth:page=Page::Bluetooth;return enableChosen && !bluetoothOn?Effect::ToggleBluetooth:Effect::None;
     }
     return Effect::None;
   }
@@ -96,7 +125,7 @@ struct State {
         switch(Setting(setting)) {
           case Setting::Sleep:draft=draft>=10?1:draft+1;break;
           case Setting::Rpm:case Setting::Flip:case Setting::Sensor:case Setting::Mount:case Setting::ShakeWake:
-          case Setting::BatteryIcon:draft=!draft;break;
+          case Setting::BatteryIcon:case Setting::Bluetooth:draft=!draft;break;
           case Setting::Brightness:draft=draft>=100?10:draft+10;break;
           case Setting::Theme:
             do draft=(draft+1)%Appearance::ALL_THEMES;
@@ -114,6 +143,9 @@ struct State {
       case Page::WearCheck:break;
       case Page::MicRpm:break;
       case Page::About:break;
+      case Page::Bluetooth:bluetoothRow=(bluetoothRow+1)%3;break;
+      case Page::ForgetPhones:forgetChosen=!forgetChosen;break;
+      case Page::EnableBluetooth:enableChosen=!enableChosen;break;
     }
     return Effect::None;
   }
@@ -122,8 +154,9 @@ struct State {
       case Page::Edit:page=Page::Settings;return Effect::CancelEdit;
       case Page::About:page=Page::Settings;break;
       case Page::History:page=Page::HistoryMenu;break;
-      case Page::HistoryMenu:case Page::Battery:case Page::Settings:case Page::NewSession:case Page::WearCheck:page=Page::Menu;break;
+      case Page::HistoryMenu:case Page::Battery:case Page::Settings:case Page::NewSession:case Page::WearCheck:case Page::Bluetooth:page=Page::Menu;break;
       case Page::MicRpm:page=Page::Menu;break;
+      case Page::ForgetPhones:case Page::EnableBluetooth:page=Page::Bluetooth;break;
       case Page::Menu:page=Page::Main;break;
       case Page::Main:return recap?Effect::Recap:Effect::None;
       case Page::Tournament:break;
@@ -159,27 +192,35 @@ struct Gesture {
 // after Wipe is ever saved. 0.20.7 inserts Mic RPM at menu row 6: an older Back
 // row moves down one again, and that page too wakes on its menu row. 0.20.8
 // adds About (12) and Battery icon (13): the Settings Back row moves to 14,
-// and About wakes on its Settings row.
+// and About wakes on its Settings row. 0.20.9 adds Bluetooth to the Menu,
+// which wakes on its row, and puts the Menu in a new order: an older state's
+// row is found by what it was (MENU_ROWS_0208). Bluetooth is value 14 without
+// a Settings row: Back moves to 15. Nine menu rows need a fourth bit, bit 14
+// of this layout's magic alone (0x4e62: the Bluetooth prototype's builds used
+// 0x4e60 and 0x4e61 for other layouts, which are not read).
 static constexpr uint32_t LEGACY_WAKE_MAGIC=0x4e560000,WAKE7_MAGIC=0x4e570000,
   WAKE8_MAGIC=0x4e580000,WAKE9_MAGIC=0x4e590000,WAKE10_MAGIC=0x4e5a0000,WAKE11_MAGIC=0x4e5b0000,
-  WAKE12_MAGIC=0x4e5c0000,WAKE13_MAGIC=0x4e5d0000,WAKE14_MAGIC=0x4e5e0000,WAKE_MAGIC=0x4e5f0000;
+  WAKE12_MAGIC=0x4e5c0000,WAKE13_MAGIC=0x4e5d0000,WAKE14_MAGIC=0x4e5e0000,WAKE15_MAGIC=0x4e5f0000,WAKE_MAGIC=0x4e620000;
 inline uint32_t encodeWake(State state,uint8_t tournamentView) {
   if(state.page==Page::Edit || state.page==Page::Wipe)state.page=Page::Settings;
-  if(state.page==Page::WearCheck){state.page=Page::Menu;state.menu=5;}
+  if(state.page==Page::WearCheck){state.page=Page::Menu;state.menu=WEAR_ROW;}
   if(state.page==Page::MicRpm){state.page=Page::Menu;state.menu=MIC_ROW;}  // the mic never starts on wake
   if(state.page==Page::About){state.page=Page::Settings;state.setting=uint8_t(Setting::About);}
-  return WAKE_MAGIC|uint32_t(state.page)|(uint32_t(state.menu)<<4)|
+  if(state.page==Page::Bluetooth || state.page==Page::ForgetPhones || state.page==Page::EnableBluetooth){state.page=Page::Menu;state.menu=BLUETOOTH_ROW;}
+  return WAKE_MAGIC|uint32_t(state.page)|(uint32_t(state.menu&7)<<4)|(uint32_t(state.menu>>3)<<14)|
     (uint32_t(state.history)<<7)|(uint32_t(state.setting)<<9)|(uint32_t(tournamentView)<<13);
 }
 inline bool decodeWake(uint32_t value,State &out,uint8_t &tournamentView) {
-  State state;state.page=Page(value&15);state.menu=(value>>4)&7;state.history=(value>>7)&3;
+  State state;state.page=Page(value&15);state.history=(value>>7)&3;
+  const bool current=(value&0xffff8000)==WAKE_MAGIC;
+  state.menu=((value>>4)&7)|(current?((value>>14)&1)<<3:0);
   // Each layout's Back row is the one after its last setting.
   unsigned setting=0,back=0;
-  const auto wideMagic=value&0xffffc000;
-  if(wideMagic==WAKE_MAGIC || wideMagic==WAKE14_MAGIC || wideMagic==WAKE13_MAGIC || wideMagic==WAKE12_MAGIC || wideMagic==WAKE11_MAGIC || wideMagic==WAKE10_MAGIC || wideMagic==WAKE9_MAGIC || wideMagic==WAKE8_MAGIC) {
+  const auto wideMagic=current?WAKE_MAGIC:value&0xffffc000;
+  if(wideMagic==WAKE_MAGIC || wideMagic==WAKE15_MAGIC || wideMagic==WAKE14_MAGIC || wideMagic==WAKE13_MAGIC || wideMagic==WAKE12_MAGIC || wideMagic==WAKE11_MAGIC || wideMagic==WAKE10_MAGIC || wideMagic==WAKE9_MAGIC || wideMagic==WAKE8_MAGIC) {
     setting=(value>>9)&15;tournamentView=(value>>13)&1;
     back=wideMagic==WAKE8_MAGIC?8:wideMagic==WAKE9_MAGIC?9:wideMagic==WAKE10_MAGIC?10:wideMagic==WAKE11_MAGIC?11:
-      wideMagic==WAKE_MAGIC?SETTING_COUNT:12;  // 12: Back in 0.20.2-0.20.7 (WAKE12-WAKE14)
+      wideMagic==WAKE_MAGIC?SETTING_COUNT:wideMagic==WAKE15_MAGIC?14:12;  // 12: Back in 0.20.2-0.20.7 (WAKE12-WAKE14)
   }
   else {
     const auto magic=value&0xffffe000;
@@ -189,16 +230,19 @@ inline bool decodeWake(uint32_t value,State &out,uint8_t &tournamentView) {
   }
   if(setting>back)return false;
   if(setting==back)setting=SETTING_COUNT;
-  else if(wideMagic!=WAKE_MAGIC && wideMagic!=WAKE14_MAGIC && wideMagic!=WAKE13_MAGIC && wideMagic!=WAKE12_MAGIC) {
+  else if(wideMagic!=WAKE_MAGIC && wideMagic!=WAKE15_MAGIC && wideMagic!=WAKE14_MAGIC && wideMagic!=WAKE13_MAGIC && wideMagic!=WAKE12_MAGIC) {
     // In the 0.15-0.20.1 numbering (WAKE11): Celebrate is 7, Wipe all 10.
     if(wideMagic!=WAKE11_MAGIC && setting>=7)++setting;
     if(setting==10)setting=unsigned(Setting::WipeAll);
   }
+  // Bluetooth has no Settings row (its editor is reached by HIL alone): Back.
+  if(setting==unsigned(Setting::Bluetooth))setting=SETTING_COUNT;
   state.setting=uint8_t(setting);
-  const unsigned rows=wideMagic==WAKE_MAGIC || wideMagic==WAKE14_MAGIC?MENU_COUNT:wideMagic==WAKE13_MAGIC?7:6;
+  const unsigned rows=wideMagic==WAKE_MAGIC?MENU_COUNT:wideMagic==WAKE15_MAGIC || wideMagic==WAKE14_MAGIC?8:wideMagic==WAKE13_MAGIC?7:6;
   if(uint8_t(state.page)>uint8_t(Page::Wipe) || state.page==Page::Edit || state.page==Page::Wipe ||
      state.menu>=rows || state.setting>SETTING_COUNT)return false;
-  if(state.menu==rows-1)state.menu=MENU_COUNT-1;  // Back
+  // Each older layout's last row was Back; its other rows are where they are now.
+  if(wideMagic!=WAKE_MAGIC)state.menu=state.menu==rows-1?uint8_t(BACK_ROW):uint8_t(MENU_ROWS_0208[state.menu]);
   out=state;return true;
 }
 }

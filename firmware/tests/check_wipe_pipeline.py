@@ -57,6 +57,8 @@ PREFIX = r'''
 #include "device_backup.h"
 #include "theme_library.h"
 #include "launch_motion.h"
+#include "ble_link_fake.h"
+static bool bluetoothOn=false;static bool bluetoothAtBoot=false;
 #include "Button_Class.hpp"
 #define M5UNIFIED_IMPLEMENTATION
 #include "Button_Class.inl"
@@ -210,8 +212,8 @@ static void finishMotion(){normal();}static void retryMotion(uint32_t,const Snap
 static void saveHistory(uint32_t,const Snapshot &){normal();}
 // Settings saves and the orphaned-checkpoint release must never run after an
 // erase attempt: one would write old RAM, the other resume the held checkpoint.
-static void saveSettings(uint32_t,const Snapshot &){normal();}static void releaseOrphanCheckpoint(uint32_t,const Snapshot &){normal();}
-struct SettingsSave {enum Item:uint16_t {Pin=128,ExtPower=256};void mark(uint16_t){normal();}bool pending()const{return false;}}settingsSave;
+static void saveSettings(uint32_t,const Snapshot &){normal();}static void restartForBluetooth(uint32_t,const Snapshot &){}static void releaseOrphanCheckpoint(uint32_t,const Snapshot &){normal();}
+struct SettingsSave {static constexpr uint16_t Bonds=4096,Bluetooth=2048;enum Item:uint16_t {Pin=128,ExtPower=256};void mark(uint16_t){normal();}bool pending()const{return false;}}settingsSave;
 static void pollBattery(uint32_t,const Snapshot &){normal();}static void tickPowerLog(uint32_t,const Snapshot &){normal();}static void tickHistoryLog(uint32_t,const Snapshot &){normal();}
 static void pollUsbAwake(uint32_t,const Snapshot &){normal();}static void tickSound(const Snapshot &){normal();}
 // Side-key power-off has its own production harness; its wipe guard is tested there.
@@ -470,7 +472,7 @@ def run(tests, args=(), source=SOURCE):
             raise RuntimeError("Pending wipe recovery must precede normal load/task: " + load)
     names = ["exportCpuPower", "syncNavigation", "navigate", "buttonA", "buttonB", "holdA", "holdB",
              "beginWipe", "cancelWipe", "restartAfterWipe", "commitWipe", "pollWipe", "tickDisplayPower"]
-    bodies = "\n".join(function(source, name) for name in names)
+    bodies = "static bool displayDark(uint32_t){return false;}\nstatic void wakeDisplayOnPress(bool){}\nstatic void tickDarkDisplay(uint32_t){}\n" + "\n".join(function(source, name) for name in names)
     # Wear check helpers called by loop() (0.20.4).
     for name, result in (("wearDetectorReady", "bool"), ("observeWearMount", "void"), ("noteWearTap", "void"), ("logWearPull", "void")):
         if f"static {result} {name}(" in source:
