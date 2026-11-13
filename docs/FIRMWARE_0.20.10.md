@@ -1,7 +1,7 @@
 # Firmware 0.20.10 build context
 
 <!-- current-release:start channel 0.20.10 -->
-Firmware 0.20.10 is a **beta**: it passed the automated gates and has not been hand-tested for stable.
+Firmware 0.20.10 is a **stable** release: it was published as a beta and promoted after the maintainer hand-tested it.
 <!-- current-release:end -->
 This document describes the preserved 0.20.10 release; the updater guide names [the current release](UPDATER.md#current-release).
 
