@@ -81,6 +81,32 @@ def parse_set(packets):
     return {'shots': shots, 'latest': shots[-1], 'n': n, 'best': u16(by[0xb6], 7), 'total': u16(by[0xb6], 9), 'curve': curve}
 
 
+def pass_curve(points):
+    """The 32 curve values the Battle Pass profile sends for a pull's curve points
+    [(t_ms, rpm)] (ble_battle_pass.h, curve()): the pull from its start to its
+    last turn in 32 equal spans, each the RPM averaged over its span by time, as
+    periods in 8 us steps; cut at the first 0 as parse_set reads them."""
+    if not points:
+        return []
+    ms, rpm, span = [t for t, _ in points], [r for _, r in points], points[-1][0]
+    values = []
+    for k in range(32):
+        r = rpm[-1]
+        if span:
+            low, high, total, weight, lo = k * span, (k + 1) * span, 0, 0, 0
+            for t, v in zip(ms, rpm):
+                hi = t * 32
+                a, b = max(lo, low), min(hi, high)
+                if b > a:
+                    total += v * (b - a)
+                    weight += b - a
+                lo = max(lo, hi)
+            if weight:
+                r = (total + weight // 2) // weight
+        values.append(min(65535, max(1, (7500000 + r // 2) // r)) if r else 0)
+    return values[:values.index(0)] if 0 in values else values
+
+
 def ask(rig, op_hex, timeout=6):
     """One LaunchLab command through the tap: (payload, error flag) of its framed
     reply, or (None, None) when the frames are not a whole reply."""
@@ -143,9 +169,14 @@ def ble_tap(rig):
     """Both Bluetooth profiles as an app gets them, through the tap.
 
     Battle Pass profile: the greeting status, the commands (0x51, 0x74, and
-    0x75 and 0x61 doing nothing), and after a pull "top on", "top off" and the
+    0x61 doing nothing), and after a pull "top on", "top off" and the
     launch's set, with nothing sent while the pull is measured; the latest
-    shoot power is the stick's RPM and the curve is the recap's graph.
+    shoot power is the stick's RPM and the curve is the recap's graph over the
+    whole pull, in 32 equal time spans. The clear (0x75, 0.20.11): A1, a status
+    counting 0 and an empty list; the launch number it confirmed is saved, so
+    after a restart the count is still 0 and the next pull lists alone. The
+    power-off (0x63) ends a radio link, which the tap does not have: here it
+    must send nothing (the Beyblade X app and tools/ble_check test the link).
     LaunchLab profile: the launch event, Get info, Get curve and Get status,
     the tilt replay equal to the poses the recap draws, an op this firmware
     does not have answering "unknown", and live orientation: about ten poses a
@@ -183,10 +214,10 @@ def ble_tap(rig):
         before = parse_set(got)
         rig.check('0x74 answers with the twelve packets in order, checksum and latest slot good', before is not None, str([g.hex() for g in got]))
         mark = d.mark()
-        for byte in ('75', '61', '00', 'ff'):
+        for byte in ('61', '63', '00', 'ff'):
             d.hil(f'blepass {byte}', expect='HIL_OK blepass')
         time.sleep(1.0)
-        rig.check('0x75, 0x61 and unknown bytes do nothing', not tap_lines(d, mark), str([t[2].hex() for t in tap_lines(d, mark)]))
+        rig.check('0x61, 0x63 (no radio link under the tap) and unknown bytes send nothing', not tap_lines(d, mark), str([t[2].hex() for t in tap_lines(d, mark)]))
 
         # ---- A pull: nothing while it is measured, then the launch on both profiles.
         mark = d.mark()
@@ -212,8 +243,9 @@ def ble_tap(rig):
         status = parse_status(got[1]) if len(got) == 14 else {}
         rig.check('the status with it carries the same count and best', after is not None and status.get('total') == after['total'] and status.get('best') == after['best'], str(status))
         curve, poses = export(rig)
-        want = [min(65535, max(1, (7500000 + rpm_ // 2) // rpm_)) for _, rpm_ in curve[:32]]
-        rig.check('the curve is the recap\'s graph, turn by turn as periods', after is not None and len(curve) >= 7 and after['curve'] == want,
+        want = pass_curve(curve)
+        rig.check('the curve is the recap\'s graph over the whole pull: 32 time spans, each its average RPM as a period',
+                  after is not None and len(curve) >= 7 and len(want) == 32 and after['curve'] == want,
                   f"{after['curve'][:6] if after else None}... vs {want[:6]}... ({len(curve)} points)")
         events = [data for _, _, data in tap_lines(d, mark, 'event')]
         launches = [e for e in events if e[0] == 1 and len(e) == 13]
@@ -279,14 +311,64 @@ def ble_tap(rig):
         streamed = wait_tap(d, launch.index if launch else mark3, 'event', lambda got: sum(1 for e in got if e[0] == 2) >= 5, 4)
         rig.check('and goes on after it', sum(1 for e in streamed if e[0] == 2) >= 5, f'{len(streamed)} events')
         second = [data for _, _, data in tap_lines(d, mark3, 'pass')]
-        rig.check('the second launch has its own whole set', len(second) == 14 and abs((parse_set(second[2:]) or {}).get('latest', 0) - r2.rpm) <= 0.6,
+        second_set = parse_set(second[2:]) if len(second) == 14 else None
+        rig.check('the second launch has its own whole set', second_set is not None and abs(second_set['latest'] - r2.rpm) <= 0.6,
                   str([s[:1].hex() for s in second]))
+        launches2 = [data for _, _, data in tap_lines(d, mark3, 'event') if data[0] == 1 and len(data) == 13]
+        number2 = struct.unpack('<I', launches2[0][1:5])[0] if launches2 else None
         payload, error = ask(rig, '0c00')
         time.sleep(0.5)
         mark4 = d.mark()
         time.sleep(1.5)
         rig.check('Set live orientation off: no more poses', payload == b'\x00' and not [t for t in tap_lines(d, mark4, 'event') if t[2][0] == 2],
                   f'{payload}')
+
+        # ---- Clear (0x75): the app has every launch so far. A1, then a status
+        # counting 0 and the list, empty; the launch number is saved.
+        scenarios.drain_history(rig)
+        mark = d.mark()
+        d.hil('blepass 75', expect='HIL_OK blepass')
+        wait_tap(d, mark, 'pass', lambda got: len(got) >= 10, 4)
+        time.sleep(0.4)
+        got = [data for _, _, data in tap_lines(d, mark, 'pass')]
+        cleared = parse_status(got[1]) if len(got) >= 2 and len(got[1]) == 17 and got[1][0] == 0xa0 else {}
+        rig.check('0x75: A1, a status counting 0, and the list with no launch',
+                  len(got) == 10 and got[0] == bytes([0xa1]) + bytes(16) and cleared.get('total') == 0 and cleared.get('state') == 0
+                  and [g[0] for g in got[2:]] == [0xb0 + i for i in range(8)] and got[8][11] == 0 and not any(sum(g[1:]) for g in got[2:8]),
+                  str([g.hex() for g in got]))
+        line = d.wait('BATTLE_PASS_CLEAR', 1, since=mark)
+        waiting = second_set['total'] if second_set else None
+        rig.check('the clear confirmed the latest launch and took the launches that waited',
+                  line is not None and number2 is not None and waiting is not None
+                  and int(line.f.get('confirmed', -1)) == number2 and int(line.f.get('listed', -1)) == min(50, waiting),
+                  f"{line.text if line else None}, latest {number2}, waiting {waiting}")
+        saved = d.wait(lambda l: l.text.startswith('SETTINGS_SAVE ') and int(l.f.get('saved', '0'), 16) & 0x8000, 15, since=mark)
+        rig.check('the confirmed launch number is saved in the next settings checkpoint', saved is not None, saved.text if saved else 'no save')
+        mark = d.mark()
+        d.hil('blepass 74', expect='HIL_OK blepass')
+        d.hil('blepass 51', expect='HIL_OK blepass')
+        wait_tap(d, mark, 'pass', lambda got: len(got) >= 1, 3)
+        time.sleep(0.6)
+        got = [data for _, _, data in tap_lines(d, mark, 'pass')]
+        rig.check('then 0x74 sends no set (no launch waits) and 0x51 counts 0',
+                  len(got) == 1 and got[0][0] == 0xa0 and parse_status(got[0])['total'] == 0, str([g.hex() for g in got]))
+        # A restart keeps it: the greeting still counts 0, and the next pull is the list's only launch.
+        scenarios.reboot(rig)
+        mark = d.mark()
+        d.hil('bletap 1', expect='HIL_OK bletap')
+        greeting = wait_tap(d, mark, 'pass', lambda got: len(got) >= 1, 3)
+        rig.check('after a restart the greeting still counts 0', len(greeting) == 1 and len(greeting[0]) == 17 and parse_status(greeting[0])['total'] == 0,
+                  str([g.hex() for g in greeting]))
+        mark = d.mark()
+        r5 = rig.pull(signals.standard_pull(6800), signals.launch_motion(tilt_rate_dps=300, pull_g=4, seed=95))
+        rig.check_pull(r5, tolerance=0.03)
+        wait_tap(d, mark, 'pass', lambda got: len(got) >= 14, 5)
+        time.sleep(0.4)
+        got = [data for _, _, data in tap_lines(d, mark, 'pass')]
+        fresh = parse_set(got[2:]) if len(got) == 14 else None
+        rig.check('the next pull is listed alone and counted as 1',
+                  fresh is not None and fresh['n'] == 1 and fresh['total'] == 1 and abs(fresh['latest'] - r5.rpm) <= 0.6 and parse_status(got[1])['total'] == 1,
+                  f"{fresh} rpm {r5.rpm}")
 
         # ---- A connected phone holds the sleep off for 10 minutes after the last use, and no longer.
         for row, value in ((scenarios.SLEEP_ROW, 1), (scenarios.SHAKE_ROW, 1)):

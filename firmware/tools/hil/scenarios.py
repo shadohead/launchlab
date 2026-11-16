@@ -2108,11 +2108,17 @@ def nvs_tight(rig, delays_ms=(-150, 0, 100, 250, 380)):
     # erase); below the knee two-erase saves of 460-470 ms appear (nvs_sweep.py).
     median = sorted(durations)[len(durations) // 2] if durations else 0
     rig.check('history saves at their normal median (320 ms or less)', 0 < median <= 320000, f'median_us={median}')
-    # To the flash log (0.18 on): 12.8 ms median in the 0.19 and 0.20 gates. A
-    # record written straight from PSRAM took 30 ms (ESP-IDF's 32-byte bounce
-    # path); it goes through an internal chunk (flash_chunks.h).
+    # To the flash log (0.18 on). A record written straight from PSRAM took
+    # 30 ms (ESP-IDF's 32-byte bounce path); it goes through an internal chunk
+    # (flash_chunks.h), and this check is the tripwire for that path coming back.
+    # Gate medians grew in steps with the releases, never in one jump: 12.8 ms
+    # (0.18.1, 0.19.0), 15.4 (0.20.0), 15.6-17.8 (0.20.1-0.20.8), 19.0-19.2
+    # (0.20.9, 0.20.10 on 14:C1), and units differ: 17.7 on 7C:E8 and 20.3 on
+    # 70:04, where 0.20.10's gated image measured the same as 0.20.11's
+    # (2026-11-15, two rounds each). 25 ms keeps that apart from the 30 ms path;
+    # the history budget is the 320 ms check above.
     if stores and all(x == 'log' for x in stores):
-        rig.check('log saves at their normal median (20 ms or less)', 0 < median <= 20000, f'median_us={median}')
+        rig.check('log saves at their normal median (25 ms or less)', 0 < median <= 25000, f'median_us={median}')
     rig.scenario['history_save_us'] = durations
 
     # Pulls around natural (unslowed) history writes.
