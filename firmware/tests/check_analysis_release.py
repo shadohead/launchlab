@@ -8,8 +8,8 @@ sys.path.insert(0, str(root / "scripts"))
 from local_firmware import release_identity
 
 identity = release_identity()
-assert identity["analysis_version"] == "1.0-rc.2"
-assert identity["runtime"] == "0.20.11-analysis-1.0-rc.2-pm"
+assert identity["analysis_version"] == "1.0-rc.3"
+assert identity["runtime"] == "0.20.11-analysis-1.0-rc.3-pm"
 assert len(identity["runtime"].encode()) < 32  # USB backup runtime field.
 
 sketch = root / "firmware/LaunchLabMini"

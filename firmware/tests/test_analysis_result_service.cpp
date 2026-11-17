@@ -1,7 +1,36 @@
 #include "analysis_result_service.h"
 #include <cassert>
 #include <iostream>
+
+static void testEarlyReference() {
+  StaminaFinish::EarlyReference ref;
+  assert(ref.adjust(9999, 150, true) == 150);
+  assert(ref.adjust(10000, 100, true) == 100);
+  ref.adjust(10999, 170, true);  // A second redraw cannot vote twice.
+  ref.adjust(11000, 140, false);
+  ref.adjust(12000, 110, true);
+  auto sparse = ref;
+  assert(sparse.adjust(16000, 80, true) == 80);
+  assert(ref.adjust(15999, 106, true) == 106);
+  assert(ref.adjust(16000, 96, false) == 101);  // Median 106, spread exactly ten.
+  assert(ref.adjust(17000, 108, true) == 108);
+  assert(ref.adjust(18000, 60, false) == 72);
+
+  ref = {};
+  assert(ref.adjust(16000, 80, true) == 80);
+  ref = {};
+  for (unsigned i = 0; i < 6; ++i)
+    assert(ref.adjust(10000 + i * 1000, 105 - i, true) == 105 - i);
+  assert(ref.adjust(16000, 100, true) == 101.25);  // Even median is 102.5.
+
+  ref = {};
+  for (unsigned i = 0; i < 5; ++i) ref.adjust(10000 + i * 1000, 99, true);
+  ref.adjust(15999, 110, true);
+  assert(ref.adjust(16000, 80, true) == 80);  // The last early estimate breaks agreement.
+}
+
 int main(){
+  testEarlyReference();
   // The frozen stamina fallback starts at ten seconds with no mic. It keeps
   // ticking through silence and the last live snapshot survives manual stop.
   {

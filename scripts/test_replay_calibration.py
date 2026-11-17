@@ -24,6 +24,22 @@ class ReplayTests(unittest.TestCase):
                 self.assertNotEqual(subprocess.run([str(helper)], input=malformed, text=True,
                                                    capture_output=True).returncode, 0)
 
+    def test_sparse_checkpoints_retain_the_early_reference(self):
+        # Double the decay rate after 15 s so the later forecast falls below the opening estimates.
+        samples = []
+        for ms in range(200, 30001, 200):
+            decay_ms = ms + max(0, ms - 15000)
+            samples.append((ms, round(6000 / (1 + decay_ms / 30000))))
+        run = {"launch": 6500, "stop": 31000, "samples": samples, "recovered": set()}
+        with tempfile.TemporaryDirectory() as tmp:
+            helper = build_helper(Path(tmp))
+            dense = replay(run, 1000, helper)
+            sparse = replay(run, 10000, helper)
+        for ms in sparse:
+            self.assertEqual(sparse[ms][1], dense[ms][1])
+        # At 30 s this trace reaches the 12-second adjustment cap.
+        self.assertAlmostEqual(sparse[30000][1][0], 155.44, places=2)
+
     def test_recovery_provenance_reaches_both_helpers(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)

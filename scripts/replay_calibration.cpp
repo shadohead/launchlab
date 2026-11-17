@@ -19,7 +19,13 @@ int main() {
   struct Arrival { unsigned at; Decay::Sample sample; };
   std::vector<Arrival> arrivals;
   StaminaFinish::Publications published;
+  StaminaFinish::EarlyReference early;
   static AcousticClock::Scratch scratch;
+  const auto get = [&](unsigned j) {
+    const auto &s = session.samples[j];
+    return StaminaFinish::Observation{s.ms, s.rpm, s.recovered, s.rejected};
+  };
+  double finish = NAN;
   Decay::Results pending;
   Decay::Curve pendingCurve;
   unsigned fittedCount = 0, lastFitMs = 0, readyAt = 0, cursor = 0, nextMs = 100;
@@ -59,14 +65,13 @@ int main() {
         pending = Decay::fitLiveModels(session, work, pendingCurve);
         readyAt = nextMs + 100;
       }
+      // The Stick updates its forecast each second, even between reported checkpoints.
+      if (nextMs >= EarlySpin::FIRST_MS && nextMs % 1000 == 0) {
+        const StaminaFinish::LiveFit input{nextMs, session.launcherRpm, fits.support.original, fits.support.accepted};
+        finish = StaminaFinish::predict(input, published, session.count, get, scratch, early);
+      }
     }
     session.stopMs = ms;
-    const StaminaFinish::LiveFit input{ms, session.launcherRpm, fits.support.original, fits.support.accepted};
-    const auto get = [&](unsigned j) {
-      const auto &s = session.samples[j];
-      return StaminaFinish::Observation{s.ms, s.rpm, s.recovered, s.rejected};
-    };
-    const double finish = StaminaFinish::predict(input, published, session.count, get, scratch);
     Decay::Results observed;
     Decay::prepare(session, work, observed, {});
     const float lastTime = observed.lastTime;

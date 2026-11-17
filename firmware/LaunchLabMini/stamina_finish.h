@@ -28,6 +28,33 @@ struct LiveFit {
     unsigned originalInliers, acceptedInliers;
 };
 
+// Keep one acoustically supported estimate per second from the opening window.
+// If those estimates agree, use their median to temper later downward revisions.
+class EarlyReference {
+    std::array<double, 6> samples_{};
+    unsigned count_ = 0;
+    unsigned lastSecond_ = 0;
+
+public:
+    double adjust(unsigned elapsedMs, double estimate, bool supported) {
+        const unsigned second = elapsedMs / 1000;
+        if (second <= 15) {
+            if (second >= 10 && second > lastSecond_ && supported && std::isfinite(estimate)) {
+                lastSecond_ = second;
+                auto end = samples_.begin() + count_;
+                auto pos = std::lower_bound(samples_.begin(), end, estimate);
+                std::move_backward(pos, end, end + 1);
+                *pos = estimate;
+                ++count_;
+            }
+            return estimate;
+        }
+        if (count_ < 3 || samples_[count_ - 1] - samples_[0] > 10.) return estimate;
+        const double median = (samples_[(count_ - 1) / 2] + samples_[count_ / 2]) / 2.;
+        return estimate + std::clamp((median - estimate) * .5, 0., 12.);
+    }
+};
+
 inline double regression(const Features &values, const Regression &model) {
     double output = model.beta[0];
     for (unsigned i = 0; i < values.size(); ++i) {
@@ -41,7 +68,7 @@ inline double regression(const Features &values, const Regression &model) {
 // scratch space per launch. No allocation or training takes place on the device.
 template<class Get>
 double predict(const LiveFit &fit, const Publications &published, unsigned size, Get get,
-               AcousticClock::Scratch &scratch, const Model &model = WEIGHTS) {
+               AcousticClock::Scratch &scratch, EarlyReference &early, const Model &model = WEIGHTS) {
     if (fit.elapsedMs < 10000 || !(fit.launchRpm > 0)) return NAN;
     const double elapsed = fit.elapsedMs / 1000.;
     unsigned trusted = 0, opening = 0, firstThirty = 0, first = 0, last = 0;
@@ -98,7 +125,7 @@ double predict(const LiveFit &fit, const Publications &published, unsigned size,
         std::clamp(optical - raw, -50., 50.) / 25., fit.launchRpm / 7000., std::min(1., mic.count / 30.),
         std::min(1., mic.span / 20.), ageFeature};
     const double adjusted = raw + std::clamp(regression(inputs, model.residual), -30., 30.);
-    const double z = (adjusted - elapsed) / 6.;
+    const double z = (early.adjust(fit.elapsedMs, adjusted, hasMic || hasFixed) - elapsed) / 6.;
     return elapsed + 6. * (std::max(z, 0.) + std::log1p(std::exp(-std::abs(z))));
 }
 }

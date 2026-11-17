@@ -48,6 +48,7 @@ class Service {
   unsigned snapshotCount_ = 0, lastFitMs_ = 0;
   uint32_t publishedLaunch_ = 0;
   StaminaFinish::Publications publications_;
+  StaminaFinish::EarlyReference earlyReference_;
   AcousticClock::Scratch forecastScratch_;
   EarlySpin::Forecast forecast_;
   Decay::RiccatiSupport publishedSupport_{};
@@ -206,6 +207,7 @@ public:
       forecast_ = {};
       publishedSupport_ = {};
       publications_ = {};
+      earlyReference_ = {};
     }
     if (!open || !live)
       publications_ = {};
@@ -257,7 +259,7 @@ public:
       };
       const StaminaFinish::LiveFit fit{ms, s.rpm(), publishedSupport_.original, publishedSupport_.accepted};
       forecast_ = {ms, rawCount, float(StaminaFinish::predict(fit, publications_,
-                         currentTrace ? trace->count() : 0, reading, forecastScratch_))};
+                         currentTrace ? trace->count() : 0, reading, forecastScratch_, earlyReference_))};
     }
     if (ready_ && s.results() && needsRecord_) {
       const unsigned model = unsigned(std::max(0, results()->best));
