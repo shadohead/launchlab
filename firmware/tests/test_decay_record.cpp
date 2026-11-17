@@ -1,4 +1,5 @@
 #include "decay_record.h"
+#include "../../scripts/offline_decay_models.h"
 #include <cassert>
 #include <iostream>
 #include <memory>

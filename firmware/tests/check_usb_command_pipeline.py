@@ -53,8 +53,10 @@ struct SerialFake {
   void println(const char *s){output.emplace_back(s);}
   template<class... T>void printf(const char *f,T...){output.emplace_back(f);}
 }Serial;
-namespace Controls {enum class Page:uint8_t{Main,History,Settings,Edit,Wipe,Battery,Tournament,Menu,MicRpm};constexpr uint8_t MIC_ROW=6;}
+namespace Controls {enum class Page:uint8_t{Main,History,Settings,Edit,Wipe,Battery,Tournament,Menu,MicRpm,Analysis};constexpr uint8_t MIC_ROW=6;}
 static struct {Controls::Page page=Controls::Page::Main;uint8_t menu=0;}controls;
+static bool captureBlocked=false;
+static void leaveMicPage(){act("analysis_capture");if(!captureBlocked)controls.page=Controls::Page::Main;}
 static struct {void dump(){}void askBench(){}void armTape(){}void sendTape(){}}micListener;
 static bool wipeBlocked=false,dirty=false,diagnostics=false,tournamentMode=false,historyPage=false,motionDemo=false;
 static bool stress=false,extPower=false,powerKeyRequested=false;
@@ -158,6 +160,9 @@ static void toggleHistory(){act("history");}static void nextView(){act("view");}
 static void cancelSettingEdit(){}static void syncNavigation(){}static void newSession(){act("session");}
 static void exportHistory(){act("export");}static void previewHistory(){act("view");}
 static void checkStorage(){act("storage");}static void checkMotionStorage(){act("storage");}
+static void exportLaunchWavs(){}
+static void exportCalibrationBatch(){act("cal_batch");}
+static void exportCalibration(){act("calibration");}
 static void exportScreen(){act("screen");}static void exportSignal(){act("export");}
 #if LAUNCHLAB_HIL
 // The HIL line parser: consumes "!..." lines and records them.
@@ -175,7 +180,7 @@ static uint32_t loopRng=11;
 static void pass(){pollCommands(Snapshot{});loopRng=loopRng*1664525u+1013904223u;clockMs+=5+(loopRng>>24)%31;}
 static void send(const std::string &bytes){for(char c:bytes)Serial.input.push_back(c);while(Serial.available())pass();}
 static void idle(unsigned ms){for(unsigned t=0;t<ms;t+=5)pass();}
-static void reset(){acted.clear();Serial.input.clear();Serial.output.clear();restoreRx={};themeRx={};milestoneRx={};effectRx={};idle(100);}
+static void reset(){acted.clear();Serial.input.clear();Serial.output.clear();restoreRx={};themeRx={};milestoneRx={};effectRx={};controls.page=Controls::Page::Main;captureBlocked=false;idle(100);}
 static unsigned harmful() {
   unsigned n=0;
   for(auto &[what,count]:acted)
@@ -229,11 +234,17 @@ int main() {
   reset();send("w");idle(30);assert(acted["export"]==1);
   reset();send("h\nh\n");assert(acted["history"]==2);
   reset();send("q\np\n");assert(acted["demo"]==1 && acted["status"]==1);
+  reset();controls.page=Controls::Page::Analysis;captureBlocked=true;send("q\n");
+  assert(acted["analysis_capture"]==1 && !acted["demo"] && controls.page==Controls::Page::Analysis);
+  captureBlocked=false;send("q\n");
+  assert(acted["analysis_capture"]==2 && acted["demo"]==1 && controls.page==Controls::Page::Main);
   reset();send("g");idle(300);send("7\n");assert(acted["pin"]==1 && acted["setting"]==1);
   reset();send("qp");idle(30);assert(!acted["demo"] && acted["status"]==1);
   std::cout<<"tools: bare, scripted, typed; glued letters run only the status letter\n";
 #if LAUNCHLAB_HIL
   reset();send("p!hil\n");assert(acted["status"]==1 && hilLines.back()=="hil");
+  reset();send("J\n");assert(acted["calibration"]==1);
+  reset();send("Z\n");assert(acted["cal_batch"]==1);
   reset();send("!home\n");send("v");idle(30);assert(acted["screen"]==1 && hilLines.back()=="home");
   std::cout<<"HIL rig: 'p' then '!hil' polled; a command right after a HIL line runs\n";
 #endif

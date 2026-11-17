@@ -1,8 +1,30 @@
 #pragma once
 #include "analysis_mode.h"
-#include "decay_models.h"
+#include "decay_types.h"
 #include "mic_view_ui.h"
 namespace AnalysisUI {
+inline float graphSpan(float elapsed, bool recording, float predictedFinish = NAN) {
+  if (recording && std::isfinite(predictedFinish) && predictedFinish > 0 && elapsed <= predictedFinish)
+    return std::max(MicTrace::MIN_SPAN_S, predictedFinish + 10.f);
+  return std::max(MicTrace::MIN_SPAN_S, elapsed + (recording ? 10.f : 0.f));
+}
+inline void timeMarker(lgfx::LGFXBase &g, uint16_t color, int left, int right,
+                       int top, int bottom, float seconds, float span) {
+  if (!(span > 0) || !std::isfinite(span) || !std::isfinite(seconds) || seconds < 0 || seconds > span)
+    return;
+  const int x = std::min(right - 1, left + int(std::lround(seconds / span * (right - left))));
+  for (int y = top + 1; y < bottom; y += 4)
+    for (int dy = 0; dy < 2 && y + dy < bottom; ++dy)
+      for (int dx = 0; dx < 2; ++dx)
+        g.drawPixel(x + dx, y + dy, color);
+}
+inline void timeMarkers(lgfx::LGFXBase &g, const Palette::Colors &c, int left, int right,
+                        int top, int bottom, float elapsed, float span, float predictedFinish) {
+  if (predictedFinish > 0)
+    timeMarker(g, c.warning, left, right, top, bottom, predictedFinish, span);
+  // Full-contrast 2x2 dots remain distinct from the faint horizontal grid.
+  timeMarker(g, c.text, left, right, top, bottom, elapsed, span);
+}
 // Reuse the existing screen sprite: no additional framebuffer or heap allocation.
 // This cache is never used when drawing directly to the display or during replay.
 struct Cache {
@@ -41,25 +63,30 @@ inline void stopwatch(lgfx::LGFXBase &g, int cx, int cy, int radius, uint16_t co
     g.drawCircle(cx, cy, radius - inset, color);
 }
 inline void fittedPlot(lgfx::LGFXBase &g, const Palette::Colors &c, const Decay::Results &fit,
-                          const Decay::Session &input, const Decay::Curve *winner, float elapsed,
-                          int top = 154, int bottom = 218, bool livePreview = false) {
+                       const Decay::Session *input, const Decay::Curve *winner, float elapsed, int top = 154,
+                       int bottom = 216, bool livePreview = false, const MicTrace::Trace *trace = nullptr,
+                       float predictedFinish = NAN) {
   const int left = 26, right = g.width() - 5;
-  // The live axis is a time window, independent of the unconstrained stop estimate.
-  constexpr float previewAheadSeconds = 10.f;
-  float span = std::max(MicTrace::MIN_SPAN_S, livePreview ? elapsed + previewAheadSeconds : elapsed);
-  if (winner && !livePreview)
-    span = std::max(span, winner->end);
+  // An allocation-free endpoint estimate has no copied input. Its raw trace
+  // is still available for context, with every unused reading shown in gray.
+  const unsigned count = input ? input->count : trace ? trace->count() : 0;
+  auto time = [&](unsigned i) { return input ? input->samples[i].ms * .001f : MicTrace::Trace::seconds(i); };
+  auto rpm = [&](unsigned i) { return input ? input->samples[i].rpm : float(trace->rawRpm(i)); };
+  float span = graphSpan(elapsed, livePreview, predictedFinish);
   float peak = fit.launcherRpm;
-  for (unsigned i = 0; i < input.count; ++i) {
-    span = std::max(span, input.samples[i].ms * .001f);
-    peak = std::max(peak, input.samples[i].rpm);
+  for (unsigned i = 0; i < count; ++i) {
+    span = std::max(span, time(i));
+    peak = std::max(peak, rpm(i));
   }
   peak = MicTrace::topRpm(peak);
   auto x = [&](float t) { return left + int(std::lround(t / span * (right - left))); };
   auto y = [&](float rpm) {
     return bottom - int(std::lround(std::clamp(rpm / peak, 0.f, 1.f) * (bottom - top)));
   };
+  g.setTextColor(c.muted, c.background);
   MicView::axes(g, c, left, right, bottom, span, peak, y);
+  if (livePreview)
+    timeMarkers(g, c, left, right, top, bottom, elapsed, span, predictedFinish);
   if (winner)
     for (unsigned i = 1; i < Decay::CURVE_POINTS; ++i) {
       const float start = winner->seconds(i - 1), end = winner->seconds(i);
@@ -85,9 +112,10 @@ inline void fittedPlot(lgfx::LGFXBase &g, const Palette::Colors &c, const Decay:
       drawTo(std::min(visibleEnd, fit.lastTime), c.accent);
       drawTo(visibleEnd, Palette::DARKGREY);
     }
-  for (unsigned i = 0; i < input.count; ++i) {
-    const auto &point = input.samples[i];
-    g.drawPixel(x(point.ms * .001f), y(point.rpm), point.excludedFromFit ? Palette::DARKGREY : c.accent);
+  for (unsigned i = 0; i < count; ++i) {
+    if (rpm(i) <= 0) continue;
+    const bool excluded = fit.endpointEstimate || !input || input->samples[i].excludedFromFit;
+    g.drawPixel(x(time(i)), y(rpm(i)), excluded ? Palette::DARKGREY : c.accent);
   }
   if (fit.launcherRpm > 0)
     MicView::marker(g, x(fit.launcherTime), y(fit.launcherRpm), c);
@@ -97,10 +125,11 @@ inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session, uint64
                  bool capturing, bool flipped, const Palette::Colors &c, const AnalogTachometer::Curve &curve,
                  const char *detectorState = "READY", bool sensorReady = true, Cache *cache = nullptr,
                  const Decay::Results *fit = nullptr, const Decay::Session *input = nullptr,
-                 const Decay::Curve *winner = nullptr, bool fitting = false) {
+                 const Decay::Curve *winner = nullptr, bool fitting = false, float publishedFinish = NAN,
+                 bool capturePending = false) {
   const int cx = g.width() / 2;
   char text[32];
-  if (session.replay()) {
+  if (session.replay() && !capturePending) {
     if (cache)
       cache->invalidate();
     const uint32_t duration = MotionReplay::playbackDurationMs(motion);
@@ -142,8 +171,10 @@ inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session, uint64
     }
   }
 
-  const uint64_t seconds = session.elapsedUs(now) / 1000000;
-  const uint16_t timerColor = session.number() && !session.running() ? c.muted : c.number;
+  const uint64_t elapsedUs = session.elapsedUs(now);
+  const uint64_t seconds = elapsedUs / 1000000;
+  const bool stopped = session.number() && !session.running();
+  const uint16_t timerColor = stopped ? c.muted : c.number;
   if (!reuse || cache->seconds != seconds || cache->timerColor != timerColor) {
     snprintf(text, sizeof(text), "%02u:%02u", unsigned(seconds / 60), unsigned(seconds % 60));
     const int width = g.textWidth(text, &fonts::Font4);
@@ -173,53 +204,65 @@ inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session, uint64
   snprintf(text, sizeof(text), "Last %s", timestamp);
   g.setTextColor(c.muted, c.background);
   g.drawString(text, cx, 131, 1);
-  const char *status = !session.running() && session.number() ? "Stopped"
+  const char *status = stopped                                ? "Curve unavailable"
                        : mic == MicView::Mic::Failed          ? "Mic unavailable"
                        : mic == MicView::Mic::NoMemory        ? "Not enough memory"
                        : mic == MicView::Mic::Starting        ? "Mic warming up"
                        : session.running()                    ? "Predicted finish --:--"
-                       : t.heard()                            ? "Mic RPM"
                                                               : "Listening";
-  const bool stopped = session.number() && !session.running();
   g.setTextColor(stopped ? c.muted : c.number, c.background);
   const char *firstLine = status;
   const char *secondLine = nullptr;
   char finishLabel[32];
-  if (stopped && fitting) {
+  float predictedFinish = NAN;
+  bool forecastLabel = false;
+  if (capturePending) {
+    firstLine = "Save pending";secondLine = "Please wait";
+    g.setTextColor(c.alert,c.background);
+  } else if (stopped && !session.hasManualStop()) {
+    firstLine = session.stopReason()==AnalysisMode::StopReason::Timeout ? "Time limit reached" : "Recording interrupted";
+    secondLine = "No stop recorded";
+  } else if (stopped && fitting) {
     firstLine = "Computing Best Fit";
     secondLine = "RPM Curve. . .";
-  } else if (session.running() && winner && fit && unsigned(fit->best) < Decay::MODEL_COUNT) {
-    const float estimate = Decay::liveFinishSeconds(*fit, float(session.elapsedUs(now)) / 1000000.f);
-    firstLine = "Predicted finish --:--";
-    if (std::isfinite(estimate)) {
-      const unsigned finish = unsigned(std::lround(estimate));
-      snprintf(finishLabel, sizeof(finishLabel), "Predicted finish %02u:%02u", finish / 60, finish % 60);
-      firstLine = finishLabel;
+  } else if (session.running()) {
+    forecastLabel = mic == MicView::Mic::On; // Includes the initial --:-- placeholder.
+    const bool measured = mic == MicView::Mic::On && t.started();
+    const auto active = EarlySpin::select(fit && fit->fixedRiccati && winner ? winner->end : publishedFinish,
+                                          t.earlyReadings(), elapsedUs / 1000, measured);
+    predictedFinish = active.seconds;
+    if(std::isfinite(predictedFinish)){
+      forecastLabel = true;
+      const unsigned sec=unsigned(std::lround(predictedFinish));
+      snprintf(finishLabel,sizeof(finishLabel),"Predicted finish %02u:%02u",sec/60,sec%60);
+      firstLine=finishLabel;secondLine=active.source==EarlySpin::Source::FixedRiccati ? "Fixed Riccati" :
+          measured ? "Early mic estimate" : "Population estimate";
     }
-    const char *name = Decay::modelName(unsigned(fit->best));
-    const char *suffix = std::strrchr(name, ' ');
-    snprintf(text, sizeof(text), "%.*s", int(suffix ? suffix - name : std::strlen(name)), name);
-    secondLine = text;
   } else if (stopped && winner && fit) {
-    firstLine = Decay::modelName(unsigned(fit->best));
-    // Font 1 is six pixels per character. Break long model names before "Model".
-    if (std::strlen(firstLine) * 6u > unsigned(g.width() - 4)) {
-      if (const char *space = std::strrchr(firstLine, ' ')) {
-        snprintf(text, sizeof(text), "%.*s", int(space - firstLine), firstLine);
-        firstLine = text;
-        secondLine = space + 1;
-      }
-    }
+    firstLine = fit->endpointEstimate ? "Fixed Riccati Estimate"
+                                     : fit->fixedRiccati ? "Fixed Riccati Model" : "Free Riccati Model";
   }
+  if (forecastLabel)
+    g.setTextColor(c.warning, c.background);
   g.drawString(firstLine, cx, 141, 1);
-  if (secondLine)
+  if (secondLine) {
+    if (forecastLabel)
+      g.setTextColor(c.number, c.background);
     g.drawString(secondLine, cx, 150, 1);
+  }
   const int graphTop = secondLine ? 164 : 154;
-  const float elapsed = float(session.elapsedUs(now)) / 1000000.f;
-  if (fit && input && (stopped || winner))
-    fittedPlot(g, c, *fit, *input, winner, elapsed, graphTop, stopped ? 218 : 207, session.running());
-  else
-    MicView::plot(g, t, c, 26, g.width() - 5, graphTop, session.running() ? 207 : 218, elapsed, true);
+  const float elapsed = float(elapsedUs) / 1000000.f;
+  const int graphBottom = session.running() ? 207 : 216;
+  g.setTextColor(c.muted, c.background);
+  if (fit && (input || winner) && (stopped || winner))
+    fittedPlot(g, c, *fit, input, winner, elapsed, graphTop, graphBottom, session.running(), &t, predictedFinish);
+  else {
+    const float span = std::max(t.elapsed(), graphSpan(elapsed, session.running(), predictedFinish));
+    MicView::plot(g, t, c, 26, g.width() - 5, graphTop, graphBottom,
+                  span, true);
+    if (session.running())
+      timeMarkers(g, c, 26, g.width() - 5, graphTop, graphBottom, elapsed, span, predictedFinish);
+  }
   if (fitting && !session.running()) {
     const int center = (26 + g.width() - 5) / 2;
     const unsigned phase = unsigned((now / 250000) % 3);
@@ -227,7 +270,9 @@ inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session, uint64
     for (unsigned i = 0; i < 3; ++i)
       g.fillCircle(center + int(i) * 8 - 8, 185, 3, i == phase ? c.accent : c.muted);
   }
-  if (session.running()) {
+  if (capturePending) {
+    ControlsUI::footer(g, "B Retry");
+  } else if (session.running()) {
     g.setTextDatum(top_left);
     g.setTextColor(c.muted, c.background);
     g.drawString("A Replay", 2, 226, 1);
@@ -237,7 +282,7 @@ inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session, uint64
     g.drawString("Press B when", promptCenter, 221, 1);
     g.drawString("spin finishes", promptCenter, 231, 1);
   } else {
-    ControlsUI::footer(g, "A Replay  B Details");
+    ControlsUI::footer(g, session.number() ? "A Replay  B Details" : "Hold B Exit");
   }
 }
 }

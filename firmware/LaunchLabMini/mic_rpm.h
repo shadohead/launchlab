@@ -6,6 +6,8 @@
 #include <cstring>
 #include <iterator>
 #include <utility>
+#include "relative_pitch.h"
+#include "audio_metadata.h"
 #ifdef ESP_PLATFORM
 #include <dsps_fft2r.h>
 #endif
@@ -77,7 +79,9 @@ inline float log2Fast(float x) {
 }
 struct Reading {
   float hz=0,rpm=0,candidateHz=0,competingHz=0,level=0,score=0,margin=0,flatness=0;
-  bool valid=false;Reason reason=Reason::Quiet;Search search=Search::None;uint8_t support=0,cycles=0;  // cycles and rpm: 0 unless valid
+  bool valid=false;Reason reason=Reason::Quiet;Search search=Search::None;uint8_t candidateCycles=0,support=0,cycles=0;  // cycles and rpm: 0 unless valid
+  AudioMetadata::Frame audio;
+  float relativeRpm=0;uint8_t pitchConfidence=0; // Analysis recovery; never changes valid or the lock state.
 };
 
 // 16 kHz to 4 kHz: a Hann-windowed sinc, cut at 2 kHz. What it lets through
@@ -140,7 +144,8 @@ public:
   unsigned window()const{return window_;}
   void benchTransform(bool plain){transform(plain);}  // the transform alone, for the device's bench
   // A new spin. `opticalRpm` is the launch's peak, 0 when it has none.
-  void reset(float opticalRpm=0){previous_=0;trusted_=0;trustedAt_=0;streak_=0;gaps_=0;conflictHz_=0;conflictFrames_=0;turnHz_=opticalRpm/60;cycles_=0;misses_=0;wide_=false;}
+  void reset(float opticalRpm=0,bool relativePitch=false){previous_=0;trusted_=0;trustedAt_=0;streak_=0;gaps_=0;conflictHz_=0;conflictFrames_=0;turnHz_=opticalRpm/60;cycles_=0;misses_=0;wide_=false;relativeEnabled_=relativePitch;relative_.reset();}
+  void forgetRelativePitch(){relative_.reset();}
   bool locked()const{return streak_>=STREAK;}
   // Analyzes the latest window() samples, oldest first, `seconds` after the
   // release at their centre. Forward only.
@@ -159,6 +164,15 @@ public:
     transform();
     const float norm=float(window_)*float(window_);
     for(unsigned i=0;i<bins_;++i){s.power[i]=(s.power[i])/norm;s.db[i]=DB_PER_OCTAVE*log2Fast(s.power[i]+1e-18f);}
+    if(relativeEnabled_) {
+      for(unsigned band=0;band<AudioMetadata::BANDS;++band){
+        float energy=0;
+        const unsigned first=unsigned(std::ceil(AudioMetadata::EDGES[band]/df_));
+        const unsigned last=std::min(bins_,unsigned(std::ceil(AudioMetadata::EDGES[band+1]/df_)));
+        for(unsigned i=first;i<last;++i)energy+=s.power[i];
+        out.audio.bands[band]=AudioMetadata::db(DB_PER_OCTAVE*log2Fast(energy+1e-18f));
+      }
+    }
     if(++frame_==0){std::fill(s.worked,s.worked+bins_,uint16_t(0));frame_=1;}
     float logSum=0,powerSum=0;unsigned count=0;
     for(unsigned i=unsigned(std::ceil(FLAT_LOW_HZ/df_));i<unsigned(std::floor(FLAT_HIGH_HZ/df_));++i) {
@@ -209,11 +223,20 @@ public:
       const bool close=previous_>0 && std::fabs(std::log2(bestHz/previous_))<0.15f;
       streak_=close?streak_+1:1;previous_=bestHz;gaps_=0;misses_=0;
       if(trusted_>0 && seconds-trustedAt_<=REACQUIRE_S && bestHz<=trusted_*NEAR_ABOVE && bestHz>=trusted_*REACQUIRE_FALL)streak_=std::max(streak_,STREAK);
-      if(streak_<STREAK){valid=false;reason=Reason::Acquiring;}
+      if(streak_<STREAK){out.candidateCycles=uint8_t(cycles);valid=false;reason=Reason::Acquiring;}
       else{trusted_=bestHz;trustedAt_=seconds;cycles_=uint8_t(cycles);out.cycles=uint8_t(cycles);out.rpm=bestHz*60/float(cycles);}
     } else missed();
     out.hz=valid?bestHz:0;out.candidateHz=bestHz;out.competingHz=competing;out.valid=valid;out.reason=reason;
     out.support=uint8_t(hits);out.score=bestRaw;out.margin=margin;
+    if(relativeEnabled_) {
+      auto db=[&](float hz){return dbAt(hz);};
+      auto contrast=[&](float hz){return contrastAt(hz);};
+      if(out.valid)relative_.anchor(out.hz,out.rpm,seconds,df_,db,contrast);
+      else if(!competing && (reason==Reason::WeakHarmonics || reason==Reason::Ambiguous)) {
+        const auto recovered=relative_.recover(seconds,df_,db,contrast);
+        out.relativeRpm=recovered.rpm;out.pitchConfidence=recovered.confidence;
+      } else relative_.pause();
+    }
     return out;
   }
 private:
@@ -225,6 +248,7 @@ private:
   void missed(){++gaps_;streak_=0;if(gaps_>=5)previous_=0;}
   Reading withhold(Reading &out,Reason reason) {
     conflictHz_=0;conflictFrames_=0;missed();
+    if(relativeEnabled_)relative_.pause();
     out.reason=reason;return out;
   }
   // The cycle count that puts `hz` at or below the launch's peak: 1 with no prior,
@@ -383,6 +407,7 @@ private:
   Space *s_;unsigned window_,fft_;float df_;unsigned bins_;int radius_;
   float previous_=0,logPrevious_=0,turnHz_=0,trusted_=0,trustedAt_=0;unsigned streak_=0,gaps_=0,conflictFrames_=0,misses_=0;float conflictHz_=0;
   uint8_t cycles_=0;bool wide_=false;uint16_t frame_=0;
+  RelativePitch::Tracker relative_;bool relativeEnabled_=false;
 };
 
 // A launch's spin as heard: the first readings the tracker trusts and how
@@ -421,7 +446,7 @@ struct Tape {
 class Stream {
 public:
   explicit Stream(Space *space,unsigned window=WINDOW,unsigned hop=HOP,unsigned fft=2048):tracker_(space,window,fft),hop_(hop) {}
-  void reset(float opticalRpm=0){decimator_.reset();tracker_.reset(opticalRpm);used_=0;taken_=0;settling_=TAPS/DECIMATE;}
+  void reset(float opticalRpm=0,bool relativePitch=false){decimator_.reset();tracker_.reset(opticalRpm,relativePitch);used_=0;taken_=0;settling_=TAPS/DECIMATE;}
   // Where the line goes as well; nullptr for nowhere.
   void record(Tape *tape){tape_=tape;}
   // Passes over `samples` of capture the reader lost: the clock still counts
@@ -429,6 +454,7 @@ public:
   // window and filter refill from the next sample.
   void skip(uint64_t samples) {
     decimator_.reset();used_=0;settling_=TAPS/DECIMATE;taken_+=unsigned(samples/DECIMATE);
+    tracker_.forgetRelativePitch();
     if(tape_)tape_->gap(samples/DECIMATE);
   }
   Tracker &tracker(){return tracker_;}

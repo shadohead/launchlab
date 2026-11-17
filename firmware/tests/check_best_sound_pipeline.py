@@ -149,6 +149,8 @@ static Appearance::Effect milestoneNext[Milestones::MAX_ROWS];static Milestones:
 static EffectSet::Config effectSet;
 static Appearance::Effect upcomingEffect=Appearance::Effect::Off;
 static Controls::State controls;
+// Analysis capture/exit has its own production lifecycle harness.
+static void leaveMicPage(){controls.page=Controls::Page::Main;}
 static PracticeHistory practice;
 static LaunchMotion::Trace latestMotion;
 static LaunchFeedback launchFeedback;

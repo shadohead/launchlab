@@ -16,6 +16,14 @@ int main(){
   assert(s.begin(2,true,7000,100000000) && s.running());assert(!s.tick(100000001));
   assert(s.tick(100000000+AnalysisMode::Session::LIMIT_US+999999));s.format(text,sizeof(text),900000000);assert(!strcmp(text,"05:00:000"));
   assert(!s.hasManualStop() && !s.results());
+  assert(s.stopReason()==AnalysisMode::StopReason::Timeout && !s.stop(401000000));
+  AnalysisMode::Session interrupted;
+  assert(interrupted.begin(4,true,6000,1000000) && interrupted.interrupt(21000000));
+  assert(interrupted.stopReason()==AnalysisMode::StopReason::Interrupted && !interrupted.hasManualStop());
+  assert(interrupted.elapsedUs(99000000)==20000000 && !interrupted.interrupt(22000000));
+  assert(!interrupted.stop(23000000) && !interrupted.hasManualStop());
+  interrupted.begin(5,true,6000,1000000);interrupted.interrupt(301000000);
+  assert(interrupted.stopReason()==AnalysisMode::StopReason::Timeout);
   s.toggleReplay(400000000);assert(s.replay());s.toggleReplay(401000000);assert(!s.replay());
   s.clear();assert(!s.running() && !s.number());
   assert(s.begin(3,true,8000,(1ULL<<32)*1000));assert(s.elapsedUs((1ULL<<32)*1000+123000)==123000);

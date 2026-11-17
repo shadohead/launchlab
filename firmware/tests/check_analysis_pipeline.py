@@ -19,6 +19,9 @@ prefix=r'''
 static Controls::State controls;static AnalysisMode::Session analysis;
 static uint32_t now=1000,lastDraw=0,micPageChecked=0;
 static uint32_t millis(){return now;}
+static uint64_t esp_timer_get_time(){return uint64_t(now)*1000;}
+// Capture and interruption semantics are exercised by check_analysis_lifecycle.py.
+static bool interruptAnalysis(uint64_t at){analysis.interrupt(at);return true;}
 static constexpr uint32_t MIC_PAGE_FRAME_MS=100;
 static bool dirty=false,micPageWarm=false,micPageFresh=false,celebrationSound=true,soundPreview=true;
 static unsigned navigation=0;

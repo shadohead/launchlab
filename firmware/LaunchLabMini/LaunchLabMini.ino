@@ -79,14 +79,7 @@ namespace Lab {inline PowerLab::Knobs knobs;inline bool running=false,displayAsl
 // overflowed on the first status print. Keep heavy or rarely used helpers as
 // real calls so each one uses stack only while it runs.
 #define LOOP_HELPER __attribute__((noinline))
-#if LAUNCHLAB_HIL
-// Test-only hardware-in-the-loop build; never a release. See tools/hil.
-static constexpr char VERSION[] = "0.20.8-analysis-hil-pm";
-#elif LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = "0.20.8-analysis-dev-pm";
-#else
-static constexpr char VERSION[] = "0.20.8-analysis-dev";
-#endif
+#include "firmware_version.h"
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ
 #define LAUNCHLAB_CPU_MHZ 80
@@ -100,9 +93,12 @@ static constexpr uint32_t ANALOG_SAMPLE_HZ = StickS3Acquisition::SAMPLE_HZ;
 #include "mic_view_ui.h"
 #include "analysis_ui.h"
 #include "analysis_result_service.h"
+#include "audio_metadata_store.h"
+#include <esp_app_desc.h>
 #include "analysis_result_ui.h"
 static AnalysisResult::Service analysisResults;
 static AnalysisMode::Session analysis;
+static bool analysisCapturePending();
 static AnalysisUI::Cache analysisCache;
 static uint8_t analysisCacheRotation=0xff;
 static StickS3Acquisition acquisition;
@@ -946,11 +942,11 @@ LOOP_HELPER static void draw(const Snapshot &s) {
       case Controls::Page::About:drawAbout(view);break;
       case Controls::Page::Wipe:ControlsUI::wipe(view,wipeConfirmation,millis(),wipeFailed,wipeBlocked,wipeComplete);break;
       case Controls::Page::Analysis: {
-        const auto *fit=analysisResults.matches(analysis)?analysisResults.results():nullptr;
+        const auto plot=analysisResults.plot(analysis);
         if(analysis.results())AnalysisResultUI::draw(view,analysis,analysisResults.details(),analysisResults.busy(),analysisResults.failed(),colors);
         else AnalysisUI::draw(view,analysis,esp_timer_get_time(),micListener.trace(),micPageState(),latestMotion,
           motionPending,visibleDisplayFlipped(),colors,latestCurve,s.stateName(),s.ready && !s.signalFault,cacheAnalysis?&analysisCache:nullptr,
-          fit,analysisResults.input(),fit?analysisResults.winner():nullptr,analysisResults.busy());
+          plot.fit,plot.input,plot.curve,analysisResults.busy(),analysisResults.publishedFinish(analysis.number()),analysisCapturePending());
         break;
       }
       case Controls::Page::MicRpm:
@@ -1208,6 +1204,7 @@ LOOP_HELPER static void exportMotion() {
 LOOP_HELPER static void newSession() {
   bestEffect.clear();
   practice.newSession();newSessionAt=millis();demo=false;diagnostics=false;historyPage=false;dirty=true;
+  if(controls.page==Controls::Page::Analysis)syncNavigation();
   Serial.println("HISTORY_SESSION next accepted launch starts a new session");
 }
 LOOP_HELPER static void previewSetting() {
@@ -1303,15 +1300,242 @@ static void cancelSettingEdit() {
 // detector's estimator and sensor profile can only change there, and the IMU
 // frame only outside a pull or capture. A cancelled power-off then leaves the
 // live state matching the records. Whatever fails stays pending.
+static constexpr const char *CAL_KEY="analysis_cal";
+using CalibrationBytes=std::unique_ptr<uint8_t,decltype(&heap_caps_free)>;
+// Each stopped run owns its packet until flash commits it. If the fit arrives
+// later its attachment can be retried without appending another pull.
+struct CalibrationPacket {
+  CalibrationPacket *next=nullptr;
+  Calibration::Archive::Entry stored{};
+  size_t raw=0,fit=0;
+  unsigned count=0;
+  bool fitSaved=false;
+  size_t audio=0;bool audioSaved=false;
+  uint8_t *audioData(){return data()+raw+Calibration::fitBytes(count);}
+  uint8_t *data(){return reinterpret_cast<uint8_t*>(this+1);}
+  bool pending()const{return !stored.size || (fit && !fitSaved) || (audio && !audioSaved);}
+  void send(){
+    Serial.printf("CAL_DATA %u ram\n",unsigned(raw+fit+audio));Serial.write(data(),raw+fit);if(audio)Serial.write(audioData(),audio);
+  }
+};
+static CalibrationPacket *firstCalibration=nullptr,*latestCalibration=nullptr;
+static uint32_t capturedAnalysisLaunch=0,lastCaptureTry=0;
+static bool calibrationCapturePending=false;
+static bool analysisCapturePending(){return calibrationCapturePending;}
+static uint32_t previewLaunch=0;
+static Calibration::Preview calibrationPreview;
+static ForecastShadow::Log shadowLog;
+
+static void observeForecastCheckpoint(unsigned elapsedMs){
+  if(!shadowLog.due(elapsedMs))return;
+  const auto *trace=micListener.trace();
+  if(trace && trace->launch()!=analysis.number())trace=nullptr;
+  shadowLog.observe(elapsedMs,analysis.rpm(),trace,micListener.warm(millis()),
+                    analysisResults.publishedFinish(analysis.number()),analysisResults.publishedSupport(analysis.number()));
+}
+
+static bool calibrationNeedsSave(){
+  if(calibrationCapturePending)return true;
+  for(auto *p=firstCalibration;p;p=p->next)if(p->pending())return true;
+  return false;
+}
+
+static void releaseSavedCalibrations(){
+  // A failed older attachment must not pin newer, fully committed packets.
+  // Keep the latest packet for a final fit and the immediate USB export.
+  auto **link=&firstCalibration;
+  while(auto *packet=*link){
+    if(packet==latestCalibration || packet->pending()){
+      link=&packet->next;
+    } else {
+      *link=packet->next;
+      packet->~CalibrationPacket();
+      heap_caps_free(packet);
+    }
+  }
+}
+
+LOOP_HELPER static bool captureStoppedCalibration(){
+  if(!analysis.number() || analysis.running() || capturedAnalysisLaunch==analysis.number())return true;
+  calibrationCapturePending=true;lastCaptureTry=millis();
+  const unsigned elapsed=unsigned(analysis.elapsedUs(0)/1000);
+  observeForecastCheckpoint(elapsed);
+  micListener.drainTrace();
+  micListener.freezeTrace(elapsed);
+  const auto *trace=micListener.trace();
+  const auto launch=analysis.number();
+  if(trace && trace->launch()!=launch)trace=nullptr;
+  const unsigned count=trace?trace->rawCount():0;
+  const size_t room=sizeof(CalibrationPacket)+Calibration::rawCapacity(count)+Calibration::fitBytes(count)+AudioMetadata::packedBytes(elapsed);
+  auto *memory=heap_caps_malloc(room,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+  if(!memory){settingsSave.mark(SettingsSave::AnalysisResult);saveError=dirty=true;Serial.println("CAL_ERROR stop_capture_no_memory");return false;}
+  auto *packet=new(memory) CalibrationPacket;
+  packet->count=count;
+  auto preview=previewLaunch==launch && calibrationPreview.count<=count?calibrationPreview:Calibration::Preview{};
+  // A newer prefix may still be fitting. Preserve the published estimate
+  // and its actual prefix length until another result replaces it.
+  if(elapsed>=EarlySpin::FIRST_MS && preview.model!=5){
+    const bool measured=trace && micListener.on() && trace->started();
+    preview={};preview.model=measured?6:7;preview.atMs=elapsed;preview.count=count;preview.kind=1;
+    preview.lo=preview.hi=EarlySpin::finish(measured?trace->earlyReadings():0,elapsed,measured);
+  }
+  packet->raw=Calibration::packRaw(packet->data(),launch,analysis.rpm(),elapsed,
+      unsigned(analysis.stopReason()),esp_app_get_description()->app_elf_sha256,preview,trace,shadowLog);
+  const auto *audio=micListener.audioMetadata(launch);
+  const unsigned skipped=trace?trace->skippedMs():0,drops=trace?trace->lostFrames():0;
+  packet->audio=audio?audio->pack(packet->audioData(),elapsed,skipped,drops):
+    AudioMetadata::pack(packet->audioData(),nullptr,elapsed,skipped,drops,false);
+  if(latestCalibration)latestCalibration->next=packet;
+  else firstCalibration=packet;
+  latestCalibration=packet;releaseSavedCalibrations();
+  settingsSave.mark(SettingsSave::AnalysisResult);
+  capturedAnalysisLaunch=launch;calibrationCapturePending=false;
+  previewLaunch=0;calibrationPreview={};
+  return true;
+}
+
+LOOP_HELPER static void captureCalibration(bool completed){
+  auto &preview=calibrationPreview;
+  const auto *fits=analysisResults.results();
+  const auto *input=analysisResults.input();
+  if(!fits || !input || !analysisResults.matches(analysis))return;
+  if(analysis.running()){
+    previewLaunch=analysis.number();
+    preview={};
+    preview.atMs=uint32_t(analysis.elapsedUs(esp_timer_get_time())/1000);
+    preview.count=input->count;
+    if(fits->fixedRiccati){
+      const float finish=fits->models[unsigned(Decay::Model::Riccati)].stopSeconds;
+      preview.model=5;preview.kind=1;preview.lo=preview.hi=finish;
+      preview.stops[unsigned(Decay::Model::Riccati)]=finish;
+    }
+  } else if(completed){
+    auto *packet=latestCalibration;
+    if(!packet || packet->fit || packet->count!=input->count ||
+       FlashLayout::get32(packet->data()+4)!=analysis.number() ||
+       FlashLayout::get32(packet->data()+12)!=input->stopMs)return;
+    Calibration::packFit(packet->data()+packet->raw,*input,*fits);
+    packet->fit=Calibration::fitBytes(packet->count);
+    settingsSave.mark(SettingsSave::AnalysisResult);
+  }
+}
+
+// Called only inside a granted checkpoint. A failed write keeps both the
+// packet and its settings bit pending for SettingsSave's five-second retry.
+LOOP_HELPER static bool saveCalibration(){
+  bool saved=true;
+  // Commit raw traces first; metadata and fit failures retain their own retry state.
+  for(auto *p=firstCalibration;p;p=p->next)
+    if(!p->stored.size && !Calibration::Archive::append(spiffsFlash,p->data(),p->raw,&p->stored))return false;
+  Calibration::Archive::Index committed;
+  if(firstCalibration && !Calibration::Archive::scan(spiffsFlash,committed))return false;
+  for(auto *p=firstCalibration;p;p=p->next){
+    const auto end=committed.entries.begin()+committed.count;
+    const auto begin=end-std::min(committed.count,Calibration::Archive::KEEP);
+    const bool retained=std::any_of(begin,end,[&](const auto &e){
+      return e.sequence==p->stored.sequence && e.offset==p->stored.offset && e.size==p->stored.size;
+    });
+    if(!retained){
+      if((p->audio && !p->audioSaved) || (p->fit && !p->fitSaved))Serial.println("CAL_NOTICE optional_data_evicted");
+      p->audioSaved=p->fitSaved=true;continue;
+    }
+    if(p->audio && !p->audioSaved){
+      if(!AudioMetadataStore::save(spiffsFlash,p->stored.sequence,FlashLayout::get32(p->data()+p->raw-4),
+                                  p->audioData(),p->audio))saved=false;
+      else p->audioSaved=true;
+    }
+    if(p->fit && !p->fitSaved){
+      if(!Calibration::Archive::attach(spiffsFlash,p->stored,p->data()+p->raw,p->fit))saved=false;
+      else p->fitSaved=true;
+    }
+  }
+  releaseSavedCalibrations();return saved && !calibrationCapturePending;
+}
+static bool sendStoredCalibration(const Calibration::Archive::Entry &e,const AudioMetadataStore::Index *audioIndex=nullptr){
+  for(auto *p=firstCalibration;p;p=p->next)
+    if(p->stored.size && p->stored.sequence==e.sequence && ((p->fit && !p->fitSaved) || (p->audio && !p->audioSaved))){p->send();return true;}
+  CalibrationBytes buf(static_cast<uint8_t*>(heap_caps_malloc(e.size+Calibration::fitBytes(Decay::MAX_SAMPLES)+AudioMetadata::MAX_BYTES,
+                                                              MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT)),heap_caps_free);
+  if(!buf || !spiffsFlash.read(e.offset+Calibration::Archive::HEADER_BYTES,buf.get(),e.size)){
+    Serial.println("CAL_ERROR read_failed");return false;
+  }
+  if(!Calibration::validPacket(buf.get(),e.size)){Serial.println("CAL_ERROR corrupt_raw_trace");return false;}
+  size_t bytes=e.size;
+  if(Calibration::isRawPacket(buf.get())){
+    const unsigned count=FlashLayout::get32(buf.get()+20);
+    const auto at=Calibration::Archive::fitOffset(e);
+    const auto n=Calibration::fitBytes(count);
+    uint8_t *fit=buf.get()+bytes;
+    if(count<=Decay::MAX_SAMPLES && at+n<=e.offset+Calibration::Archive::SLOT_BYTES &&
+       spiffsFlash.read(at,fit,4) && !std::memcmp(fit,"LLF2",4)){
+      if(spiffsFlash.read(at+4,fit+4,n-4) && Calibration::validFit(fit,n,count))bytes+=n;
+      else Serial.println("CAL_NOTICE invalid_fit_omitted");
+    }
+  }
+  size_t audioBytes=0;
+  const auto traceCrc=FlashLayout::get32(buf.get()+e.size-4);
+  const bool audioOk=audioIndex
+      ? AudioMetadataStore::read(spiffsFlash,*audioIndex,e.sequence,traceCrc,buf.get()+bytes,audioBytes)
+      : AudioMetadataStore::read(spiffsFlash,e.sequence,traceCrc,buf.get()+bytes,audioBytes);
+  if(!audioOk){
+    Serial.println("CAL_ERROR audio_metadata_read_failed");return false;
+  }
+  bytes+=audioBytes;
+  Serial.printf("CAL_DATA %u flash\n",unsigned(bytes));Serial.write(buf.get(),bytes);return true;
+}
+
+LOOP_HELPER static void exportLaunchWavs(){
+  Serial.println("WAV_ERROR replaced_by_audio_metadata_use_calibration_export");
+}
+
+LOOP_HELPER static void exportCalibrationBatch(){
+  Calibration::Archive::Index index;
+  const bool readable=Calibration::Archive::scan(spiffsFlash,index);
+  if(!readable){
+    if(!firstCalibration){Serial.println("CAL_ERROR archive_unavailable");return;}
+    index.count=0;Serial.println("CAL_RAM_ONLY");
+  }
+  unsigned stored=std::min(index.count,Calibration::Archive::KEEP),ram=0;
+  for(auto *p=firstCalibration;p;p=p->next)if(!readable || !p->stored.size)++ram;
+  Serial.printf("CAL_COUNT %u\n",stored+ram);
+  AudioMetadataStore::Index audioIndex;
+  const auto *audio=stored && AudioMetadataStore::scan(spiffsFlash,audioIndex)?&audioIndex:nullptr;
+  for(unsigned i=index.count-stored;i<index.count;++i)
+    if(!sendStoredCalibration(index.entries[i],audio))return;
+  for(auto *p=firstCalibration;p;p=p->next)if(!readable || !p->stored.size)p->send();
+  Serial.println("CAL_END");
+}
+
+LOOP_HELPER static void exportCalibration(){
+  Calibration::Archive::Index index;
+  if(Calibration::Archive::scan(spiffsFlash,index) || firstCalibration){
+    Serial.println("CAL_HISTORY");
+    if(!latestCalibration && index.count){sendStoredCalibration(index.entries[index.count-1]);return;}
+  }
+  if(latestCalibration){latestCalibration->send();return;}
+  const size_t n=prefs.getBytesLength(CAL_KEY);
+  if(!n){
+    Decay::Record::Image old{};
+    if(prefs.getBytesLength("analysis_fit")==old.size() && prefs.getBytes("analysis_fit",old.data(),old.size())==old.size()){
+      Serial.printf("CAL_FIT %u flash\n",unsigned(old.size()));Serial.write(old.data(),old.size());
+    } else Serial.println("CAL_ERROR no_saved_trace");
+    return;
+  }
+  if(n<Calibration::HEADER+4 || n>Calibration::MAX_BYTES){Serial.println("CAL_ERROR invalid_size");return;}
+  CalibrationBytes disk(static_cast<uint8_t*>(heap_caps_malloc(n,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT)),heap_caps_free);
+  if(!disk || prefs.getBytes(CAL_KEY,disk.get(),n)!=n){Serial.println("CAL_ERROR read_failed");return;}
+  Serial.printf("CAL_DATA %u flash\n",unsigned(n));Serial.write(disk.get(),n);
+}
+
 LOOP_HELPER static void logAnalysisResults() {
   const auto *fits=analysisResults.results();if(!fits)return;
   Serial.printf("ANALYSIS_RESULTS samples=%u source=%u best=%d validation=%d observed_stop=%d\n",fits->sampleCount,fits->sourceCount,fits->best,fits->validationPossible,fits->actualStopValid);
-  for(unsigned i=0;i<Decay::MODEL_COUNT;++i){const auto &r=fits->models[i];
-    Serial.printf("ANALYSIS_MODEL model=%c valid=%d converged=%d boundary=%d unstable=%d a=%.7g b=%.7g c=%.7g k=%.7g n=%.7g stop_valid=%d stop_s=%.3f error_valid=%d error_s=%.3f abs_error_s=%.3f\n",
-      'A'+i,r.valid,r.converged,r.boundary,r.unstable,r.params.a,r.params.b,r.params.c,r.params.k,r.params.n,r.stopValid,r.stopSeconds,r.stopErrorValid,r.stopError,r.absoluteStopError);
-    const Decay::Metric *metrics[]={&r.training,&r.validation,&r.all};
-    for(unsigned j=0;j<3;++j){const auto &m=*metrics[j];Serial.printf("ANALYSIS_METRIC model=%c set=%s valid=%d rmse=%.3f mae=%.3f max=%.3f\n",'A'+i,j==0?"train":j==1?"validation":"all",m.valid,m.rmse,m.mae,m.maxError);}
-  }
+  const unsigned i=unsigned(Decay::Model::Riccati);
+  const auto &r=fits->models[i];
+  Serial.printf("ANALYSIS_MODEL model=%c valid=%d converged=%d boundary=%d unstable=%d a=%.7g b=%.7g c=%.7g k=%.7g n=%.7g stop_valid=%d stop_s=%.3f error_valid=%d error_s=%.3f abs_error_s=%.3f\n",
+    'A'+i,r.valid,r.converged,r.boundary,r.unstable,r.params.a,r.params.b,r.params.c,r.params.k,r.params.n,r.stopValid,r.stopSeconds,r.stopErrorValid,r.stopError,r.absoluteStopError);
+  const Decay::Metric *metrics[]={&r.training,&r.validation,&r.all};
+  for(unsigned j=0;j<3;++j){const auto &m=*metrics[j];Serial.printf("ANALYSIS_METRIC model=%c set=%s valid=%d rmse=%.3f mae=%.3f max=%.3f\n",'A'+i,j==0?"train":j==1?"validation":"all",m.valid,m.rmse,m.mae,m.maxError);}
 }
 // Optional latest-fit record: reserve capacity for the next practice-history save.
 // CRC-protected bytes are read back. Failure leaves the current results usable in RAM.
@@ -1367,7 +1591,10 @@ static void writeSettings() {
   if((items&SettingsSave::Milestones) && milestoneStore.save(milestones))saved|=SettingsSave::Milestones;
   if((items&SettingsSave::Pin) && prefs.putUChar("ao_pin",live.pin)==1)saved|=SettingsSave::Pin;
   if((items&SettingsSave::ExtPower) && prefs.putBool("ext5v",extPower)==1)saved|=SettingsSave::ExtPower;
-  if((items&SettingsSave::AnalysisResult) && saveAnalysisResult())saved|=SettingsSave::AnalysisResult;
+  if(items&SettingsSave::AnalysisResult){
+    const bool fitSaved=saveAnalysisResult();
+    if(saveCalibration() && fitSaved)saved|=SettingsSave::AnalysisResult;
+  }
   settingsSave.wrote(saved);dirty=true;
   Serial.printf("SETTINGS_SAVE items=0x%03x saved=0x%03x\n",unsigned(items),unsigned(saved));
 }
@@ -1478,10 +1705,33 @@ LOOP_HELPER static void tickMicPage() {
     if(controls.page!=Controls::Page::Analysis || (!analysis.replay() && !analysis.results()))dirty=true;
   }
 }
+static bool interruptAnalysis(uint64_t now) {
+  analysis.interrupt(now);
+  return captureStoppedCalibration();
+}
+
+// Preserve an unfinished recording before the next microphone launch reuses
+// its trace and audio metadata buffers. Invalid optical pulls leave it running.
+static void followAnalysisLaunch(const Snapshot &event) {
+  if(controls.page==Controls::Page::Analysis) {
+    if(!event.valid || !event.launches || !event.burstEndHostUs || event.launches==analysis.number())return;
+    if(!interruptAnalysis(esp_timer_get_time())) {
+      Serial.println("CAL_ERROR launch_waiting_for_capture");return;
+    }
+    capturedAnalysisLaunch=0;
+    analysis.begin(event.launches,event.valid,event.resultRpm,event.burstEndHostUs);
+    shadowLog.reset();
+  }
+  micListener.launch(event.launches,event.valid,event.resultRpm,event.burstStartHostUs,event.burstEndHostUs);
+}
+
 // Sleep and power-off wait for this, so neither meets a running mic, unless
 // its stop never ends: then they go ahead after MicSession::STOP_LIMIT_MS.
 LOOP_HELPER static void leaveMicPage() {
-  if(controls.page==Controls::Page::Analysis){analysis.clear();controls.page=Controls::Page::Main;syncNavigation();dirty=true;}
+  if(controls.page==Controls::Page::Analysis){
+    if(!interruptAnalysis(esp_timer_get_time()))return;
+    analysis.clear();controls.page=Controls::Page::Main;syncNavigation();dirty=true;
+  }
   if(controls.page==Controls::Page::MicRpm){controls.page=Controls::Page::Menu;syncNavigation();dirty=true;}
 }
 static void browseOlder() {
@@ -1492,6 +1742,9 @@ static void browseOlder() {
 }
 static void navigate(Controls::Effect effect,Controls::Page previous) {
   if(previous!=controls.page && (previous==Controls::Page::Analysis || controls.page==Controls::Page::Analysis)) {
+    if(previous==Controls::Page::Analysis && !interruptAnalysis(esp_timer_get_time())) {
+      controls.page=previous;syncNavigation();dirty=true;return;
+    }
     analysis.clear();launchFeedback.clear();dirty=true;
   }
   if(previous==Controls::Page::Wipe && controls.page!=previous)wipeConfirmation.cancel();
@@ -1502,7 +1755,8 @@ static void navigate(Controls::Effect effect,Controls::Page previous) {
     case Controls::Effect::AnalysisReplay:
       analysis.toggleReplay(esp_timer_get_time());dirty=true;break;
     case Controls::Effect::AnalysisStop:
-      if(analysis.stop(esp_timer_get_time())){micListener.freezeTrace();inactivity.touch(millis());dirty=true;}
+      if(analysis.stop(esp_timer_get_time())){captureStoppedCalibration();inactivity.touch(millis());dirty=true;}
+      else if(calibrationCapturePending){captureStoppedCalibration();dirty=true;}
       else if(analysis.nextResult()){inactivity.touch(millis());dirty=true;}
       break;
     case Controls::Effect::Recap:toggleFeedback();break;
@@ -1621,6 +1875,7 @@ LOOP_HELPER static bool recoverWipe() {
   syncNavigation();Serial.println("WIPE_BOOT_ERROR normal_load_and_saves_blocked");return false;
 }
 LOOP_HELPER static void previewHistory() {
+  if(controls.page==Controls::Page::Analysis){leaveMicPage();if(controls.page==Controls::Page::Analysis)return;}
   bestEffect.clear();
   demo=!demo;diagnostics=false;historyPage=demo;historyView=PracticeUI::View::Recent;historyOffset=0;
   if(demo && !demoPractice.size()) {
@@ -1845,9 +2100,10 @@ LOOP_HELPER static ShutdownFlush flushForShutdown(uint32_t now,const Snapshot &s
       historyFailed=bestFailed=false;
     } else {historyFailed=!historyLogged;bestFailed=!bestLogged;}
   }
-  if(historyFailed || bestFailed) {
+  const bool calibrationFailed=calibrationNeedsSave();
+  if(historyFailed || bestFailed || calibrationFailed) {
     saveError=true;++saveErrors;dirty=true;
-    Serial.printf("POWER_OFF_DEFERRED %s_save_failed\n",historyFailed?"history":"best");
+    Serial.printf("POWER_OFF_DEFERRED %s_save_failed\n",calibrationFailed?"calibration":historyFailed?"history":"best");
     if(!acquisition.request(Action::CheckpointEnd))acquisition.request(Action::Pin,s.pin);
     lastSaveTry=millis();
     return ShutdownFlush::SaveFailed;
@@ -2011,6 +2267,7 @@ LOOP_HELPER static void powerKeyOff(uint32_t now,const Snapshot &s) {
     if(late){powerKeyRequested=false;Serial.println("POWER_KEY_OFF_DEFERRED motion_capture_busy");}
     return;
   }
+  if(controls.page==Controls::Page::Analysis){leaveMicPage();if(controls.page==Controls::Page::Analysis)return;}
   if(micListener.holdsSleep(now)){leaveMicPage();return;}
   if(!micListener.off())Serial.println("POWER_OFF_NOTICE mic_stop_timeout");
   const auto flushed=flushForShutdown(now,s,late);
@@ -2080,6 +2337,7 @@ LOOP_HELPER static void exportBackup() {
   heap_caps_free(buffer);heap_caps_free(files);
 }
 LOOP_HELPER static void startRestore() {
+  if(analysis.running() || calibrationNeedsSave()){Serial.println("RESTORE_ERROR reason=analysis_pending written=0");return;}
   if(!restoreText)restoreText=static_cast<char *>(heap_caps_malloc(DeviceBackup::LOADED_TEXT_BYTES,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
   if(!restoreText){Serial.println("RESTORE_ERROR reason=out_of_memory written=0");return;}
   restoreRx.start(restoreText,DeviceBackup::LOADED_TEXT_BYTES,millis());
@@ -2105,6 +2363,7 @@ static bool restoreLoaded(const DeviceBackup::Contents &c) {
 // idle checkpoint with readback, then restart so each store loads normally.
 // Restored records supersede whatever generation the device holds.
 LOOP_HELPER static void finishRestore(const Snapshot &s) {
+  if(analysis.running() || calibrationNeedsSave()){Serial.println("RESTORE_ERROR reason=analysis_pending written=0");return;}
   auto contents=std::unique_ptr<DeviceBackup::Contents>(new(std::nothrow) DeviceBackup::Contents);
   if(!contents){Serial.println("RESTORE_ERROR reason=out_of_memory");return;}
   // Decoded in place: base64's bytes never overtake its text.
@@ -2876,7 +3135,7 @@ void setup() {
     StickS3SensorProfile::minMark(sensorProfile),StickS3SensorProfile::EDGE_SWING_FRACTION);
   Serial.printf("RPM_SETTING_BOOT selected=%s default=%s legacy_history=retained_metric_not_encoded\n",RpmEstimator::name(rpmEstimator),
     RpmEstimator::name(RpmEstimator::DEFAULT_MODE));
-  Serial.println("READY commands: p status, P power log, C CPU power profiling, a/c tap A, h tap B, o hold A, b hold B, d diagnostics, n new session, u history export, K backup export, R backup restore, L custom themes, T theme request, M milestones, U milestone request, F loaded effects, X loaded-effect request, e motion export, q synthetic recap, E<0-4,7> best effect preview, t synthetic history, y/z storage check, v screen, w recorder export, x ext5V, g<N> GPIO, s stress, j UI stall");
+  Serial.println("READY commands: p status, P power log, C CPU power profiling, a/c tap A, h tap B, o hold A, b hold B, d diagnostics, n new session, u history export, J calibration export, K backup export, R backup restore, L custom themes, T theme request, M milestones, U milestone request, F loaded effects, X loaded-effect request, e motion export, q synthetic recap, E<0-4,7> best effect preview, t synthetic history, y/z storage check, v screen, w recorder export, x ext5V, g<N> GPIO, s stress, j UI stall");
 #if LAUNCHLAB_HIL
   hilBoot();
 #endif
@@ -2946,6 +3205,7 @@ LOOP_HELPER static void previewBestEffect(Appearance::Effect effect) {
   HilFx::playing=-1;
 #endif
   if(tournamentMode || motionPending || !latestMotion.number){Serial.println("EFFECT_PREVIEW_ERROR no_recap");return;}
+  if(controls.page==Controls::Page::Analysis){leaveMicPage();if(controls.page==Controls::Page::Analysis)return;}
   if(controls.page==Controls::Page::Edit)cancelSettingEdit();
   controls.page=Controls::Page::Main;syncNavigation();
   historyPage=diagnostics=motionDemo=demo=false;
@@ -3042,6 +3302,7 @@ LOOP_HELPER static void runUsbCommand(const char *command,const Snapshot &s) {
   else if(c=='Q'){const bool ok=imuAcquisition.quiet(300);Serial.printf("IMU_QUIET_TEST ms=300 ok=%d flash_write=0\n",ok);}
   else if(c=='q') {
     if(tournamentMode){Serial.println("RECAP_DEMO_ERROR leave_tournament_first");return;}
+    if(controls.page==Controls::Page::Analysis){leaveMicPage();if(controls.page==Controls::Page::Analysis)return;}
     if(controls.page==Controls::Page::Edit)cancelSettingEdit();
     controls.page=Controls::Page::Main;syncNavigation();
     historyPage=diagnostics=false;motionDemo=true;
@@ -3066,6 +3327,9 @@ LOOP_HELPER static void runUsbCommand(const char *command,const Snapshot &s) {
     else {Serial.println("MIC_STATE error=busy_page");return;}
     syncNavigation();dirty=true;
   }
+  else if(c=='J')exportCalibration();
+  else if(c=='Z')exportCalibrationBatch();
+  else if(c=='G')exportLaunchWavs();
   else if(c=='A')micListener.dump();
   else if(c=='Y')micListener.askBench();
   else if(c=='W')micListener.armTape();
@@ -3226,11 +3490,12 @@ void loop() {
   }
   if(wipeBlocked)return;
   pollCommands(s);
+  if(calibrationCapturePending && uint32_t(millis()-lastCaptureTry)>=1000)captureStoppedCalibration();
   const bool analysisOpen=controls.page==Controls::Page::Analysis;
   if(analysisOpen) {
     const auto now=esp_timer_get_time();
     if(analysis.tick(now)) {
-      micListener.freezeTrace();
+      captureStoppedCalibration();
       inactivity.touch(millis());
       dirty=true;
     }
@@ -3242,10 +3507,13 @@ void loop() {
   }
   tickMicPage();
   const bool resultsWereReady=analysisResults.ready();
-  if(analysisResults.tick(analysisOpen,analysis,micListener.trace())) {
+  if(analysisResults.tick(analysisOpen && !calibrationCapturePending,analysis,micListener.trace())) {
     dirty=true;
-    if(!resultsWereReady && analysisResults.ready())logAnalysisResults();
+    const bool completed=!resultsWereReady && analysisResults.ready();
+    captureCalibration(completed);
+    if(completed)logAnalysisResults();
   }
+  if(analysisOpen && analysis.running())observeForecastCheckpoint(unsigned(analysis.elapsedUs(esp_timer_get_time())/1000));
   if(analysisResults.recordPending())settingsSave.mark(SettingsSave::AnalysisResult);
   pollPowerKey(millis());
   Snapshot event;
@@ -3255,10 +3523,7 @@ void loop() {
       Serial.printf("LAUNCH_RESULT valid=%d peak_rpm=%.1f revs=%lu amplitude=%.1f start_noise=%.1f launches=%lu end=%s t_us=%llu\n",
         event.valid,event.resultRpm,(unsigned long)event.revolutions,event.amplitude,event.startNoise,
         (unsigned long)event.launches,event.endName(),(unsigned long long)event.detectorUs);
-      if(controls.page!=Controls::Page::Analysis || event.valid)
-        micListener.launch(event.launches,event.valid,event.resultRpm,event.burstStartHostUs,event.burstEndHostUs);
-      if(controls.page==Controls::Page::Analysis)
-        analysis.begin(event.launches,event.valid,event.resultRpm,event.burstEndHostUs);
+      followAnalysisLaunch(event);
       if(controls.page==Controls::Page::WearCheck) {
         const auto stageBefore=controls.wear.stage();
         const auto stepBefore=controls.wear.step();

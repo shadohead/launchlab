@@ -37,7 +37,7 @@ inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session,
     snprintf(text, sizeof(text), "%.0f", details->revolutions);
   else
     snprintf(text, sizeof(text), "--");
-  row("Total revs", text, 79);
+  row(session.hasManualStop() ? "Total revs" : "Recorded revs", text, 79);
   if (session.rpm() > 0 && session.rpm() <= 1000)
     snprintf(text, sizeof(text), "0.0s");
   else if (details && std::isfinite(details->battleStaminaSeconds))
@@ -70,12 +70,15 @@ inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session,
     }
   } else {
     g.setTextDatum(top_center);
-    g.drawString(fitting   ? "Comparing models..."
+    g.drawString(fitting   ? "Fitting curve..."
                  : failed  ? "Fit unavailable"
                  : details ? "No complete bands"
                            : "No winning model",
                  cx, 145, 1);
   }
-  ControlsUI::footer(g, pages > 1 ? "A Back  B More" : "A Back");
+  if (details && details->endpointEstimate)
+    ControlsUI::footer(g, pages > 1 ? "A Back B More  Est." : "A Back  Estimated");
+  else
+    ControlsUI::footer(g, pages > 1 ? "A Back  B More" : "A Back");
 }
 }

@@ -1,11 +1,11 @@
 #pragma once
-#include "decay_models.h"
+#include "decay_types.h"
 
 namespace AnalysisDetails {
 constexpr unsigned ROWS = 6;
 struct Summary {
   float revolutions = 0, battleStaminaSeconds = NAN, decayRate = 0;
-  bool complete = false;
+  bool complete = false, endpointEstimate = false;
   unsigned firstBand = 0, count = 0;
   float seconds[65] = {}; // Positive acoustic RPM fits in uint16_t.
 };

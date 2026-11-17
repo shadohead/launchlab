@@ -55,17 +55,29 @@ private:
     if (pending_ &&
         (seconds - pendingAt_ > 0.4f || std::fabs(rpm - pendingLast_) > std::max(150.f, 0.03f * rpm)))
       pending_ = 0;
-    if (!pending_)
+    if (!pending_) {
       pendingSum_ = 0;
+      declineAnchor_ = rpm;
+      declines_ = 0;
+      // Keep the previous trusted RPM across a gap. A stable higher tone
+      // alone is insufficient evidence that the spin has changed tracks.
+      pendingHigher_ = rpm > value_ + std::max(200.f, .05f * value_);
+      declineStep_ = std::max(100.f, .02f * rpm);
+    } else if (declineAnchor_ - rpm >= declineStep_) {
+      declineAnchor_ = rpm;
+      ++declines_;
+    }
     pendingSum_ += rpm;
     pendingLast_ = rpm;
     pendingAt_ = seconds;
-    if (++pending_ < 3)
+    if (++pending_ < 3 || (pendingHigher_ && declines_ < 2))
       return 0;
-    return seed(pendingSum_ / 3.f, seconds);
+    return seed(pendingHigher_ ? rpm : pendingSum_ / pending_, seconds);
   }
   bool seen_ = false, initialized_ = false, reacquiring_ = false;
-  unsigned pending_ = 0;
+  unsigned pending_ = 0, declines_ = 0;
+  bool pendingHigher_ = false;
+  float declineAnchor_ = 0, declineStep_ = 0;
   float seenAt_ = 0, goodAt_ = 0, value_ = 0, rate_ = 0, pendingSum_ = 0, pendingLast_ = 0, pendingAt_ = 0;
 };
 }

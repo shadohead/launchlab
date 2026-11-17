@@ -34,11 +34,16 @@ struct LGFXBase {
   std::vector<int> valueEdges;
   std::vector<int> valueFonts;
   std::vector<std::array<int,4>> spans; // left, right, y and font of every string
+  std::vector<uint16_t> textColors;
   std::vector<std::string> texts;
   bool drew(const char *text)const{return std::find(texts.begin(),texts.end(),text)!=texts.end();}
   int width(){return 135;}
   void setTextDatum(int d){datum=d;}void setTextColor(uint16_t color,uint16_t){ink=color;}
-  void fillRect(int x,int y,int w,int h,uint16_t){assert(x>=0 && y>=0 && x+w<=135 && y+h<=240);}
+  void fillRect(int x,int y,int w,int h,uint16_t){
+    assert(x>=0 && y>=0 && x+w<=135 && y+h<=240);
+    // The footer clears its background after the axes have been drawn.
+    if(y==229)for(const auto &s:spans)assert(s[2]+(s[3]==4?26:s[3]==2?16:8)<=y);
+  }
   void drawRoundRect(int x,int y,int w,int h,int,uint16_t){fillRect(x,y,w,h,0);}
   static int font4Width(const char *text){int width=0;for(const char *p=text;*p;++p)width+=(*p>='0' && *p<='9')?14:*p==':'?7:*p==' '?5:*p=='R'?17:*p=='P'?16:*p=='M'?21:18;return width;}
   int textWidth(const char *text,const int *font){return *font==4?font4Width(text):int(std::strlen(text))*8;}
@@ -58,7 +63,7 @@ struct LGFXBase {
     const int right=datum==top_left?x+width:datum==top_right?x:x+(width+1)/2;
     assert(left>=0 && right<=135 && y>=0 && y+height<=240);
     if(y==80 && font==4)timerInk=ink;
-    spans.push_back({left,right,y,font});texts.push_back(text);
+    spans.push_back({left,right,y,font});texts.push_back(text);textColors.push_back(ink);
     ++strings;if(y==231)++footers;
     if(!std::strcmp(text,"B next option ->")){assert(y==139 && ink==0x39e7);++cycleHints;}
     else if(y>=86 && y<=95){valueEdges.push_back(left);valueEdges.push_back(right);valueFonts.push_back(font);}
@@ -72,6 +77,35 @@ void checkOverlap(const lgfx::LGFXBase &g){
   for(unsigned i=0;i<g.spans.size();++i)for(unsigned j=i+1;j<g.spans.size();++j){auto a=g.spans[i],b=g.spans[j];int ah=a[3]==4?26:a[3]==2?16:8,bh=b[3]==4?26:b[3]==2?16:8;assert(a[1]<=b[0] || b[1]<=a[0] || a[2]+ah<=b[2] || b[2]+bh<=a[2]);}
 }
 int main(){
+  {
+    lgfx::LGFXBase graph;const auto palette=Palette::builtIn(0x07ff,true);
+    AnalysisUI::timeMarker(graph,palette.text,26,130,164,207,60,156);
+    assert(graph.pixels.size()==44);
+    for(unsigned i=0;i<graph.pixels.size();++i){
+      assert(graph.pixels[i][0]==66+int(i%2) && graph.pixels[i][1]==165+int(i/4)*4+int(i/2%2));
+      assert(graph.pixels[i][2]==palette.text);
+    }
+    graph.pixels.clear();
+    AnalysisUI::timeMarker(graph,palette.warning,26,130,164,207,NAN,156);
+    AnalysisUI::timeMarker(graph,palette.warning,26,130,164,207,160,156);
+    assert(graph.pixels.empty());
+    auto light=palette;light.background=Palette::WHITE;light.text=Palette::BLACK;light.warning=0x001f;
+    AnalysisUI::timeMarkers(graph,light,26,130,164,207,60,166,156);
+    assert(graph.pixels.size()==88);
+    for(unsigned i=0;i<44;++i)
+      assert(graph.pixels[i][0]==124+int(i%2) && graph.pixels[i][2]==light.warning);
+    for(unsigned i=44;i<88;++i)
+      assert(graph.pixels[i][0]==64+int(i%2) && graph.pixels[i][2]==light.text);
+    graph.pixels.clear();
+    AnalysisUI::timeMarker(graph,palette.text,26,130,164,207,156,156);
+    for(const auto &point:graph.pixels)assert(point[0]>=129 && point[0]<=130);
+    assert(AnalysisUI::graphSpan(60,true,156)==166);
+    assert(AnalysisUI::graphSpan(155,true,156)==166);
+    assert(AnalysisUI::graphSpan(156,true,156)==166);
+    assert(AnalysisUI::graphSpan(157,true,156)==167);
+    for(float missing:{NAN,INFINITY,-1.f,0.f})assert(AnalysisUI::graphSpan(60,true,missing)==70);
+    assert(AnalysisUI::graphSpan(60,false,156)==60);
+  }
   {
     auto input=new Decay::Session;Decay::Results fits;fits.launcherRpm=15000;fits.initialRpm=9000;fits.acousticStart=.2f;
     fits.lastTime=45;fits.actualStop=80;fits.actualStopValid=true;fits.sampleCount=30;fits.validationPossible=true;fits.best=1;
@@ -92,6 +126,12 @@ int main(){
       assert(details.drew("Estimated") && details.drew("Battle Stamina") && details.drew("63.0s") && details.drew("7K - 6K") && details.drew("10.0s"));checkOverlap(details);
       session.nextResult();lgfx::LGFXBase more;AnalysisResultUI::draw(more,session,&summary,false,false,palette);
       assert(more.drew("1K - 0K") && !more.drew("7K - 6K"));checkOverlap(more);
+      summary.endpointEstimate=true;
+      lgfx::LGFXBase estimate;AnalysisResultUI::draw(estimate,session,&summary,false,false,palette);
+      assert(estimate.drew("A Back B More  Est."));checkOverlap(estimate);
+      summary.count=3;
+      lgfx::LGFXBase shortEstimate;AnalysisResultUI::draw(shortEstimate,session,&summary,false,false,palette);
+      assert(shortEstimate.drew("A Back  Estimated"));checkOverlap(shortEstimate);
     }
     {
       fits.acousticStart=15;fits.lastTime=45;
@@ -99,7 +139,7 @@ int main(){
       input->samples[1]={50000,12000,false,true};
       lgfx::LGFXBase main;
       auto palette=Palette::builtIn(0x07ff,true);
-      AnalysisUI::fittedPlot(main,palette,fits,*input,&curve,100);
+      AnalysisUI::fittedPlot(main,palette,fits,input,&curve,100);
       int lastX=26;bool accentSeen=false;
       for(auto &line:main.lines){
         assert(line[0]==lastX);
@@ -109,7 +149,7 @@ int main(){
       }
       assert(accentSeen && lastX==130 && main.pixels[0][2]==palette.accent && main.pixels[1][2]==Palette::DARKGREY);
       lgfx::LGFXBase inconclusive;
-      AnalysisUI::fittedPlot(inconclusive,palette,fits,*input,nullptr,100);
+      AnalysisUI::fittedPlot(inconclusive,palette,fits,input,nullptr,100);
       assert(inconclusive.lines.empty());
     }
     delete input;
@@ -118,14 +158,15 @@ int main(){
   AnalogTachometer::Curve curve;
   const auto colors=Palette::builtIn(0x07ff,true);LaunchMotion::Trace motion;AnalysisMode::Session session;MicTrace::StoredTrace trace;
   for(auto mic:{MicView::Mic::Starting,MicView::Mic::On,MicView::Mic::Failed,MicView::Mic::NoMemory}){
-    lgfx::LGFXBase g;AnalysisUI::draw(g,session,0,nullptr,mic,motion,false,false,colors,curve);assert(g.drew("Analysis") && g.drew("READY"));checkOverlap(g);
+    lgfx::LGFXBase g;AnalysisUI::draw(g,session,0,nullptr,mic,motion,false,false,colors,curve);assert(g.drew("Analysis") && g.drew("READY") && g.drew("Hold B Exit") && !g.drew("A Replay  B Details"));checkOverlap(g);
   }
   session.begin(1,true,15000,1000000);trace.begin(1,15000);MicTrace::Step step;step.launch=1;step.rpm=9000;trace.add(step);
-  for(bool stopped:{false,true}){if(stopped)session.stop(83456000);lgfx::LGFXBase g;AnalysisUI::draw(g,session,83456000,&trace,MicView::Mic::On,motion,false,false,colors,curve);assert(g.drew("01:22") && g.drew("82s") && g.circles==3);checkOverlap(g);}
-  {lgfx::LGFXBase timed;session.begin(2,true,6000,1000000);session.tick(301000000);AnalysisUI::draw(timed,session,999000000,nullptr,MicView::Mic::On,motion,false,false,colors,curve);assert(timed.drew("05:00") && timed.drew("300s") && timed.drew("Last --:--:---"));checkOverlap(timed);}
-  // The clock alone advances the graph through a total absence of microphone readings.
+  for(bool stopped:{false,true}){if(stopped)session.stop(83456000);lgfx::LGFXBase g;AnalysisUI::draw(g,session,83456000,&trace,MicView::Mic::On,motion,false,false,colors,curve);assert(g.drew("01:22") && g.drew(stopped?"82s":"92s") && g.circles==3);checkOverlap(g);}
+  {lgfx::LGFXBase timed;session.begin(2,true,6000,1000000);session.tick(301000000);AnalysisUI::draw(timed,session,999000000,nullptr,MicView::Mic::On,motion,false,false,colors,curve);assert(timed.drew("05:00") && timed.drew("300s") && timed.drew("Last --:--:---") && timed.drew("Time limit reached") && timed.drew("No stop recorded"));checkOverlap(timed);}
+  {lgfx::LGFXBase partial;session.begin(7,true,6000,1000000);session.interrupt(21000000);AnalysisUI::draw(partial,session,22000000,nullptr,MicView::Mic::On,motion,false,false,colors,curve);assert(partial.drew("Recording interrupted") && partial.drew("No stop recorded"));checkOverlap(partial);}
+  // Without readings, the population estimate plus padding sets the horizon until elapsed time passes it.
   session.begin(3,true,6000,1000000);
-  for(unsigned seconds:{11u,37u,121u}){lgfx::LGFXBase gap;AnalysisUI::draw(gap,session,1000000ULL+seconds*1000000ULL,nullptr,MicView::Mic::On,motion,false,false,colors,curve);char label[16];snprintf(label,sizeof(label),"%us",seconds);assert(gap.drew(label));checkOverlap(gap);}
+  for(unsigned seconds:{11u,37u,121u}){lgfx::LGFXBase gap;AnalysisUI::draw(gap,session,1000000ULL+seconds*1000000ULL,nullptr,MicView::Mic::On,motion,false,false,colors,curve);char label[16];snprintf(label,sizeof(label),"%us",seconds<94?104:seconds+10);assert(gap.drew(label));checkOverlap(gap);}
   // Static content is retained, but time, palette, launch and sensor-state changes invalidate correctly.
   AnalysisUI::Cache cache;AnalysisMode::Session cached;lgfx::LGFXBase canvas;
   auto paint=[&](uint64_t at,const Palette::Colors &palette,const char *state="READY",bool ready=true){
@@ -147,6 +188,12 @@ int main(){
   cached.begin(2,true,6000,3000000);paint(3000000,changed);assert(canvas.drew("00:00") && canvas.timerInk==changed.number);
   cached.tick(303000000);paint(303000000,changed);assert(canvas.drew("05:00") && canvas.timerInk==changed.muted);
   session.toggleReplay(83456000);lgfx::LGFXBase replay;AnalysisUI::draw(replay,session,84456000,&trace,MicView::Mic::On,motion,false,false,colors,curve);assert(!replay.drew("Analysis"));
+  lgfx::LGFXBase saving;
+  AnalysisUI::draw(saving,session,84456000,&trace,MicView::Mic::On,motion,false,false,colors,curve,
+                   "READY",true,nullptr,nullptr,nullptr,nullptr,false,NAN,true);
+  assert(saving.drew("Analysis") && saving.drew("Save pending") && saving.drew("Please wait") && saving.drew("B Retry"));checkOverlap(saving);
+  for(unsigned i=0;i<saving.texts.size();++i)
+    if(saving.texts[i]=="0s")assert(saving.textColors[i]==colors.muted);
   uint16_t values[8]={},rejected[8]={};MicTrace::Trace marked(values,8,rejected);
   marked.begin(12,6000);MicTrace::Step accepted;accepted.launch=12;accepted.rpm=5900;marked.add(accepted);
   auto bad=accepted;bad.index=2;bad.rpm=0;bad.rejectedRpm=12000;marked.add(bad);
@@ -155,6 +202,16 @@ int main(){
   AnalysisMode::Session markedSession;markedSession.begin(12,true,6000,1000000);
   lgfx::LGFXBase markedGraph;AnalysisUI::draw(markedGraph,markedSession,2000000,&marked,MicView::Mic::On,motion,false,false,colors,curve);assert(markedGraph.grayDots==1 && markedGraph.drew("Predicted finish --:--"));
   lgfx::LGFXBase normalGraph;MicView::draw(normalGraph,&marked,MicView::Mic::On,colors);assert(normalGraph.grayDots==0);
+  lgfx::LGFXBase fallback;
+  AnalysisUI::draw(fallback,markedSession,31000000,&marked,MicView::Mic::On,motion,false,false,colors,curve);
+  assert(fallback.drew("Early mic estimate") && fallback.drew("Predicted finish 00:38") && fallback.drew("48s"));
+  lgfx::LGFXBase before,atTen,pending;
+  AnalysisUI::draw(before,markedSession,10999000,nullptr,MicView::Mic::Failed,motion,false,false,colors,curve);
+  AnalysisUI::draw(atTen,markedSession,11000000,nullptr,MicView::Mic::Failed,motion,false,false,colors,curve);
+  assert(!before.drew("Population estimate") && atTen.drew("Predicted finish 01:34"));
+  AnalysisUI::draw(pending,markedSession,32000000,&marked,MicView::Mic::On,motion,false,false,colors,curve,
+                   "READY",true,nullptr,nullptr,nullptr,nullptr,true,88.f);
+  assert(pending.drew("Fixed Riccati") && pending.drew("Predicted finish 01:28") && pending.drew("98s"));
   markedSession.stop(2000000);
   for(unsigned phase=0;phase<3;++phase){
     lgfx::LGFXBase loading;
@@ -165,36 +222,77 @@ int main(){
     assert(loading.loader.size()==3);
     for(unsigned i=0;i<3;++i)assert(loading.loader[i][1]==(i==phase?colors.accent:colors.muted));
   }
-  const char *titles[]={"Coulomb-Viscous Model","Coulomb-Quadratic","Riccati Model","Power-Law Damping"};
-  Decay::Results ranked;Decay::Curve winner;winner.end=10;
+  Decay::Results ranked;
+  ranked.best=int(Decay::Model::Riccati);
+  Decay::Curve winner;
+  winner.end=83.4f;
   auto samples=new Decay::Session;
-  for(int model=0;model<4;++model){
-    ranked.best=model;
+  for(bool fixed:{false,true}){
+    ranked.fixedRiccati=fixed;
     lgfx::LGFXBase graph;
     AnalysisUI::draw(graph,markedSession,3000000,&marked,MicView::Mic::On,motion,false,false,colors,curve,
                      "READY",true,nullptr,&ranked,samples,&winner,false);
-    assert(graph.drew(titles[model]));
-    if(model==1 || model==3)assert(graph.drew("Model"));
+    assert(graph.drew(fixed?"Fixed Riccati Model":"Free Riccati Model"));
     checkOverlap(graph);
-    AnalysisMode::Session live;live.begin(13,true,6000,1000000);
-    // A long physical estimate must not set the right edge of a live preview.
-    winner.end=600;
-    for(unsigned i=0;i<Decay::CURVE_POINTS;++i)winner.rpm[i]=6000-10*winner.seconds(i);
-    ranked.validationPossible=true;ranked.acousticStart=1;ranked.lastTime=45;
-    for(auto &m:ranked.models){
-      m.valid=m.converged=m.validationConverged=m.validation.valid=m.stopValid=true;
-      m.params.a=.04f;m.validation.rmse=30;m.stopSeconds=83.4f;
-    }
-    ranked.models[model].stopValid=model!=0;
-    lgfx::LGFXBase prediction;
-    AnalysisUI::draw(prediction,live,51000000,nullptr,MicView::Mic::On,motion,false,false,colors,curve,
-                     "READY",true,nullptr,&ranked,samples,&winner,false);
-    assert(prediction.drew(model==0?"Predicted finish --:--":"Predicted finish 01:23") && prediction.drew("Press B when"));
-    assert(prediction.drew("60s") && !prediction.drew("600s"));
-    assert(!prediction.lines.empty() && prediction.lines.back()[2]==130);
-    for(const auto &line:prediction.lines)assert(line[0]>=26 && line[2]<=130);
-    checkOverlap(prediction);
   }
+  AnalysisMode::Session live;live.begin(13,true,6000,1000000);
+  ranked.fixedRiccati=ranked.endpointEstimate=true;
+  ranked.launcherRpm=7000;ranked.acousticStart=ranked.lastTime=0;
+  for(unsigned i=0;i<Decay::CURVE_POINTS;++i)winner.rpm[i]=7000*(1-winner.seconds(i)/winner.end);
+  for(bool copiedInput:{false,true}){
+    lgfx::LGFXBase graph;
+    AnalysisUI::draw(graph,markedSession,3000000,&marked,MicView::Mic::On,motion,false,false,colors,curve,
+                     "READY",true,nullptr,&ranked,copiedInput?samples:nullptr,&winner,false);
+    assert(graph.drew("Fixed Riccati Estimate") && !graph.drew("Stopped"));
+    for(const auto &line:graph.lines)assert(line[4]==Palette::DARKGREY);
+    for(unsigned i=0;i+1<graph.pixels.size();++i)assert(graph.pixels[i][2]==Palette::DARKGREY);
+    assert(graph.pixels.back()[2]==colors.background); // Hollow IR anchor marker.
+    checkOverlap(graph);
+  }
+  ranked.endpointEstimate=false;
+  ranked.fixedRiccati=true;ranked.acousticStart=1;ranked.lastTime=45;
+  for(unsigned i=0;i<Decay::CURVE_POINTS;++i)winner.rpm[i]=6000-10*winner.seconds(i);
+  lgfx::LGFXBase prediction;
+  AnalysisUI::draw(prediction,live,51000000,nullptr,MicView::Mic::On,motion,false,false,colors,curve,
+                   "READY",true,nullptr,&ranked,samples,&winner,false);
+  assert(prediction.drew("Predicted finish 01:23") && prediction.drew("Press B when"));
+  assert(prediction.drew("93s") && !prediction.drew("60s"));
+  assert(!prediction.lines.empty() && prediction.lines.back()[2]==119);
+  for(const auto &line:prediction.lines)assert(line[0]>=26 && line[2]<=130);
+  checkOverlap(prediction);
+  for(const auto *frame:{&markedGraph,&fallback,&atTen,&pending,&prediction})
+    for(unsigned i=0;i<frame->texts.size();++i){
+      if(frame->texts[i].find("Predicted finish ")==0)assert(frame->textColors[i]==colors.warning);
+      if(frame->texts[i]=="Fixed Riccati" || frame->texts[i]=="Early mic estimate" || frame->texts[i]=="Population estimate")
+        assert(frame->textColors[i]==colors.number);
+    }
+  // Fit and raw views share the displayed forecast, including during a refit.
+  // After passing that forecast, keep its marker while the axis follows the clock.
+  const auto finishInk=colors.warning;
+  for(bool fitted:{false,true})for(bool busy:{false,true})for(float finish:{600.f,40.f}){
+    winner.end=finish;
+    lgfx::LGFXBase frame;
+    AnalysisUI::draw(frame,live,51000000,nullptr,MicView::Mic::On,motion,false,false,colors,curve,
+                     "READY",true,nullptr,fitted?&ranked:nullptr,fitted?samples:nullptr,fitted?&winner:nullptr,busy,finish);
+    assert(frame.drew(finish>50?"610s":"60s") && !frame.drew("50s"));checkOverlap(frame);
+    unsigned currentDots=0,finishDots=0;
+    for(const auto &point:frame.pixels){
+      if(point[2]==colors.text){
+        const int x=finish>50?35:113;
+        assert(point[0]>=x && point[0]<=x+1 && point[1]>164 && point[1]<207);++currentDots;
+      } else if(point[2]==finishInk){
+        const int x=finish>50?128:95;
+        assert(point[0]>=x && point[0]<=x+1 && point[1]>164 && point[1]<207);++finishDots;
+      }
+    }
+    assert(currentDots==44 && finishDots==44);
+  }
+  live.stop(51000000);
+  lgfx::LGFXBase finalFrame;
+  AnalysisUI::draw(finalFrame,live,52000000,nullptr,MicView::Mic::On,motion,false,false,colors,curve,
+                   "READY",true,nullptr,&ranked,samples,&winner,false);
+  assert(finalFrame.drew("50s") && !finalFrame.drew("600s"));checkOverlap(finalFrame);
+  for(const auto &point:finalFrame.pixels)assert(point[2]!=finishInk && point[2]!=colors.text);
   delete samples;
   marked.freeze();bad.index=3;marked.add(bad);assert(marked.count()==3);
   marked.begin(13,7000);assert(marked.count()==0 && marked.rejectedPeakRpm()==0);

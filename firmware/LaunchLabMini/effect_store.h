@@ -82,6 +82,13 @@ public:
       ++prepared_;return false;
     }
     FlashLayout::Superblock sb;unsigned target=0;
+    // Another store may have registered its region since open(). Preserve
+    // the current layout when committing the effect region.
+    FlashLayout::Superblock current;unsigned currentCopy=0;
+    if(readSuperblock(current,currentCopy)){
+      if(current.version!=FlashLayout::LAYOUT_VERSION || current.find(FlashLayout::Effects)){failed=true;return false;}
+      table_=current;copy_=currentCopy;haveTable_=true;
+    } else if(haveTable_){failed=true;return false;}
     if(haveTable_) {
       sb=table_;
       if(sb.count>=FlashLayout::MAX_REGIONS){failed=true;return false;}

@@ -55,6 +55,9 @@ def shutdown_flush():
 
 prefix = r'''
 static bool saveAnalysisResult(){return true;}
+static bool calibrationWritable=true;
+static bool saveCalibration(){return calibrationWritable;}
+static bool calibrationNeedsSave(){return !calibrationWritable;}
 #include "fake_runtime.h"
 #include "sensor_profile.h"
 #include "rpm_estimator.h"
@@ -307,6 +310,12 @@ static void usbDeviceSettings() {
 }
 
 static void shutdownFlush() {
+  boot();calibrationWritable=false;settingsSave.mark(SettingsSave::AnalysisResult);
+  passes(1700);assert(settingsSave.failed() && settingsSave.pending()==SettingsSave::AnalysisResult);
+  assert(flushForShutdown(millis(),snap())==ShutdownFlush::SaveFailed && running());
+  calibrationWritable=true;passes(SettingsSave::FAILED_RETRY_MS+100);
+  assert(!settingsSave.pending() && running());
+
   // Pending settings are written in the shutdown checkpoint, and the live
   // metric and IMU frame switch there too: a power-off cancelled afterwards
   // (USB attached, sleep refused) resumes with live state matching the records.

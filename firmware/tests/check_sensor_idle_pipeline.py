@@ -8,6 +8,7 @@ ownership and policy integration, not ESP32 DMA, scheduler timing or physical
 wake latency. No hardware, flash, persistent files or application edits occur.
 """
 import argparse
+import os
 import pathlib
 import subprocess
 import tempfile
@@ -211,7 +212,7 @@ with tempfile.TemporaryDirectory(prefix='launchlab_sensor_idle_') as tmp:
     cpp = root / 'sensor_idle_pipeline.cpp'
     cpp.write_text(fixture + '\n' + closed(source) + tick + '\n' + tests)
     executable = root / 'sensor_idle_pipeline'
-    subprocess.run(['c++', '-std=c++17', '-O1', '-g', '-fsanitize=address,undefined',
+    subprocess.run([os.environ.get('CXX','c++'), '-std=c++17', '-O1', '-g', '-fsanitize=address,undefined',
                     '-fno-omit-frame-pointer',
                     '-I' + str(pathlib.Path(__file__).resolve().parent / 'fakes/acquisition_host'),
                     '-I' + str(args.firmware / 'LaunchLabMini'),

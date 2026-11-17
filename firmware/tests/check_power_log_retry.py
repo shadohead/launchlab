@@ -5,6 +5,7 @@ Only M5/Preferences/FreeRTOS plumbing is replaced. This is software fault
 injection, not physical NVS timing or wake validation.
 """
 import argparse
+import os
 import pathlib
 import subprocess
 import tempfile
@@ -144,7 +145,7 @@ with tempfile.TemporaryDirectory() as tmp:
     cpp = pathlib.Path(tmp) / "test.cpp"
     cpp.write_text(prefix + glue(source, ()) + function("savePowerLog()") + "\n" + function("tickPowerLog(") + test)
     executable = pathlib.Path(tmp) / "test"
-    command = ["c++", "-std=c++17", "-O1", "-g", "-fsanitize=address,undefined",
+    command = [os.environ.get("CXX", "c++"), "-std=c++17", "-O1", "-g", "-fsanitize=address,undefined",
                "-fno-omit-frame-pointer", "-I" + str(args.sketch.parent), "-I" + str(args.sketch.parent.parent / "LaunchLabRpm"), str(cpp), "-o", str(executable)]
     if args.expect_fixed:
         command.insert(1, "-DEXPECT_FIXED")

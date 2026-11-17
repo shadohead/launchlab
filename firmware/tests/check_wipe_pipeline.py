@@ -114,6 +114,17 @@ static struct {
   bool tick(bool,const AnalysisMode::Session &,const void *) {return false;}
 } analysisResults;
 static void logAnalysisResults(){}
+static void captureCalibration(bool){}
+static void observeForecastCheckpoint(unsigned){}
+static struct {void reset(){}} shadowLog;
+static void captureStoppedCalibration(){}
+// Analysis capture itself is exercised by check_analysis_lifecycle.py.
+static bool calibrationCapturePending=false;
+static uint32_t lastCaptureTry=0;
+static bool interruptAnalysis(uint64_t){return true;}
+static void exportLaunchWavs(){}
+static void exportCalibrationBatch(){}
+static void exportCalibration(){}
 static WipeConfirmation wipeConfirmation;
 static bool wipeFailed=false,wipeBlocked=false,wipeComplete=false;
 static bool wipeCheckpointHeld=false,wipeBootRecovery=false,wipeRestartRequested=false;
@@ -160,6 +171,9 @@ struct Snapshot {
   bool ready=true,suspended=false;
   uint8_t pin=1;const char *endName()const{return "gap";}const char *stateName()const{return "Ready";}
 };
+static void followAnalysisLaunch(const Snapshot &event){
+  micListener.launch(event.launches,event.valid,event.resultRpm,event.burstStartHostUs,event.burstEndHostUs);
+}
 struct Acquisition {
   Snapshot state;bool failBegin=false,advanceBeforeAck=false,launchBeforeAck=false,suspended=false;
   unsigned begins=0,resumes=0,eventDrains=0;std::deque<Snapshot> events;

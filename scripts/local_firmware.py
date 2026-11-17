@@ -4,9 +4,11 @@ import argparse
 import datetime
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -36,7 +38,9 @@ def run(args):
 
 
 def compile_logged(args):
-    with (BUILD / "build.log").open("w", encoding="utf-8") as log:
+    # Arduino CLI may clean its build directory at startup. Windows prevents
+    # it from removing an open log file there, so publish the log after exit.
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as log:
         process = subprocess.Popen(
             [str(a) for a in args],
             cwd=ROOT,
@@ -50,7 +54,11 @@ def compile_logged(args):
             print(line, end="", flush=True)
             log.write(line)
             log.flush()
-        if process.wait():
+        status = process.wait()
+        log.seek(0)
+        with (BUILD / "build.log").open("w", encoding="utf-8") as saved:
+            shutil.copyfileobj(log, saved)
+        if status:
             raise RuntimeError("Build failed. See " + str(BUILD / "build.log"))
 
 
@@ -62,6 +70,16 @@ def source_digest():
             h.update(path.relative_to(base).as_posix().encode())
             h.update(path.read_bytes())
     return h.hexdigest()
+
+
+def release_identity():
+    header = (ROOT / "firmware/LaunchLabMini/firmware_version.h").read_text()
+    def value(name):
+        match = re.search(r'^#define ' + name + r' "([^"\n]+)"$', header, re.MULTILINE)
+        if not match:
+            raise RuntimeError("Missing firmware release identity: " + name)
+        return match.group(1)
+    return {"runtime": value("LAUNCHLAB_RUNTIME_PM"), "analysis_version": value("LAUNCHLAB_ANALYSIS_VERSION")}
 
 
 def build():
@@ -112,7 +130,7 @@ def build():
         raise RuntimeError("Unexpected partition layout")
     shutil.copy2(RELEASE / "boot_app0.bin", BUILD / "boot_app0.bin")
     data = {
-        "runtime": "0.20.8-analysis-dev-pm",
+        **release_identity(),
         "fqbn": FQBN,
         "source_sha256": before,
         "application_offset": APP_OFFSET,
@@ -168,9 +186,7 @@ def esptool(port, *args, after="no-reset"):
 def backup(port):
     folder = CACHE / "device-backups"
     folder.mkdir(exist_ok=True)
-    name = (
-        datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
-    )
+    name = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
     path = folder / (name + ".bin")
     esptool(port, "read-flash", "0", str(FLASH_SIZE), path, after="hard-reset")
     if path.stat().st_size != FLASH_SIZE:
@@ -273,6 +289,15 @@ def main():
     sub.add_parser("build")
     sub.add_parser("plan")
     sub.add_parser("ports")
+    cal = sub.add_parser("calibration", help="download the latest Analysis trace as JSON")
+    cal.add_argument("--port", required=True)
+    cal.add_argument("--output", type=Path, default=ROOT / "firmware/build/calibration")
+    audio = sub.add_parser("audio", help="arm mic tape and collect one paired Analysis WAV and JSON")
+    audio.add_argument("--port", required=True)
+    audio.add_argument("--output", type=Path, default=ROOT / "firmware/build/audio")
+    audio_mode = audio.add_mutually_exclusive_group()
+    audio_mode.add_argument("--saved", action="store_true", help="download the two latest opening WAVs and paired traces from flash")
+    audio_mode.add_argument("--latest", action="store_true", help="recover the latest retained pair without arming a new launch")
     b = sub.add_parser("backup")
     b.add_argument("--port", required=True)
     f = sub.add_parser("flash")
@@ -292,6 +317,14 @@ def main():
 
         for port in list_ports.comports():
             print(f"{port.device}: {port.description} [{port.hwid}]")
+    elif args.command == "calibration":
+        from calibration_export import export
+
+        export(args.port, args.output)
+    elif args.command == "audio":
+        from audio_capture import collect
+
+        collect(args.port, args.output, args.latest, args.saved)
     elif args.command == "backup":
         backup(args.port)
     elif args.command == "flash":
@@ -301,5 +334,5 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (RuntimeError, OSError, subprocess.CalledProcessError) as error:
+    except (ValueError, RuntimeError, OSError, subprocess.CalledProcessError) as error:
         sys.exit(str(error))

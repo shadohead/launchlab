@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('plan','ports','backup','flash')][string]$Action = 'plan',
+    [ValidateSet('plan','ports','backup','flash','calibration','audio')][string]$Action = 'plan',
     [string]$Port,
     [switch]$Execute
 )

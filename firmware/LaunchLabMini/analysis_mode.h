@@ -5,6 +5,7 @@
 
 // Loop-owned elapsed time, independent of redraw and microphone confidence.
 namespace AnalysisMode {
+enum class StopReason : uint8_t { Timeout = 0, Manual = 1, Interrupted = 2 };
 class Session {
 public:
   static constexpr uint64_t LIMIT_US = 5ULL * 60 * 1000000;
@@ -25,7 +26,12 @@ public:
     const uint64_t elapsed = now >= start_ ? now - start_ : 0;
     stop_ = start_ + std::min(elapsed, LIMIT_US);
     running_ = false;
-    manualStop_ = manual && now >= start_ && elapsed <= LIMIT_US;
+    stopReason_ = manual && now >= start_ && elapsed <= LIMIT_US ? StopReason::Manual : StopReason::Timeout;
+    return true;
+  }
+  bool interrupt(uint64_t now) {
+    if (!stop(now, false)) return false;
+    if (now >= start_ && now - start_ < LIMIT_US) stopReason_ = StopReason::Interrupted;
     return true;
   }
   bool tick(uint64_t now) {
@@ -45,7 +51,8 @@ public:
   }
   void format(char *out, unsigned size, uint64_t now) const { formatMs(out, size, elapsedUs(now) / 1000); }
   bool results() const { return results_; }
-  bool hasManualStop() const { return manualStop_; }
+  bool hasManualStop() const { return stopReason_ == StopReason::Manual; }
+  StopReason stopReason() const { return stopReason_; }
   unsigned tablePage() const { return tablePage_; }
   bool nextResult() {
     if (running_ || !number_)
@@ -95,7 +102,8 @@ public:
   float rpm() const { return rpm_; }
 
 private:
-  bool results_ = false, manualStop_ = false;
+  bool results_ = false;
+  StopReason stopReason_ = StopReason::Timeout;
   unsigned tablePage_ = 0;
   uint64_t start_ = 0, stop_ = 0;
   uint32_t number_ = 0;

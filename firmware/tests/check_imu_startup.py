@@ -6,6 +6,7 @@ detection/data/allocation failures without claiming physical BMI270 validation.
 """
 from pathlib import Path
 import subprocess
+import os
 import tempfile
 
 root = Path(__file__).resolve().parents[1]
@@ -173,7 +174,7 @@ cpp += tests
 with tempfile.TemporaryDirectory(prefix='launchlab-imu-startup-') as temporary:
     temporary = Path(temporary)
     (temporary / 'test.cpp').write_text(cpp)
-    subprocess.run(['c++', '-std=c++17', '-O1', '-g', '-fsanitize=address,undefined',
+    subprocess.run([os.environ.get('CXX','c++'), '-std=c++17', '-O1', '-g', '-fsanitize=address,undefined',
                     '-fno-omit-frame-pointer', '-I' + str(root / 'LaunchLabRpm'),
                     '-I' + str(root / 'LaunchLabMini'),
                     str(temporary / 'test.cpp'), '-o', str(temporary / 'test')], check=True)

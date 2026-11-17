@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run exact production capture/save/sleep functions under a host scheduler."""
 import pathlib
+import os
 import subprocess
 import tempfile
 import argparse
@@ -134,6 +135,7 @@ static unsigned restoreFailureNotes=0;static void noteMotionRestoreFailure(){++r
 static void logLaunchMetrics(const Snapshot&){}static void noteStartMark(const Snapshot&){}static void saveStartMarks(){}
 // Settings persistence has its own production harness (check_save_paths.py).
 static void writeSettings(){}
+static bool calibrationNeedsSave(){return false;}
 static unsigned writeDurationMs=178;static std::vector<uint32_t> writeAt;
 '''
 tests = r'''
@@ -267,7 +269,7 @@ with tempfile.TemporaryDirectory() as tmp:
     cpp=pathlib.Path(tmp)/"test.cpp"
     cpp.write_text(prefix+glue(source)+'\n'.join(function(name) for name in ['prepareMotion','finishMotion','saveHistory'])+'\n'+shutdown_flush()+'\n'+function('autoPowerOff')+tests)
     exe=pathlib.Path(tmp)/"test"
-    subprocess.run(['c++','-std=c++17','-O1','-g','-DVQF_SINGLE_PRECISION','-fsanitize=address,undefined','-fno-omit-frame-pointer',
+    subprocess.run([os.environ.get('CXX','c++'),'-std=c++17','-O1','-g','-DVQF_SINGLE_PRECISION','-fsanitize=address,undefined','-fno-omit-frame-pointer',
       '-I'+str(pathlib.Path(__file__).resolve().parent/'fakes'),'-I'+str(args.sketch.parent),'-I'+str(args.sketch.parent.parent/'LaunchLabRpm'),str(cpp),
       str(args.sketch.parent/'src/vqf/vqf.cpp'),'-o',str(exe)],check=True)
     subprocess.run([str(exe)],check=True)

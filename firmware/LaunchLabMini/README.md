@@ -1,6 +1,6 @@
 # LaunchLab for M5StickS3
 
-Current revision: **0.20.8-sticks3-songs-pm**, the recommended stable release, for **M5StickS3 K150 (ESP32-S3, 8 MB flash / 8 MB OPI PSRAM)**.
+Current checkout: **Analysis 1.0-rc.1**, based on firmware 0.20.8, for **M5StickS3 K150 (ESP32-S3, 8 MB flash / 8 MB OPI PSRAM)**. Runtime: `0.20.8-analysis-1.0-rc.1-pm`. This is a release candidate awaiting hardware acceptance, not a published stable release. See the [RC notes and checklist](../../docs/ANALYSIS_1.0_RC.md).
 One application supports analog QRE1113 and TCRT5000 through the saved Sensor profile setting.
 See [build context](../../docs/FIRMWARE_0.20.8.md) and [release notes](../releases/0.20.8-sticks3-songs-pm/README.md).
 
@@ -39,28 +39,23 @@ During recording, a gated alpha-beta filter smooths the microphone readings. Gra
 
 ### Fitted curve
 
-After five seconds without a valid raw microphone reading, Analysis can fit a provisional curve in the background. It needs at least eleven raw observations to attempt chronological validation. The live status shows **Predicted finish** in MM:SS from launch when a stable winning fit has a corroborated stop estimate. The estimate must still be in the future and its remaining span from the last observation cannot exceed twice the observed acoustic duration. At least one comparably accurate stable model must agree on the remaining time (within five seconds or 25%, whichever is larger). Fits at the minimum constant-drag bound do not qualify. These display limits are heuristics. Until then it shows **--:--**. The projection is gray. The live axis extends ten seconds beyond the timer; its rightmost label is the edge of the viewing window. A new raw reading clears it. A preview uses the optical launch and acoustic evidence alone. Only the final fit can populate Analysis Details or be saved.
+From ten seconds after release, Analysis can fit a live preview to ten or more raw readings covering at least two seconds. As new readings arrive it starts at most one refit every two seconds. Fixed Riccati fits a straight line to transformed acoustic RPM with a free intercept and eight robust, RPM-weighted passes. Its shared drag shape in kRPM is 0.00360 + 0.00380x + 0.00589x^2. The per-spin time scale must be between 0.3 and 3, with at least 70% of readings within 150 RPM of the curve. The live line ends at 578 RPM and the finish label gives its time from release. The optical peak remains visible as a separate marker. The last published finish stays visible during the next calculation.
 
-Stopping the timer starts the final background fit. The worker consolidates repeated timestamps and checks upward jumps against the subsequent readings. After a gap longer than two seconds, a higher reading needs corroboration. A sustained higher track with at least four readings and two distinct declines can replace an earlier track.
+From ten seconds onward, a live session without an accepted fit shows an early mic estimate. Its count model uses originally trusted readings through 30 seconds and interpolates coefficients calibrated at 10, 15 and 30 seconds on the original development pulls. If mic data is unavailable the label identifies a population estimate, the median finish in those pulls. Its time can pass before the physical spin stops. Only a successful acoustic fit draws a fitted curve.
 
-All four models start at the optical launch RPM. With speed `x` in thousands of RPM, the models use these deceleration laws:
+The RC keeps this predictor unchanged. Audio metadata is recorded for offline research, but the experimental audio ML candidate is not compiled or used for predictions. Relative-pitch recovery remains part of the existing microphone processing.
 
-| Model | Deceleration |
-| --- | --- |
-| Coulomb-Viscous | `a + b*x` |
-| Coulomb-Quadratic | `a + c*x^2` |
-| Riccati | `a + b*x + c*x^2` |
-| Power-Law Damping | `a + k*x^n`, with `0.5 <= n <= 3` |
+Analysis buffers up to two acquiring windows and recovers their measured frequencies when the next lock confirms the same cycle count and frequency sequence. The calibration export marks recovered points individually and records counts of delivered frames by tracker decision. These counts include recovered windows under their original acquiring decision. The archive also records skipped audio milliseconds and queue drops as of the last delivered frame. Normal Mic RPM tracking uses its original path.
 
-A manual stop constrains the fitted duration. Time-weighted Huber loss reduces the influence of large acoustic errors. The first 80% of retained observations train each model, and the last 20% provide its validation score. The fitter favors the simpler model within a 15 RPM validation tie and refits the coefficients on the full track. USB serial reports the individual coefficients and errors in `ANALYSIS_MODEL` and `ANALYSIS_METRIC` records.
+Stopping the timer starts a final Fixed Riccati fit on the complete mic trace. For a manual stop, the graph connects the optical launch RPM to the fitted acoustic interval. A monotone cubic Hermite tail joins the fitted RPM and slope at the last inlier to zero RPM at the manual stop. A timeout retains the distinction between recorded duration and spin finish.
 
-The winning model appears above the graph. The solid line uses the theme accent over the retained acoustic interval and gray outside it. After a manual stop, a monotone cubic Hermite segment joins the last retained reading to zero RPM at the stop time. If validation is inconclusive, the graph shows the classified observations.
+If Fixed Riccati declines the trace, the Stick fits Free Riccati (`a + b*x + c*x^2`, where `x` is in thousands of RPM). The fallback classifies sustained downward tracks, trains on the first 80% of retained readings and validates on the final 20%. If neither fit succeeds after a manual stop, a `Fixed Riccati Estimate` scales the shared shape between the IR launch and manual zero endpoint. This estimate and its unused readings are gray, and exports distinguish it from a mic fit. Accepted fits keep their existing validation checks. While recording, full-brightness 2x2 dotted lines show current time in the theme's text color and predicted finish in its warning color. The predicted-finish label also uses the warning color. The live axis extends ten seconds beyond that prediction, then follows elapsed time plus ten seconds if the spin outlasts it.
 
 ### Analysis Details
 
 After stopping, press **B** to open Details. The page shows duration, average RPM lost per second, total revolutions, estimated battle stamina and the time spent crossing each complete 1,000 RPM band. Revolutions come from the area under the displayed curve. Battle stamina is the time from launch to its first downward crossing of 1,000 RPM. A timeout limits these metrics to the recorded interval. Press **B** for additional bands or **A** to return.
 
-Opening Details queues the latest completed fit for storage at an idle flash checkpoint. The 512-byte `analysis_fit` record contains the coefficients, scores, curve anchors and winning model when one was selected. Saving reserves room for practice history. Raw readings live in RAM for the current session. A new launch or leaving Analysis releases the previous result.
+Opening Details queues the latest completed fit for storage at an idle flash checkpoint. The 512-byte `analysis_fit` record contains the coefficients, scores, curve anchors and winning model when one was selected. Saving reserves room for practice history. Manual stop and timeout immediately queue the frozen raw observations, last live preview and endpoint for calibration. The final fit adds metrics and exclusion flags when available. A failed raw or fit write remains queued for retry at an idle checkpoint. The newest 32 completed packets are retained across restarts at idle flash checkpoints. Each includes full-session acoustic metadata: 200 ms summaries for the first 30 seconds and one-second summaries thereafter, up to five minutes. Eight FFT energy bands, level, flatness, candidate pitch evidence, noise/clipping counts and delivery timing are recorded even when no RPM is accepted. A separate 32-record ring replaces the former two-WAV storage; metadata writes retry independently of raw traces and fits. The collector uses guarded command `Z` to download the batch in chronological order. Command `J` retrieves the newest RAM packet, or the latest saved packet after a restart. See [Windows calibration export](../../docs/LOCAL_WINDOWS.md#export-the-latest-launch-for-calibration). A new launch or leaving Analysis releases the previous result.
 
 ## Wiring
 
@@ -82,7 +77,7 @@ Measurement runs on every screen while active. After 30 seconds of stillness, RE
 
 - **Main:** A shows the latest launch recap; B opens the menu. Hold A for one second to enter tournament mode.
 - **Menus:** A opens or applies the highlighted item; B moves to the next choice; hold B goes back one level or cancels an edit. Every list has a Back choice.
-- **Menu items:** History, New session, Battery, Settings, Tournament, String wear check, Mic RPM and Back. History offers Launches, Pull trend and Session trend. New session starts on the next accepted pull and keeps earlier launches.
+- **Menu items:** History, New session, Device, Settings, Tournament, String wear check, Mic RPM and Back. History offers Launches, Pull trend and Session trend. New session starts on the next accepted pull and keeps earlier launches.
 - **Settings:** Sleep after, Shake to wake, RPM method, Brightness, Sensor profile, Flip display, Theme, Best effect, Celebrate, Sound, Mounting, Battery icon, Wipe all and About, five rows to a page. In an editor the value is centred, with a faint `B next option ->` hint beneath it: B cycles the value, A applies, hold B cancels.
   - Sleep after: 1–10 minutes, 1-minute default (3 minutes before 0.20.2; a chosen time is kept).
   - Shake to wake: On (default) wakes on a shake; Off sleeps more deeply and only the side key wakes it.
@@ -111,7 +106,7 @@ Measured launches, button use and interactive USB commands refresh the inactivit
 
 Run `bash scripts/build-firmware.sh` with Arduino CLI installed. The script pins ESP32 3.3.0, M5Unified 0.2.23 and M5GFX 0.2.30, verifies the complete PM SDK and explicitly enables both release flags. Use the frozen application for exact binary restoration; rebuilt bytes can vary with build environment.
 
-Run `bash scripts/test-firmware.sh` for 80 sanitizer-enabled native suites and 20 production-code harnesses with synthetic fixtures. The updater tests cover application-only upgrades, no-op detection, intentional rollback, first-install confirmation, chip/capacity checks and artifact verification.
+Run `bash scripts/test-firmware.sh` for the native suites, production-code harnesses, export compatibility and local updater checks. The native gate requests AddressSanitizer and UndefinedBehaviorSanitizer; use a compiler with those runtimes. The local updater tests cover application-only upgrades, no-op detection, chip/capacity checks and artifact verification without opening a device.
 
 [USB update and backup](../../docs/UPDATER.md) · [Recovery](../../docs/RECOVERY.md).
 

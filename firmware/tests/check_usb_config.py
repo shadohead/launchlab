@@ -14,6 +14,7 @@ characters) reached a production unit (2026-10-23). This check holds:
   own request sizes.
 """
 import re
+import os
 import subprocess
 import sys
 import tempfile
@@ -79,7 +80,7 @@ int main(){std::printf("%u %u\n",unsigned(Milestones::Request::BYTES),unsigned(T
     with tempfile.TemporaryDirectory() as tmp:
         src, exe = Path(tmp) / 'sizes.cpp', Path(tmp) / 'sizes'
         src.write_text(probe)
-        subprocess.run(['c++', '-std=c++17', f'-I{ROOT / "tests/fakes"}', f'-I{SKETCH}', str(src), '-o', str(exe)], check=True)
+        subprocess.run([os.environ.get('CXX','c++'), '-std=c++17', f'-I{ROOT / "tests/fakes"}', f'-I{SKETCH}', str(src), '-o', str(exe)], check=True)
         milestone, theme = map(int, subprocess.run([str(exe)], capture_output=True, text=True, check=True).stdout.split())
     line = lambda raw: (raw + 2) // 3 * 4 + 2  # base64 plus CR LF
     longest = max(line(milestone), line(theme), 96 + 2)

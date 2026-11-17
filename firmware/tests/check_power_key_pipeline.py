@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Execute the exact production side-key click and power-off functions under bounded fakes."""
 import pathlib
+import os
 import re
 import subprocess
 import tempfile
@@ -107,6 +108,7 @@ static void prepareMotion(const Snapshot&){motionPending=true;}
 static void logLaunchMetrics(const Snapshot&){}static void noteStartMark(const Snapshot&){}static void saveStartMarks(){}
 // Settings persistence has its own production harness (check_save_paths.py).
 static void writeSettings(){}
+static bool calibrationNeedsSave(){return false;}
 static void cancelSettingEdit(){++editCancels;}
 static void cancelWipe(){++wipeCancels;controls.page=Controls::Page::Settings;}
 '''
@@ -222,6 +224,6 @@ with tempfile.TemporaryDirectory() as tmp:
     cpp=pathlib.Path(tmp)/'power_key_pipeline.cpp'
     cpp.write_text(prefix+closed(source)+function('pollPowerKey')+'\n'+shutdown_flush()+'\n'+function('powerKeyOff')+tests)
     exe=pathlib.Path(tmp)/'power_key_pipeline'
-    subprocess.run(['c++','-std=c++17','-O1','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer',
+    subprocess.run([os.environ.get('CXX','c++'),'-std=c++17','-O1','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer',
         '-I'+str(firmware/'tests/fakes'),'-I'+str(firmware/'LaunchLabMini'),'-I'+str(firmware/'LaunchLabRpm'),str(cpp),'-o',str(exe)],check=True)
     subprocess.run([str(exe)],check=True)

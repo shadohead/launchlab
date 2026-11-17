@@ -67,7 +67,7 @@ inline void plot(lgfx::LGFXBase &g,const MicTrace::Trace &t,const Palette::Color
   if(t.heard())g.fillCircle(px,py,2,c.accent);
   if(t.opticalRpm())marker(g,LEFT,y(t.opticalRpm()),c);
   // Raw measurements withheld by the Analysis filter, never connected to the curve.
-  if(showRejected)for(unsigned i=0;i<t.count();++i)
+  if(showRejected && t.rawCount()>t.heard())for(unsigned i=0;i<t.count();++i)
     if(t.rejectedRpm(i))g.fillCircle(x(Trace::seconds(i)),y(t.rejectedRpm(i)),1,Palette::DARKGREY);
 
 }

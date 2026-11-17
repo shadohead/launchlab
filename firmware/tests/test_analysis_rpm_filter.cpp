@@ -17,6 +17,13 @@ int main(){
  assert(f.update(std::numeric_limits<float>::quiet_NaN(),3.8f)==0);
  assert(f.update(5000,std::numeric_limits<float>::infinity())==0);
  RpmFilter next;assert(next.update(9000,0.2f)==9000); // New launch has no old slope.
+ // Launch 3: the 4.9k tone following the 2.2k track must stay withheld.
+ RpmFilter burst;assert(burst.update(2220,27.8f)>0);
+ for(float t:{28.5f,28.7f,29.3f,29.5f,29.7f,29.9f,30.1f,30.3f})
+   assert(burst.update(t==30.1f?4980:4920,t)==0);
+ // A sustained falling higher track can still establish itself after silence.
+ for(unsigned i=0;i<4;++i) assert(burst.update(7000-75*i,32.f+i*.2f)==0);
+ assert(burst.update(6700,32.8f)==6700);
  // Noise reduction on a falling signal at both actual acquisition cadences.
  for(float dt:{0.1f,0.2f}){
    RpmFilter smooth;double rawError=0,filteredError=0;unsigned n=0;

@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 TEST_BUILD=$(mktemp -d)
 trap 'rm -rf "$TEST_BUILD"' EXIT
-for suite in decay_models decay_record analysis_rpm_filter analysis_mode analysis_ui accel_range bmi270_fifo i2c_bus_recovery appearance nvs_budget best_effect_sound device_backup device_wipe wipe_confirmation sticks3 sticks3_level sticks3_power motion_activity sensor_idle launch_feedback launch_motion motion_replay motion_store practice_history practice_store orientation_estimator mount_orientation mount_orientation_setting analog_tachometer swing_reset edge_start edge_interpolation start_mark_reference startup_single_peak paired_rpm_estimators rpm_hardening rpm_estimator_setting sensor_profile_setting display_flip wake_ui_state controls controls_ui power_diagnostics weak_slowdown power_signal_recovery store_presence practice_views history_idle_checkpoint usb_awake usb_tx hil_resync usb_command_guard pm1_idle power_key palette milestones physical_effects classic_effects elemental_effects eva_effects slayer_effects ninja_effects nier_effects sorcery_effects aura_effects alchemy_effects phantom_effects armory_effects grimoire_effects ripsaw_effects corsair_effects reaper_effects flash_log effect_set effect_store fx_transfer loaded_effects fx_effects fx_sound fx_music music_stream fx_fuzz shake_wake wear_check rpm_curve frame_rows adc_clock power_lab mic_rpm mic_view mic_session; do
+for suite in decay_models decay_record stopped_estimate analysis_rpm_filter analysis_mode analysis_ui accel_range bmi270_fifo i2c_bus_recovery appearance nvs_budget best_effect_sound device_backup device_wipe wipe_confirmation sticks3 sticks3_level sticks3_power motion_activity sensor_idle launch_feedback launch_motion motion_replay motion_store practice_history practice_store orientation_estimator mount_orientation mount_orientation_setting analog_tachometer swing_reset edge_start edge_interpolation start_mark_reference startup_single_peak paired_rpm_estimators rpm_hardening rpm_estimator_setting sensor_profile_setting display_flip wake_ui_state controls controls_ui power_diagnostics weak_slowdown power_signal_recovery store_presence practice_views history_idle_checkpoint usb_awake usb_tx hil_resync usb_command_guard pm1_idle power_key palette milestones physical_effects classic_effects elemental_effects eva_effects slayer_effects ninja_effects nier_effects sorcery_effects aura_effects alchemy_effects phantom_effects armory_effects grimoire_effects ripsaw_effects corsair_effects reaper_effects flash_log effect_set effect_store fx_transfer loaded_effects fx_effects fx_sound fx_music music_stream fx_fuzz shake_wake wear_check rpm_curve frame_rows adc_clock power_lab mic_rpm relative_pitch audio_metadata audio_metadata_store mic_view mic_session; do
   "${CXX:-c++}" -std=c++17 -O1 -g -DVQF_SINGLE_PRECISION -fsanitize=address,undefined -fno-omit-frame-pointer -Ifirmware/tests/fakes -Ifirmware/LaunchLabRpm -Ifirmware/LaunchLabMini "firmware/tests/test_${suite}.cpp" firmware/LaunchLabMini/src/vqf/vqf.cpp -o "$TEST_BUILD/$suite"
   "$TEST_BUILD/$suite"
 done
@@ -40,5 +40,12 @@ python3 firmware/tests/check_usb_standby_pipeline.py
 python3 firmware/tests/check_status_feeds.py
 python3 firmware/tests/check_codec_handover.py
 python3 firmware/tests/check_analysis_pipeline.py
+python3 firmware/tests/check_analysis_lifecycle.py
 python3 firmware/tests/check_analysis_worker.py
 python3 firmware/tests/check_analysis_result_persistence.py
+python3 firmware/tests/check_calibration_export.py
+python3 firmware/tests/check_analysis_release.py
+python3 scripts/test_calibration_audio.py
+python3 scripts/test_local_firmware.py
+python3 scripts/test_audio_capture.py
+python3 scripts/test_replay_calibration.py

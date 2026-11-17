@@ -1,5 +1,5 @@
 #pragma once
-#include "decay_models.h"
+#include "decay_types.h"
 #include <cstring>
 namespace Decay {
 // Explicit little-endian versioned representation, never a dump of padded C++ structs.
@@ -33,7 +33,7 @@ struct Record {
     for (float v : {r.acousticStart, r.initialRpm, r.launcherRpm, r.launcherTime, r.lastTime, r.actualStop})
       f(v);
     u(unsigned(r.actualStopValid) | (r.invalidStop << 1) | (r.validationPossible << 2) |
-      (r.opticalAnchor << 3) | (r.manualAnchor << 4));
+      (r.opticalAnchor << 3) | (r.manualAnchor << 4) | (r.fixedRiccati << 5));
     u(r.sourceCount);
     u(r.sampleCount);
     u(r.spikes);
@@ -58,6 +58,7 @@ struct Record {
     }
     f(r.tailRpm);
     f(r.tailSlope); // Previously reserved bytes are zero in older records.
+    u(r.endpointEstimate); // Reserved word; older exports decode as false.
     at = BYTES - 4;
     u(checksum(image.data(), BYTES - 4));
   }
@@ -93,8 +94,9 @@ struct Record {
     r.lastTime = f();
     r.actualStop = f();
     uint32_t flags = u();
-    if (flags > 31)
+    if (flags > 63)
       return false;
+    r.fixedRiccati = flags & 32;
     r.opticalAnchor = flags & 8;
     r.manualAnchor = flags & 16;
     r.actualStopValid = flags & 1;
@@ -153,20 +155,42 @@ struct Record {
       m.loss = f();
       m.evaluations = u();
       m.sampleCount = u();
-      // An endpoint-only line has a measured slope, outside the optimizer's
-      // search bounds on very short spins. Verify it against its two anchors.
+      if (m.sampleCount > MAX_SAMPLES || (m.stopValid && m.stopSeconds < r.acousticStart))
+        return false;
+    }
+    r.tailRpm = f();
+    r.tailSlope = f();
+    const auto estimate = u();
+    if (estimate > 1) return false;
+    r.endpointEstimate = estimate;
+    if (r.endpointEstimate && (!r.fixedRiccati || !r.opticalAnchor || !r.manualAnchor ||
+        !r.actualStopValid || r.best != int(Model::Riccati) || r.sampleCount || r.tailRpm || r.tailSlope ||
+        r.launcherRpm <= 0 || r.launcherRpm > 65535 || r.initialRpm != r.launcherRpm ||
+        r.acousticStart != r.launcherTime || r.lastTime != r.launcherTime || r.actualStop <= r.launcherTime))
+      return false;
+    for (unsigned i = 0; i < MODEL_COUNT; ++i) {
+      const auto &m = r.models[i];
+      // Endpoint-only estimates can exceed optimizer bounds on very short
+      // spins. Validate the recorded coefficients against the two anchors.
       const float origin = r.opticalAnchor ? r.launcherTime : r.acousticStart;
       const float rpm = r.opticalAnchor ? r.launcherRpm : r.initialRpm;
       const bool endpointLine = r.manualAnchor && r.actualStopValid && r.sampleCount < 6 &&
                                 m.sampleCount == r.sampleCount && rpm > 0 && r.actualStop > origin &&
                                 m.params.a == rpm / (1000 * (r.actualStop - origin)) && m.params.b == 0 &&
                                 m.params.c == 0 && m.params.k == 0 && m.params.n == 1;
-      if ((m.valid && !validParams(m.model, m.params) && !endpointLine) || m.sampleCount > MAX_SAMPLES ||
-          (m.stopValid && m.stopSeconds < r.acousticStart))
+      bool endpointRiccati = false;
+      if (r.endpointEstimate && i == unsigned(Model::Riccati)) {
+        const auto &p = m.params;
+        const double q = std::sqrt(4. * p.a * p.c - double(p.b) * p.b);
+        const double duration = 2 * (std::atan((2. * p.c * rpm / 1000 + p.b) / q) - std::atan(p.b / q)) / q;
+        endpointRiccati = m.valid && m.stopValid && !m.sampleCount && p.a > 0 && p.b >= 0 && p.c > 0 &&
+                          p.k == 0 && p.n == 1 && m.stopSeconds == r.actualStop &&
+                          std::fabs(duration - (r.actualStop - origin)) < .0001 * (r.actualStop - origin);
+        if (!endpointRiccati) return false;
+      }
+      if (m.valid && !validParams(m.model, m.params) && !endpointLine && !endpointRiccati)
         return false;
     }
-    r.tailRpm = f();
-    r.tailSlope = f();
     if (r.tailRpm < 0 || r.tailSlope > 0 ||
         (r.tailRpm > 0 && (!r.manualAnchor || r.actualStop <= r.lastTime)))
       return false;

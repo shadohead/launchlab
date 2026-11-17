@@ -24,6 +24,10 @@ prefix=r'''
 #include "analysis_mode.h"
 static AnalysisMode::Session analysis;
 static bool saveAnalysisResult(){return true;}
+static bool saveCalibration(){return true;}
+static bool calibrationCapturePending=false;
+static bool captureStoppedCalibration(){return true;}
+static bool interruptAnalysis(uint64_t now){analysis.interrupt(now);return captureStoppedCalibration();}
 struct AnalysisMicFake {void freezeTrace(){}};static AnalysisMicFake micListener;
 static uint64_t esp_timer_get_time(){return 1000000;}
 #include "appearance_store.h"

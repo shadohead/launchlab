@@ -55,7 +55,11 @@ public:
   bool on()const{return state()==MicSession::State::On;}
   bool warm(uint32_t now)const{return on() && now-onMs_>=WARMUP_MS;}
   const MicTrace::Trace *trace()const{return trace_;}
-  void freezeTrace(){if(trace_){trace_->freeze();stoppedLaunch_=trace_->launch();if(analysisFollowing_ && task_)xTaskNotifyGive(task_);}}
+  void drainTrace(){
+    MicTrace::Step step;
+    while(trace_ && steps_ && xQueueReceive(steps_,&step,0)==pdTRUE)add(step);
+  }
+  void freezeTrace(uint32_t endMs=UINT32_MAX){if(trace_){trace_->freeze(endMs);if(audio_)audio_->freeze();stoppedLaunch_=trace_->launch();if(analysisFollowing_ && task_)xTaskNotifyGive(task_);}}
   void setAnalysisMode(bool enabled){analysisMode_=enabled;}
   // A reading arrived since the last call.
   bool fresh(){const bool was=fresh_;fresh_=false;return was;}
@@ -81,8 +85,7 @@ public:
       if(delayed_.due && esp_timer_get_time()>=delayed_.atUs){delayed_.due=false;take(delayed_.number,delayed_.valid,delayed_.rpm,delayed_.startUs,delayed_.endUs);}
 #endif
       heapLow_=std::min(heapLow_,room+floor_);
-      MicTrace::Step step;
-      while(xQueueReceive(steps_,&step,0)==pdTRUE)add(step);
+      drainTrace();
     }
     report();
   }
@@ -122,9 +125,11 @@ public:
     }
     hold_=false;start();
   }
-  // USB `W`: from now until the next boot, each spin's 4 kHz tracker line is
-  // kept too, the last TAPE_S seconds of them, for USB `V` after a replug: the
-  // owner pulls off USB, and `A` keeps only 3 s. Off unless asked: 960 KB of PSRAM.
+  const AudioMetadata::Recorder *audioMetadata(uint32_t launch)const{
+    return audio_ && audio_->launch()==launch?audio_:nullptr;
+  }
+  // Optional USB diagnostic tape. Analysis archives use compact metadata;
+  // the tape remains off unless explicitly armed and never writes to flash.
   void armTape() {
     if(!tapeArmed_.load() && !tape_.samples) {
       tape_.capacity=TAPE_SAMPLES;
@@ -194,7 +199,8 @@ private:
   static constexpr UBaseType_t GATE_PRIORITY=3;
   // In PSRAM: the DMA-capable heap has little to spare, and this task touches
   // no flash, so it never runs with the cache off. mic_rpm.h's deepest frame is
-  // under 700 bytes, and the mic's start and stop run on this stack too.
+  // checked in the build's stack-usage output; relative recovery adds a bounded
+  // candidate cache. The mic's start and stop run on this stack too.
   static constexpr uint32_t TASK_STACK=4096;
   enum class Job:uint8_t{Idle,Following};
   // `lagMs`: from the release to the result reaching launch(), at `notedUs`.
@@ -220,14 +226,22 @@ private:
   bool ensureTrace() {
     const unsigned capacity=analysisMode_?MicTrace::ANALYSIS_READINGS:MicTrace::MAX_READINGS;
     if(trace_ && trace_->capacity()>=capacity)return true;
-    void *memory=heap_caps_calloc(1,sizeof(MicTrace::Trace)+capacity*sizeof(uint16_t)*(analysisMode_?2:1),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+    void *memory=heap_caps_calloc(1,sizeof(MicTrace::Trace)+capacity*sizeof(uint16_t)*(analysisMode_?2:1)+(analysisMode_?(capacity+7)/8+capacity:0),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
     if(!memory)return false;
     auto *slots=reinterpret_cast<uint16_t *>(static_cast<uint8_t *>(memory)+sizeof(MicTrace::Trace));
-    auto *replacement=new(memory) MicTrace::Trace(slots,capacity,analysisMode_?slots+capacity:nullptr);
+    auto *replacement=new(memory) MicTrace::Trace(slots,capacity,analysisMode_?slots+capacity:nullptr,
+        analysisMode_?reinterpret_cast<uint8_t*>(slots+2*capacity):nullptr,
+        analysisMode_?reinterpret_cast<uint8_t*>(slots+2*capacity)+(capacity+7)/8:nullptr);
     heap_caps_free(trace_);trace_=replacement;return true;
   }
   void take(uint32_t number,bool valid,float rpm,uint64_t startUs,uint64_t endUs) {
     if(!ensureTrace())return;
+    if(valid && analysisMode_){
+      if(!audio_){void *p=heap_caps_malloc(sizeof(AudioMetadata::Recorder),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);if(p)audio_=new(p) AudioMetadata::Recorder;}
+      if(audio_)audio_->reset(number);
+      else Serial.println("CAL_NOTICE audio_metadata_no_memory");
+      audioStartedUs_=endUs;
+    }
     stoppedLaunch_=0;
     int64_t lag=0;const uint64_t release=sampleAt(endUs,&lag);
     const Pull pull{number,valid?rpm:0,sampleAt(startUs),release,uint32_t((endUs-startUs)/1000),uint32_t(std::max<int64_t>(lag,0)/1000),esp_timer_get_time(),analysisMode_};
@@ -256,12 +270,17 @@ private:
   void reap(){vTaskDelete(task_);task_=nullptr;release();worker_=MicSession::Worker::None;}
   void release() {
     if(steps_){vQueueDelete(steps_);steps_=nullptr;}
-    heap_caps_free(trace_);heap_caps_free(stack_);heap_caps_free(block_);
+    heap_caps_free(trace_);heap_caps_free(stack_);heap_caps_free(block_);heap_caps_free(audio_);audio_=nullptr;
     trace_=nullptr;stack_=nullptr;block_=nullptr;
   }
   void add(const MicTrace::Step &step) {
     if(step.launch!=trace_->launch() && step.launch==unheard_ && step.rpm)trace_->begin(step.launch,0);
     trace_->add(step);fresh_=true;
+    if(step.frame && audio_ && step.launch==audio_->launch()){
+      const unsigned endMs=unsigned(std::lround(MicTrace::Trace::seconds(step.index)*1000))+200;
+      const auto now=uint64_t(esp_timer_get_time());
+      audio_->add(endMs,unsigned(now>audioStartedUs_?(now-audioStartedUs_)/1000:0),step.audio);
+    }
   }
   void report() {
     const uint32_t logged=logged_.load();
@@ -453,11 +472,33 @@ private:
     const int64_t started=esp_timer_get_time();
     MicRpm::Summary summary;float levelMax=-200,firstSeconds=0,lastHz=0;
     analysisFollowing_=pull_.analysis;
-    stream_->reset(pull_.rpm);
+    stream_->reset(pull_.rpm,pull_.analysis);
     const uint64_t taped=tape_.written;
     stream_->record(tapeArmed_.load()?&tape_:nullptr);
     uint64_t at=pull_.releaseSample,skipped=0;MicTrace::Follower follower(pull_.analysis);
     AnalysisMode::RpmFilter analysisFilter;
+    // Hold the two acquisition windows until a third window confirms the tone.
+    // Sending them in time order also preserves the alpha-beta filter clock.
+    struct Candidate {MicTrace::Step step;float hz,seconds;uint8_t cycles;};
+    const auto lostAtStart=lostSteps_;
+    Candidate pending[2];unsigned used=0;
+    auto publish=[&](MicTrace::Step s,float rpm,float seconds){
+      s.skippedMs=uint32_t(skipped*1000/RATE);
+      s.lostFrames=lostSteps_-lostAtStart;
+      s.rawRpm=uint16_t(std::lround(rpm));
+      // Relative measurements must not steer the original alpha-beta state.
+      const float filtered=analysisFilter.update(s.pitchConfidence?0.f:rpm,seconds);
+      s.rpm=s.pitchConfidence?s.rawRpm:uint16_t(std::lround(filtered));
+      if(rpm && !s.rpm)s.rejectedRpm=s.rawRpm;
+      send(s);
+    };
+    auto flush=[&](bool confirmed){
+      for(unsigned i=0;i<used;++i){
+        auto &p=pending[i];p.step.recovered=confirmed;
+        publish(p.step,confirmed?p.hz*60/p.cycles:0,p.seconds);
+      }
+      used=0;
+    };
     uint32_t busy=0;
     while(!follower.done() && !quit_ && !waiting_ && !dumping_ && !(pull_.analysis && stoppedLaunch_.load()==pull_.number)) {
       const uint64_t have=written();
@@ -469,7 +510,7 @@ private:
       const uint64_t from=MicSession::resume(at,have,USABLE,MARGIN);
       if(from!=at) {
         if(summary.frames)++overruns_;else ++lateStarts_;
-        stream_->skip(from-at);follower.skip();skipped+=from-at;at=from;
+        flush(false);stream_->skip(from-at);follower.skip();skipped+=from-at;at=from;
       }
       behindMax_=std::max(behindMax_,uint32_t(have-at));
       const uint32_t offset=uint32_t(at%RING_SAMPLES);
@@ -486,13 +527,25 @@ private:
       summary.add(r);levelMax=std::max(levelMax,r.level);
       auto step=follower.next(pull_.number,r,stream_->seconds());
       if(pull_.analysis) {
-        step.rawRpm=r.valid?uint16_t(std::lround(r.rpm)):0;
-        step.rpm=uint16_t(std::lround(analysisFilter.update(r.valid?r.rpm:0,stream_->seconds())));
-        if(r.valid && !step.rpm){step.rejectedRpm=uint16_t(std::lround(r.rpm));step.reason=MicRpm::Reason::Acquiring;}
-      }
-      send(step);
+        step.audio=AudioMetadata::measure(r);
+        const float seconds=stream_->seconds();
+        const bool candidate=r.reason==MicRpm::Reason::Acquiring && r.candidateCycles && r.candidateHz>0;
+        const float hz=candidate?r.candidateHz:r.hz;
+        const unsigned cycles=candidate?r.candidateCycles:r.cycles;
+        const bool continues=used && (candidate || r.valid) && cycles==pending[used-1].cycles &&
+            seconds-pending[used-1].seconds<=.201f && hz>0 &&
+            std::fabs(std::log2(hz/pending[used-1].hz))<.15f;
+        if(!continues || (candidate && used==2))flush(false);
+        if(candidate)pending[used++]={step,hz,seconds,r.candidateCycles};
+        else {
+          flush(r.valid);
+          step.pitchConfidence=r.pitchConfidence;step.recovered=r.pitchConfidence!=0;
+          publish(step,r.valid?r.rpm:r.relativeRpm,seconds);
+        }
+      } else send(step);
       if(tape_.written-taped>=uint64_t(TAPE_SPIN_S)*MicRpm::TRACK_HZ)stream_->record(nullptr);
     }
+    flush(false);
     stream_->record(nullptr);
     // A spin that stopped short still ends on the page; a newer pull replaces it.
     if(!follower.done() && !waiting_ && !quit_){MicRpm::Reading none;send(MicTrace::step(pull_.number,follower.slot()+1,none,true));}
@@ -569,6 +622,7 @@ private:
   void *stack_=nullptr;StaticTask_t *block_=nullptr;
   bool analysisMode_=false;std::atomic<bool> analysisFollowing_{false};std::atomic<uint32_t> stoppedLaunch_{0};
   MicTrace::Trace *trace_=nullptr;Spin *spins_=nullptr;  // PSRAM, on first use; the spin log stays for the next `p`
+  AudioMetadata::Recorder *audio_=nullptr;uint64_t audioStartedUs_=0;
   MicRpm::Tape tape_;std::atomic<bool> tapeArmed_{false};  // the task writes it only while following
   volatile bool hold_=true,waiting_=false,quit_=false,dumping_=false;bool have_=false,fresh_=false;
   std::atomic<Job> job_{Job::Idle};MicSession::Chain chain_;std::atomic<uint32_t> logged_{0};

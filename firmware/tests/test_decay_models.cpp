@@ -1,9 +1,102 @@
-#include "decay_models.h"
+#include "../../scripts/offline_decay_models.h"
+#include "fixed_riccati.h"
 #include <cassert>
 #include <iostream>
 #include <memory>
 using namespace Decay;
+static void checkPitchEvidence() {
+  static_assert(sizeof(Sample)==12, "Confidence should reuse the existing Sample padding");
+  auto spin=std::make_unique<Session>();
+  auto work=std::make_unique<Workspace>();
+  Curve curve;
+  const double q=std::sqrt(4*FixedRiccati::A*FixedRiccati::C-FixedRiccati::B*FixedRiccati::B);
+  const double intercept=std::atan((2*FixedRiccati::C*6+FixedRiccati::B)/q),scale=1.15;
+  auto rpm=[&](double t) { return float(1000*(q*std::tan(intercept-scale*q*t/2)-FixedRiccati::B)/(2*FixedRiccati::C)); };
+  auto fill=[&](unsigned count) {
+    spin->count=count;spin->launcherRpm=8000;spin->launcherMs=0;spin->hasStop=false;
+    for(unsigned i=0;i<count;++i)spin->samples[i]={1000+i*200,rpm(1+i*.2)};
+  };
+  auto fit=[&]() { return fitLiveModels(*spin,*work,curve); };
+
+  // The new field defaults to zero. Confirmed acquisition recovery retains the
+  // exact existing fit; it changes only the original-evidence support counters.
+  fill(60);
+  auto legacy=fit();const Curve legacyCurve=curve;
+  assert(legacy.fixedRiccati && legacy.support.original==60);
+  for(unsigned i=0;i<spin->count;++i)spin->samples[i].recovered=true;
+  const auto acquisition=fit();
+  assert(acquisition.fixedRiccati && !acquisition.support.original);
+  assert(acquisition.models[2].params.a==legacy.models[2].params.a && curve.end==legacyCurve.end);
+  for(unsigned i=0;i<CURVE_POINTS;++i)assert(curve.rpm[i]==legacyCurve.rpm[i]);
+
+  // A long, perfect relative-pitch track cannot bootstrap count or time span.
+  for(unsigned i=0;i<spin->count;++i)spin->samples[i].pitchConfidence=255;
+  assert(!fit().fixedRiccati && work->count==0);
+  for(unsigned i=0;i<9;++i)spin->samples[i*6].pitchConfidence=0;
+  assert(!fit().fixedRiccati);
+  for(unsigned i=0;i<spin->count;++i)spin->samples[i].pitchConfidence=i<10?0:255;
+  assert(!fit().fixedRiccati); // Ten genuine observations, but only 1.8 seconds.
+  spin->samples[10].pitchConfidence=0;
+  assert(fit().fixedRiccati); // Confirmed acquisition observations are evidence.
+
+  // Relative inliers never supply the 70% genuine-evidence agreement test.
+  fill(200);
+  for(unsigned i=0;i<spin->count;++i) {
+    auto &sample=spin->samples[i];
+    sample.pitchConfidence=i%10?255:0;
+    sample.recovered=sample.pitchConfidence!=0;
+    if(i%10==0 && i/10>=12)sample.rpm+=1200;
+  }
+  assert(!fit().fixedRiccati);
+
+  // Real relative measurements can gently correct an independently supported
+  // curve. Higher confidence increases their influence, without adding originals.
+  fill(60);
+  for(unsigned i=0;i<spin->count;++i)spin->samples[i].rpm+=70;
+  const auto biased=fit();const float biasedFinish=curve.end;
+  assert(biased.fixedRiccati);
+  for(unsigned i=0;i<spin->count;++i)if(i%2) {
+    auto &sample=spin->samples[i];
+    sample.rpm-=70;sample.recovered=true;sample.pitchConfidence=64;
+  }
+  const auto low=fit();const float lowFinish=curve.end;
+  for(unsigned i=0;i<spin->count;++i)if(i%2)spin->samples[i].pitchConfidence=255;
+  const auto high=fit();const float highFinish=curve.end;
+  const float ideal=(intercept-std::atan((2*FixedRiccati::C*FixedRiccati::TOPPLE+FixedRiccati::B)/q))*2/(scale*q);
+  assert(low.fixedRiccati && high.fixedRiccati && high.support.original==30 && high.support.accepted==30);
+  assert(std::fabs(highFinish-ideal)<std::fabs(lowFinish-ideal));
+  assert(std::fabs(lowFinish-ideal)<std::fabs(biasedFinish-ideal));
+  assert(std::fabs(highFinish-biasedFinish)>.01f && std::fabs(highFinish-biasedFinish)<1);
+  // Even a missing recovered flag cannot turn pitch recovery into originals.
+  for(unsigned i=0;i<spin->count;++i)spin->samples[i].recovered=false;
+  assert(fit().support.original==30);
+
+  // A dense competing pitch track has bounded influence over the same interval.
+  fill(2000);
+  for(unsigned i=0;i<spin->count;++i) {
+    auto &sample=spin->samples[i];const float t=1+i*.005f;
+    sample.ms=1000+i*5;sample.rpm=rpm(t);
+    if(i%100) { sample.rpm+=120;sample.recovered=true;sample.pitchConfidence=255; }
+  }
+  const auto dense=fit();
+  assert(dense.fixedRiccati && dense.support.original==20);
+  assert(std::fabs(curve.rpm[0]-6000)<40); // Thousands of pitch points cannot dominate.
+
+  // Free-model fallback ignores weak pitch in training, validation and the tail.
+  fill(24);spin->hasStop=true;spin->stopMs=80000;
+  const auto freeBase=fitFreeRiccati(*spin,*work,nullptr,nullptr);
+  const unsigned originalCount=work->count;
+  for(unsigned i=24;i<70;++i)
+    spin->samples[spin->count++]={1000+i*200,rpm(1+i*.2)+1000,false,false,true,255};
+  const auto freePitch=fitFreeRiccati(*spin,*work,nullptr,nullptr);
+  assert(freePitch.sampleCount==originalCount && freePitch.lastTime==freeBase.lastTime);
+  assert(freePitch.initialRpm==freeBase.initialRpm && freePitch.tailRpm==freeBase.tailRpm);
+  assert(freePitch.models[2].params.a==freeBase.models[2].params.a);
+  assert(freePitch.models[2].loss==freeBase.models[2].loss);
+  assert(freePitch.models[2].validation.rmse==freeBase.models[2].validation.rmse);
+}
 int main(){
+ checkPitchEvidence();
  Config cfg;
  Params p;p.a=.03f;p.b=.006f;
  float x=predictRpm(Model::Linear,p,9000,20);
@@ -167,27 +260,5 @@ int main(){
  for(unsigned i=0;i<MAX_SAMPLES;++i)session->samples[i]={1000,float(4000+MAX_SAMPLES-1-i),false};
  Results duplicates;prepare(*session,*work,duplicates,cfg);
  assert(work->count==1 && work->points[0].x==5.5f);
- // A short, clean high-speed arc can favor Power-Law and still imply a many-minute finish.
- session->launcherRpm=3847;session->launcherMs=0;session->count=80;session->hasStop=false;session->stopMs=21000;
- for(unsigned i=0;i<80;++i){
-   const float t=(i+1)*.2f;
-   session->samples[i]={200*(i+1),3847/std::sqrt(1+.25f*t)+18*std::sin(i*.71f),false,false};
- }
- auto shortArc=fitAllModels(*session,*work);
- assert(shortArc.best>=0 && !std::isfinite(liveFinishSeconds(shortArc,68)));
- // A well-observed synthetic spin with an 82-second stop can produce a finish time.
- session->count=300;session->stopMs=65000;
- for(unsigned i=0;i<300;++i){
-   const float t=(i+1)*.2f;
-   session->samples[i]={200*(i+1),3847*(1-t/82)+6*std::sin(i*1.7f),false,false};
- }
- auto longArc=fitAllModels(*session,*work);
- float estimate=liveFinishSeconds(longArc,65);
- assert(std::isfinite(estimate) && std::fabs(estimate-82)<3);
- assert(!std::isfinite(liveFinishSeconds(longArc,estimate+1)));
- auto conflict=longArc;
- auto &peer=conflict.models[(conflict.best+1)%MODEL_COUNT];
- peer=conflict.models[conflict.best];peer.stopSeconds+=30;
- assert(!std::isfinite(liveFinishSeconds(conflict,65)));
  std::cout<<"PASS: model reconstruction and robust fits\n";
 }

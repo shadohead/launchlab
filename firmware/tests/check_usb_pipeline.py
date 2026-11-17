@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Execute exact production USB polling/standby functions under bounded fakes."""
 import argparse
+import os
 import pathlib
 import subprocess
 import tempfile
@@ -131,6 +132,7 @@ static void prepareMotion(const Snapshot&){motionPending=true;}
 static void logLaunchMetrics(const Snapshot&){}static void noteStartMark(const Snapshot&){}static void saveStartMarks(){}
 // Settings persistence has its own production harness (check_save_paths.py).
 static void writeSettings(){}
+static bool calibrationNeedsSave(){return false;}
 static void cancelSettingEdit(){}
 static bool saveWakeNavigation(){return true;}
 '''
@@ -287,7 +289,7 @@ with tempfile.TemporaryDirectory() as tmp:
     cpp=pathlib.Path(tmp)/'usb_pipeline.cpp'
     cpp.write_text(prefix+closed(source)+function('pollUsbAwake')+'\n'+shutdown_flush()+'\n'+function('autoPowerOff')+tests)
     exe=pathlib.Path(tmp)/'usb_pipeline'
-    cmd=['c++','-std=c++17','-O1','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer',
+    cmd=[os.environ.get('CXX','c++'),'-std=c++17','-O1','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer',
          '-I'+str(args.firmware/'tests/fakes'),'-I'+str(args.firmware/'LaunchLabMini'),'-I'+str(args.firmware/'LaunchLabRpm'),str(cpp),'-o',str(exe)]
     subprocess.run(cmd,check=True)
     subprocess.run([str(exe)],check=True)
