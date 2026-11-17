@@ -145,6 +145,12 @@ class Rendering(Fixture):
         self.assertIn('1.0.0 adds a page.', once['firmware/LaunchLabMini/README.md'])
         self.assertEqual(once['firmware/releases/1.0.0-sticks3-alpha/notes.md'], frozen)
 
+    def test_local_builds_and_downloaded_libraries_are_not_source_documents(self):
+        for directory in ('firmware/build/analysis/sketch', 'firmware/build-host-suite', 'firmware/.arduino/user/libraries'):
+            self.write(directory + '/README.md', 'Unbalanced generated copy: ' + S % 'runtime')
+        self.render()
+        self.assertEqual(self.run_script('--check').returncode, 0)
+
     def test_a_beta_newer_than_stable_and_its_source(self):
         self.render()
         self.beta()

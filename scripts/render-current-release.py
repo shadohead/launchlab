@@ -46,7 +46,8 @@ FIRMWARE = ROOT/'site/public/firmware'
 START, END = '<!-- current-release:start', '<!-- current-release:end -->'
 BLOCK = re.compile(r'<!-- current-release:start ([a-z-]+)(?: (\d+\.\d+\.\d+))? -->(.*?)<!-- current-release:end -->', re.S)
 # Frozen or generated trees: never read for blocks, never rewritten.
-SKIP = ('firmware/releases/', 'hardware/', 'site/public/', 'site/dist/', 'site/node_modules/', '.git/')
+SKIP = ('firmware/releases/', 'firmware/build/', 'firmware/build-', 'firmware/.arduino/',
+        'hardware/', 'site/public/', 'site/dist/', 'site/node_modules/', '.git/')
 POINTER = '[the current release](UPDATER.md#current-release)'
 RELEASE_DOC = re.compile(r'docs/FIRMWARE_(\d+\.\d+\.\d+)\.md')
 VERSION = r'\d+\.\d+\.\d+'
@@ -200,7 +201,7 @@ def main(argv):
         releases = Releases()
         stale, problems, blocks = {}, [], 0
         for path, relative in documents():
-            text = path.read_text()
+            text = path.read_text(encoding='utf-8')
             try:
                 rendered = rewrite(text, path, releases)
             except Problem as problem:
@@ -217,7 +218,7 @@ def main(argv):
     # Nothing is written unless every document rendered; prose problems are reported after the blocks are fresh.
     if not check:
         for relative, (path, rendered) in stale.items():
-            path.write_text(rendered)
+            path.write_text(rendered, encoding='utf-8')
             print(f'updated {relative}')
     for problem in problems:
         print(f'FAIL: {problem}', file=sys.stderr)

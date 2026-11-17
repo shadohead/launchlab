@@ -68,7 +68,7 @@ KEEP_AWAKE = [
     ('loop', 'inactivity.touch(millis());',
      'an accepted pull (check_history_retry)'),
     ('loop', 'inactivity.touch(millis());',
-     'an Analysis pull, a person pulling (check_analysis_lifecycle)'),
+     'once when the five-minute Analysis limit stops the session (check_analysis_lifecycle)'),
     ('navigate', 'if(analysis.stop(esp_timer_get_time())){captureStoppedCalibration();inactivity.touch(millis());dirty=true;}',
      'one manual stop per launch (check_analysis_lifecycle)'),
     ('navigate', 'else if(analysis.nextResult()){inactivity.touch(millis());dirty=true;}',

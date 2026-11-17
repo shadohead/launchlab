@@ -39,13 +39,12 @@ Substitute the actual Stick port. Do not flash an arbitrary COM port. For a prev
 
 Local validation on November 16, 2026:
 
-- 98 native suites and 33 Python harness/tool suites passed. This includes full-session metadata, 32-record retention, interrupted writes, retries, legacy exports, allocation failures, lifecycle handling and graph layout.
+- After integrating upstream 0.20.11, 108 native suites and 52 Python harness/tool suites passed on Windows. This includes full-session metadata, 32-record retention, interrupted writes, retries, legacy exports, allocation failures, lifecycle handling, Bluetooth restart/pairing interactions and graph layout.
 - The Windows host compiler ran with assertions enabled but without ASan/UBSan runtimes. The standard shell gate continues to request both sanitizers; a sanitizer run remains part of qualification.
-- All 103 site tests passed with test files expanded explicitly for Windows; the updater redirect build passed.
-- The pinned ESP32-S3 PM build passed. Application image: 1,950,480 bytes of a 3,342,336-byte slot. Static globals: 135,956 bytes. The loop stack frame is 912 bytes against its 1,536-byte budget; other sketch frames satisfy the 2,560-byte limit. Source/artifact checksums and the unchanged partition table passed the offline flash plan.
+- The pinned ESP32-S3 PM build passed. Application image: 2,273,152 bytes of a 3,342,336-byte slot. Static globals: 91,148 bytes against the upstream 155,000-byte budget. The loop stack frame is 912 bytes against its 1,536-byte budget; other sketch frames satisfy the 2,560-byte limit. Source/artifact checksums and the unchanged partition table passed the offline flash plan.
 - ESP32 type-size measurement gives approximately 470 KiB of Analysis PSRAM for microphone processing, a live refit with the previous plot retained, and one maximum-size pending packet. Each additional failed-save packet needs at most 24,149 bytes. This excludes the rest of the application and is not an on-device free-heap measurement. Raw and metadata archive slots still fit, with 273 and 152 bytes of headroom respectively.
 
-The repository-wide `verify-artifacts.py` did not pass on this Windows checkout: an untouched historical hardware license has CRLF bytes while its checksum pins LF. Its Git blob matches the pinned checksum. That verifier also requires working firmware to equal the published 0.20.8 snapshot, so it does not currently qualify an unpublished Analysis candidate. No historical release assets or public update catalogs were changed. The RC bundle has its own checked source snapshot and SHA-256 inventory; the published-release gate still needs RC integration before publication.
+Published binaries, catalogs, checksums and frozen source snapshots are unchanged from upstream. `verify-artifacts.py` checks these independently of the development sketch; `--check-working-source` additionally requires the sketch to match the published snapshot when auditing a release sync. The ordinary firmware host suite validates the development sources. Historical Windows CRLF conversion can affect the artifact check, so Linux CI is the reference for those byte-for-byte checks.
 
 The following checks require a physical Stick and remain pending for this candidate:
 
