@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Battle Pass Tester</title>
+<!--
+  Web Bluetooth test client for LaunchLab's Battle Pass profile
+  (ble_battle_pass.h): it talks to the stick as the Beyblade X app would, and
+  decodes every packet it gets back. Open this file in Chrome or Edge (desktop
+  or Android); file:// works. Idea from Beyblade-Dragoon-RPM's
+  docs/battle-pass.mjs by Luciandraw (MIT); written anew for LaunchLab.
+-->
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--text:#16181d;--muted:#5d6470;--line:#dde1e7;--accent:#2457d6;--ok:#17803d;--warn:#b25b00;--bad:#c4302b;--code:#eef1f5}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#111317;--card:#1a1d23;--text:#e8eaee;--muted:#9aa2ae;--line:#2c313a;--accent:#6f9bff;--ok:#4cc272;--warn:#f0a040;--bad:#ff6b63;--code:#232730}}
+:root[data-theme="dark"]{--bg:#111317;--card:#1a1d23;--text:#e8eaee;--muted:#9aa2ae;--line:#2c313a;--accent:#6f9bff;--ok:#4cc272;--warn:#f0a040;--bad:#ff6b63;--code:#232730}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:860px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:22px;margin:0 0 4px}
+p.lead{margin:0 0 18px;color:var(--muted)}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:14px}
+h2{font-size:15px;margin:0 0 10px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:7px;padding:7px 12px;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.danger{color:var(--bad)}
+button:disabled{opacity:.45;cursor:default}
+.state{font-weight:600}
+.state.on{color:var(--ok)}.state.off{color:var(--muted)}.state.err{color:var(--bad)}
+dl{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin:0}
+dl div{background:var(--code);border-radius:7px;padding:8px 10px}
+dt{font-size:12px;color:var(--muted)}dd{margin:2px 0 0;font-size:18px;font-weight:600;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.check.ok{color:var(--ok)}.check.bad{color:var(--bad)}
+ol.launches{margin:0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px}
+ol.launches li{background:var(--code);border-radius:6px;padding:5px 8px;font-variant-numeric:tabular-nums}
+ol.launches li span{color:var(--muted);font-size:12px;margin-right:6px}
+canvas{width:100%;height:180px;display:block;background:var(--code);border-radius:7px}
+pre{margin:0;max-height:260px;overflow:auto;background:var(--code);border-radius:7px;padding:8px 10px;font:12px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
+.muted{color:var(--muted)}
+.note{font-size:13px;color:var(--muted);margin-top:8px}
+</style>
+</head>
+<body>
+<main>
+  <h1>Battle Pass tester</h1>
+  <p class="lead">Talks to a LaunchLab stick's Battle Pass profile the way the Beyblade X app does, and shows what comes back.</p>
+
+  <section>
+    <h2>Connection</h2>
+    <div class="row">
+      <button id="connect" class="primary">Connect</button>
+      <button id="disconnect" disabled>Disconnect</button>
+      <span id="state" class="state off">Not connected</span>
+    </div>
+    <p class="note" id="support">On the stick: Menu → Bluetooth, turned on. Menu → Bluetooth → Beyblade X shows the launches waiting; hold A there for the pass's button. Close the Beyblade X app first: the stick takes one connection at a time.</p>
+  </section>
+
+  <section>
+    <h2>Commands</h2>
+    <div class="row">
+      <button data-cmd="81" disabled title="0x51">Header</button>
+      <button data-cmd="116" disabled title="0x74">Header and history</button>
+      <button data-cmd="117" disabled class="danger" title="0x75">Clear history</button>
+      <button data-cmd="99" disabled title="0x63">Power off</button>
+    </div>
+    <p class="note">Clear deletes the launches waiting for the app, as a finished app sync does. Power off ends the session: the stick drops the link 300 ms later.</p>
+  </section>
+
+  <section>
+    <h2>Header <span class="muted" id="headerAge"></span></h2>
+    <dl>
+      <div><dt>Status</dt><dd id="hStatus">–</dd></div>
+      <div><dt>Battery</dt><dd id="hBattery">–</dd></div>
+      <div><dt>Best RPM</dt><dd id="hBest">–</dd></div>
+      <div><dt>Launch counter</dt><dd id="hTotal">–</dd></div>
+      <div><dt>Address</dt><dd id="hAddress">–</dd></div>
+    </dl>
+  </section>
+
+  <section>
+    <h2>History <span class="muted" id="historyInfo"></span></h2>
+    <ol class="launches" id="launches"><li class="muted">Not read yet</li></ol>
+  </section>
+
+  <section>
+    <h2>Last curve <span class="muted" id="curveInfo"></span></h2>
+    <canvas id="curve" width="820" height="180"></canvas>
+    <p class="note">Sent after each pull while connected: 32 points, each page value 7 500 000 / RPM.</p>
+  </section>
+
+  <section>
+    <h2>Log</h2>
+    <div class="row" style="margin-bottom:8px"><button id="clearLog">Clear log</button></div>
+    <pre id="log"></pre>
+  </section>
+</main>
+<script>
+const NAME='BEYBLADE_TOOL01';
+const SERVICE='55c40000-f8eb-11ec-b939-0242ac120002';
+const WRITE='55c4f001-f8eb-11ec-b939-0242ac120002';
+const NOTIFY='55c4f002-f8eb-11ec-b939-0242ac120002';
+const STATUS={0x00:'idle',0x04:'ready',0x10:'button'};
+const CMD={0x51:'header',0x74:'header + history',0x75:'clear',0x63:'power off'};
+
+const $=id=>document.getElementById(id);
+const hex=bytes=>[...bytes].map(b=>b.toString(16).padStart(2,'0')).join(' ');
+const le16=(b,i)=>b[i]|b[i+1]<<8;
+let device=null,writeChar=null,history=[],curve=[];
+
+function log(text){
+  const t=new Date().toLocaleTimeString([], {hour12:false});
+  const pre=$('log');pre.textContent+=`${t}  ${text}\n`;pre.scrollTop=pre.scrollHeight;
+}
+function setState(text,kind){const s=$('state');s.textContent=text;s.className='state '+kind;}
+function setConnected(on){
+  $('connect').disabled=on;$('disconnect').disabled=!on;
+  document.querySelectorAll('[data-cmd]').forEach(b=>b.disabled=!on);
+}
+
+if(!navigator.bluetooth){
+  $('support').textContent='This browser has no Web Bluetooth. Use Chrome or Edge on desktop or Android.';
+  $('connect').disabled=true;
+}
+
+$('connect').onclick=async()=>{
+  try{
+    setState('Choosing…','off');
+    device=await navigator.bluetooth.requestDevice({filters:[{name:NAME}],optionalServices:[SERVICE]});
+    device.addEventListener('gattserverdisconnected',()=>{
+      setConnected(false);setState('Disconnected','off');log('link dropped');writeChar=null;
+    });
+    setState('Connecting…','off');
+    const server=await device.gatt.connect();
+    const service=await server.getPrimaryService(SERVICE);
+    writeChar=await service.getCharacteristic(WRITE);
+    const notify=await service.getCharacteristic(NOTIFY);
+    notify.addEventListener('characteristicvaluechanged',e=>onPage(new Uint8Array(e.target.value.buffer)));
+    await notify.startNotifications();
+    setConnected(true);setState(`Connected to ${device.name}`,'on');log('connected, notifications on');
+    await send(0x51);
+  }catch(err){
+    setState(err.name==='NotFoundError'?'Not connected':'Failed: '+err.message,err.name==='NotFoundError'?'off':'err');
+    log('connect: '+err.message);
+    if(/globally disabled/i.test(err.message))
+      $('support').textContent='This browser has Web Bluetooth switched off (embedded browsers and Brave do by default). Open this file in Chrome or Edge, or enable Web Bluetooth in the browser\'s flags.';
+  }
+};
+$('disconnect').onclick=()=>{if(device&&device.gatt.connected)device.gatt.disconnect();};
+$('clearLog').onclick=()=>{$('log').textContent='';};
+document.querySelectorAll('[data-cmd]').forEach(b=>b.onclick=()=>{
+  const cmd=Number(b.dataset.cmd);
+  if(cmd===0x75&&!confirm('Clear the launches waiting for the app?'))return;
+  send(cmd);
+});
+
+async function send(cmd){
+  if(!writeChar)return;
+  try{
+    // The stick answers both kinds of write; the app uses with-response.
+    await writeChar.writeValueWithResponse(new Uint8Array([cmd]));
+    log(`→ 0x${cmd.toString(16)} (${CMD[cmd]})`);
+  }catch(err){log(`→ 0x${cmd.toString(16)} failed: ${err.message}`);}
+}
+
+const historyPages=new Map();
+function onPage(p){
+  log('← '+hex(p));
+  if(p.length!==17){log(`  unexpected length ${p.length}`);return;}
+  const tag=p[0];
+  if(tag===0xA0)return showHeader(p);
+  if(tag===0xA1){log('  history cleared');historyPages.clear();return;}
+  if(tag>=0xB0&&tag<=0xB7){historyPages.set(tag,p);if(tag===0xB7)showHistory();return;}
+  if(tag>=0x70&&tag<=0x73){curvePage(tag-0x70,p);return;}
+  log(`  unknown tag 0x${tag.toString(16)}`);
+}
+
+function showHeader(p){
+  $('hStatus').textContent=STATUS[p[3]]??`0x${p[3].toString(16)}`;
+  // 0-250, as the real pass's two AAA cells read: shown as a percentage.
+  $('hBattery').textContent=`${Math.round(Math.min(p[4],250)*100/250)} % (${p[4]}/250)`;
+  $('hBest').textContent=le16(p,7);
+  $('hTotal').textContent=le16(p,9);
+  $('hAddress').textContent=[...p.slice(11,17)].reverse().map(b=>b.toString(16).padStart(2,'0')).join(':');
+  $('headerAge').textContent='· '+new Date().toLocaleTimeString([], {hour12:false});
+}
+
+function showHistory(){
+  for(let t=0xB0;t<=0xB7;t++)if(!historyPages.has(t)){log(`  history incomplete: 0x${t.toString(16)} missing`);historyPages.clear();return;}
+  const data=new Uint8Array(7*16);
+  for(let i=0;i<7;i++)data.set(historyPages.get(0xB0+i).slice(1),i*16);
+  let sum=0;for(const b of data)sum=(sum+b)&0xFF;
+  const expected=historyPages.get(0xB7)[16];
+  const s=6*16,best=le16(data,s+6),total=le16(data,s+8),count=le16(data,s+10);
+  history=[];for(let i=0;i<Math.min(count,50);i++)history.push(le16(data,i*2));
+  historyPages.clear();
+  const ok=sum===expected;
+  $('historyInfo').innerHTML=`· ${count} stored, ${total} counted, best ${best} · checksum <span class="check ${ok?'ok':'bad'}">${ok?'ok':`bad (${sum} ≠ ${expected})`}</span>`;
+  const list=$('launches');list.innerHTML='';
+  if(!history.length){list.innerHTML='<li class="muted">Empty</li>';return;}
+  const first=total-count+1;
+  history.forEach((rpm,i)=>{const li=document.createElement('li');li.innerHTML=`<span>#${first+i}</span>${rpm}`;list.appendChild(li);});
+  log(`  history: ${count} launches, checksum ${ok?'ok':'BAD'}`);
+}
+
+function curvePage(index,p){
+  if(index===0)curve=new Array(32).fill(0);
+  for(let i=0;i<8;i++){const v=le16(p,1+i*2);curve[index*8+i]=v?Math.round(7500000/v):0;}
+  if(index===3)drawCurve();
+}
+
+function drawCurve(){
+  const c=$('curve'),g=c.getContext('2d');
+  const css=getComputedStyle(document.documentElement);
+  const w=c.width,h=c.height,pad=28;
+  g.clearRect(0,0,w,h);
+  const max=Math.max(...curve,1),peak=Math.max(...curve);
+  g.strokeStyle=css.getPropertyValue('--line');g.lineWidth=1;
+  g.fillStyle=css.getPropertyValue('--muted');g.font='12px system-ui';
+  for(const f of [0,.5,1]){const y=h-pad-(h-2*pad)*f;g.beginPath();g.moveTo(pad,y);g.lineTo(w-8,y);g.stroke();g.fillText(String(Math.round(max*f)),2,y-3);}
+  g.strokeStyle=css.getPropertyValue('--accent');g.lineWidth=2.5;g.beginPath();
+  curve.forEach((rpm,i)=>{const x=pad+(w-pad-8)*i/31,y=h-pad-(h-2*pad)*rpm/max;i?g.lineTo(x,y):g.moveTo(x,y);});
+  g.stroke();
+  $('curveInfo').textContent=`· peak ${peak} RPM · ${new Date().toLocaleTimeString([], {hour12:false})}`;
+  log(`  curve: peak ${peak} RPM`);
+}
+</script>
+</body>
+</html>

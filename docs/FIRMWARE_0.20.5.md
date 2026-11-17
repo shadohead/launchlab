@@ -1,7 +1,7 @@
 # Firmware 0.20.5 build context
 
 Published as a beta on 2026-10-28 and promoted to stable on 2026-10-28 after the owner's test on the rig: real pulls with the RPM-per-turn graph, the replay twice after a pull and the loop opened with A; the rest of the hand-test checklist is carried over from 0.20.2 (unchanged since).
-Superseded by [0.20.8](FIRMWARE_0.20.8.md); this document describes the preserved 0.20.5 release.
+This document describes the preserved 0.20.5 release; the updater guide names [the current release](UPDATER.md#current-release).
 
 The shipping runtime is `0.20.5-sticks3-songs-pm`, application SHA-256 `fac73207078db878a7eef0450cff063b6be498cc3c153697c85ec1d4c41ab730`. The compiled source snapshot is frozen in the [release directory](../firmware/releases/0.20.5-sticks3-songs-pm/). It uses the same PM SDK, toolchain, bootloader and partition table as [0.13.5](FIRMWARE_0.13.5.md). Use the [USB updater](https://launchlab.beywatch.gg/update) for the shipping image.
 

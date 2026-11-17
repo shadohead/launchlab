@@ -57,12 +57,13 @@ int main() {
   // Flip display, and every other row keeps its value (HIL `!set N`).
   {
     using Controls::Setting;
-    static_assert(unsigned(Setting::Sleep)==0 && unsigned(Setting::Mount)==9 && unsigned(Setting::ShakeWake)==10 && unsigned(Setting::WipeAll)==11);
+    static_assert(unsigned(Setting::Sleep)==0 && unsigned(Setting::Mount)==9 && unsigned(Setting::ShakeWake)==10 && unsigned(Setting::WipeAll)==11 && unsigned(Setting::Bluetooth)==14);
     static_assert(Controls::ORDER[0]==Setting::Sleep && Controls::ORDER[1]==Setting::ShakeWake);
     Controls::State s;s.page=Controls::Page::Settings;s.setting=0;
     unsigned seen=0;
-    for(unsigned i=0;i<=Controls::SETTING_COUNT;++i){seen|=1u<<s.setting;s.tapB();}
-    assert(s.setting==0 && seen==(1u<<(Controls::SETTING_COUNT+1))-1);  // every row and Back, once around
+    for(unsigned i=0;i<=Controls::ROWS;++i){seen|=1u<<s.setting;s.tapB();}
+    // Every row and Back, once around. Bluetooth has its own Menu page instead of a row.
+    assert(s.setting==0 && seen==(((1u<<(Controls::SETTING_COUNT+1))-1)&~(1u<<unsigned(Setting::Bluetooth))));
     s.setting=0;s.tapB();assert(s.setting==unsigned(Setting::ShakeWake));
     assert(s.tapA()==Controls::Effect::BeginEdit && s.page==Controls::Page::Edit);
     s.draft=1;assert(s.tapB()==Controls::Effect::Preview && s.draft==0);s.tapB();assert(s.draft==1);

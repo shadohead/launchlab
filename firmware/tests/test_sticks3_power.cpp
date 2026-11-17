@@ -21,10 +21,10 @@ int main() {
   assert(minutes==1);
 
   timer.setMinutes(3);timer.begin(UINT32_MAX-10000,true);
-  assert(timer.unusedShake() && timer.activeTimeout()==30000 && timer.timeout()==180000);
-  assert(!timer.due(19998) && timer.due(19999) && !timer.due(19999,true));
-  timer.touch(19999);assert(!timer.unusedShake() && timer.remaining(19999)==180000);
-  timer.begin(100,true);timer.setMinutes(10);assert(timer.activeTimeout()==30000);
+  assert(timer.unusedShake() && timer.activeTimeout()==15000 && timer.timeout()==180000);
+  assert(!timer.due(4998) && timer.due(4999) && !timer.due(4999,true));
+  timer.touch(4999);assert(!timer.unusedShake() && timer.remaining(4999)==180000);
+  timer.begin(100,true);timer.setMinutes(10);assert(timer.activeTimeout()==15000);
   timer.begin(100,false);assert(timer.activeTimeout()==600000);
   assert(IdlePowerPolicy::brightness(40,29999,false,false)==40);
   assert(IdlePowerPolicy::brightness(40,30000,false,false)==10);
@@ -42,7 +42,8 @@ int main() {
 
   StickS3Battery b;
   assert(!b.valid(0) && b.percent==-1);
-  b.update(3700,true,true,0,100);assert(b.valid(100) && b.percent==50 && b.charging);
+  // On the charger the reading is 150 mV above the cell: 3,700 mV is 31%, not 50%.
+  b.update(3700,true,true,0,100);assert(b.valid(100) && b.percent==31 && b.charging);
   assert(b.valid(15100) && !b.valid(15101));
   b.update(4200,true,true,1,200);assert(b.percent==100 && !b.charging);
   b.update(3000,true,true,1,200);assert(b.percent==0);
@@ -59,11 +60,33 @@ int main() {
   smooth.update(3700,true,true,1,30000);assert(smooth.percent==75);
   smooth.update(3700,true,true,1,35000);assert(smooth.percent==50);
   smooth.update(3250,true,true,1,40000);assert(smooth.percent==0 && smooth.estimateMillivolts==3250);
-  smooth.update(4100,true,true,0,45000);assert(smooth.percent==100); // charger change resets history
+  smooth.update(4100,true,true,0,45000);assert(smooth.percent==81); // charger change resets history
   smooth.update(3900,true,true,1,50000);assert(smooth.percent==75);
   smooth.update(3500,true,true,1,66000);assert(smooth.percent==25); // stale samples reset
   smooth.update(0,false,false,0,67000);assert(smooth.percent==-1);
   smooth.update(3700,true,true,1,68000);assert(smooth.percent==50); // error recovery resets
+  {  // The percentage while charging follows the charge put in, not the charger's voltage.
+    // A unit charged from flat on 2026-11-12: the reading and
+    // the share of the charge delivered by then (constant current for 130
+    // minutes, then the taper).
+    static constexpr struct {uint16_t mv;int charged;} measured[]={
+      {3630,15},{3684,22},{3702,26},{3748,33},{3812,40},{3894,48},{3946,55},
+      {4008,65},{4060,73},{4092,76},{4127,84},{4174,91}};
+    for(const auto &m:measured) {
+      const int shown=StickS3Battery::percentFor(m.mv,true);
+      assert(shown-m.charged<=8 && m.charged-shown<=8);
+    }
+    // The reading as it was (through 0.20.9) showed half at a quarter and full at 84%.
+    assert(StickS3Battery::percentFor(3702,false)-26>=20 && StickS3Battery::percentFor(4127,false)==100);
+    // Full only once the charger has finished: the charger holds 4,200 mV for the taper.
+    assert(StickS3Battery::percentFor(4200,true)<100 && StickS3Battery::percentFor(4190,false)==100);
+    // On battery nothing changes, and a flat cell on the charger reads 0.
+    assert(StickS3Battery::percentFor(3700,false)==50 && StickS3Battery::percentFor(3338,true)==0);
+    StickS3Battery unplug;
+    for(unsigned i=0;i<5;++i)unplug.update(3900,true,true,0,i*5000);
+    assert(unplug.percent==56);
+    unplug.update(3760,true,true,1,25000);assert(unplug.percent==57 && !unplug.charging); // off the charger: no jump
+  }
   {  // A boot out of a USB-retained standby.
     const UsbStandby none{},shake{UsbStandby::MAGIC,false},key{UsbStandby::MAGIC,true};
     const uint8_t removed=PM1_VIN_REMOVED_IRQ;

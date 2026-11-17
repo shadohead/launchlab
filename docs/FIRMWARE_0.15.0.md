@@ -1,6 +1,6 @@
 # Firmware 0.15.0 build context
 
-Superseded by [0.18.0](FIRMWARE_0.18.0.md); this document describes the preserved 0.15.0 release.
+This document describes the preserved 0.15.0 release; the updater guide names [the current release](UPDATER.md#current-release).
 
 Published as a beta on 2026-10-20 and promoted to stable the same day after the owner's hand test.
 

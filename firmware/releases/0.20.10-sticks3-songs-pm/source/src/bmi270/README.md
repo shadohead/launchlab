@@ -1,0 +1,1 @@
+Bosch BMI270 Sensor API (BSD-3-Clause), vendored from SparkFun_BMI270_Arduino_Library commit 21ea234de321da07c552f7a43cb36f7df4f73a27. Only standard bmi2/bmi270 sources are included. Used for sleep arming; normal acquisition remains M5Unified/VQF. See LICENSE.

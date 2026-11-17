@@ -2,6 +2,21 @@
 #include <algorithm>
 #include <cstdint>
 
+// Every limit below that ends a keep-awake path goes through sleepLimit().
+// In production it is the limit itself, a constant. A HIL build's
+// !sleepscale <n> divides them all by n, so the rig's sleep_blockers waits
+// seconds where a unit waits minutes; it is 1 from boot, and !reset and the
+// end of every HIL scenario put it back. The host tests pin the real limits
+// (test_motion_activity, check_keep_awake.py) and that production has no
+// divisor (check_sleep_scale.py).
+#if LAUNCHLAB_HIL
+#include <atomic>
+namespace Hil {inline std::atomic<uint16_t> sleepScale{1};}
+inline uint32_t sleepLimit(uint32_t ms){return ms/Hil::sleepScale.load(std::memory_order_relaxed);}
+#else
+constexpr uint32_t sleepLimit(uint32_t ms){return ms;}
+#endif
+
 class InactivityTimer {
 public:
   // A unit with no saved choice (1 minute from 0.20.2, 3 before; a saved
@@ -9,11 +24,15 @@ public:
   static constexpr uint8_t DEFAULT_MINUTES=1;
   // Shake to wake (shake_wake_setting.h) for a unit with no saved choice: On.
   static constexpr bool SHAKE_WAKE_DEFAULT=true;
-  static constexpr uint32_t UNUSED_SHAKE_MS=30000;
+  // A shake wake nobody uses sleeps this long after the movement stops
+  // (30 s through 0.20.9).
+  static constexpr uint32_t UNUSED_SHAKE_MS=15000;
   // Movement extends an unused shake wake, never past this since the wake.
   // Before 0.20.6 it had no limit: a unit shaken awake in a bag stayed awake,
-  // screen lit, for as long as the bag kept moving.
-  static constexpr uint32_t UNUSED_SHAKE_LIMIT_MS=120000;
+  // screen lit, for as long as the bag kept moving. 2 minutes through 0.20.9:
+  // on a unit that ran flat, 12 of 15 boots were shake wakes nobody used and
+  // took a fifth to a quarter of the battery (docs/battery/README.md).
+  static constexpr uint32_t UNUSED_SHAKE_LIMIT_MS=60000;
   // Movement keeps a used unit awake, but never past this after its last
   // button, pull or command (or the selected timeout, if longer). Before
   // 0.20.6 it had no limit: a unit put in a pocket or bag after practice
@@ -30,7 +49,7 @@ public:
     minutes_=minutes;return true;
   }
   uint8_t minutes()const{return minutes_;}
-  uint32_t timeout()const{return uint32_t(minutes_)*60*1000;}
+  uint32_t timeout()const{return sleepLimit(uint32_t(minutes_)*60*1000);}
   // A shake can be transport/handling rather than an intended practice session.
   // Buttons, an accepted pull or an interactive USB command establish use.
   void begin(uint32_t now,bool shakeWake=false){lastActivity_=lastUse_=wokeAt_=now;unusedShake_=shakeWake;}
@@ -41,7 +60,7 @@ public:
   // the last use otherwise).
   void motion(uint32_t now){lastActivity_=now;}
   bool unusedShake()const{return unusedShake_;}
-  uint32_t activeTimeout()const{return unusedShake_?std::min(timeout(),UNUSED_SHAKE_MS):timeout();}
+  uint32_t activeTimeout()const{return unusedShake_?std::min(timeout(),sleepLimit(UNUSED_SHAKE_MS)):timeout();}
   uint32_t elapsed(uint32_t now)const{return now-lastActivity_;}
   // Since the last button, pull or command (touch), movement not counted.
   uint32_t sinceUse(uint32_t now)const{return now-lastUse_;}
@@ -49,7 +68,7 @@ public:
     const uint32_t idle=elapsed(now),limit=activeTimeout();
     const uint32_t left=idle>=limit?0:limit-idle;
     const uint32_t since=unusedShake_?now-wokeAt_:sinceUse(now);
-    const uint32_t cap=unusedShake_?UNUSED_SHAKE_LIMIT_MS:std::max(timeout(),MOTION_LIMIT_MS);
+    const uint32_t cap=unusedShake_?sleepLimit(UNUSED_SHAKE_LIMIT_MS):std::max(timeout(),sleepLimit(MOTION_LIMIT_MS));
     return std::min(left,since>=cap?0:cap-since);
   }
   bool due(uint32_t now,bool measuring=false)const{return !measuring && !remaining(now);}
@@ -57,6 +76,22 @@ private:
   uint32_t lastActivity_=0,lastUse_=0,wokeAt_=0;
   uint8_t minutes_=DEFAULT_MINUTES;
   bool unusedShake_=false;
+};
+
+// A carried unit is shaken awake again as soon as it sleeps, so the limits
+// above bound one wake, not the walk. After LIMIT shake wakes in a row that
+// nobody used (no button, pull or command), the next sleep leaves the shake
+// wake unarmed and only the side key wakes the unit; any use, which that key
+// wake is, starts the count again. The count is kept across the power-off.
+struct UnusedWakes {
+  static constexpr uint8_t LIMIT=3;
+  static constexpr const char *KEY="idle_wakes";
+  // The count once this awake period ends in an inactivity sleep.
+  static constexpr uint8_t next(uint8_t stored,bool unusedShake) {
+    return !unusedShake?0:stored>=LIMIT?LIMIT:uint8_t(stored+1);
+  }
+  // Whether that sleep still arms the shake wake.
+  static constexpr bool armsShake(uint8_t count){return count<LIMIT;}
 };
 
 // Optical activity that is not a pull must not keep the unit awake. A pull's
@@ -74,7 +109,7 @@ public:
   bool measuring(uint32_t now,bool launch) {
     if(!launch){inLaunch_=false;return false;}
     if(!inLaunch_){inLaunch_=true;launchSince_=now;}
-    return now-launchSince_<MEASURE_LIMIT_MS;
+    return now-launchSince_<sleepLimit(MEASURE_LIMIT_MS);
   }
   void refused(){if(refusals_<FORCE_AFTER)++refusals_;}
   // A sleep that went ahead, or use since: the count starts again.
@@ -94,10 +129,24 @@ public:
   bool use(uint32_t now,bool held,bool released) {
     if(!held){holding_=false;return released;}
     if(!holding_){holding_=true;since_=now;}
-    return released || now-since_<LIMIT_MS;
+    return released || now-since_<sleepLimit(LIMIT_MS);
   }
 private:
   uint32_t since_=0;bool holding_=false;
+};
+
+// A connected phone (Bluetooth, 0.20.9) holds the sleep off, but only for
+// LIMIT_MS after the last button or accepted pull on the stick. What the phone
+// sends is not use: an app left open, or a phone left in range, would repeat
+// it until the battery is flat. The prototype stayed awake for as long as a
+// phone stayed connected. The sleep then ends the link.
+struct PhoneLinkAwake {
+  static constexpr uint32_t LIMIT_MS=600000;
+  static bool holds(bool connected,uint32_t sinceUse){return connected && sinceUse<sleepLimit(LIMIT_MS);}
+  // Until the sleep, given what the timer itself has left.
+  static uint32_t remaining(bool connected,uint32_t sinceUse,uint32_t timerLeft) {
+    return holds(connected,sinceUse)?std::max(timerLeft,sleepLimit(LIMIT_MS)-sinceUse):timerLeft;
+  }
 };
 
 // How an inactivity sleep wakes. On: the IMU's motion interrupt is armed and
@@ -159,7 +208,20 @@ struct StickS3Battery {
     samples_[next_]=mv;next_=(next_+1)%5;count_=std::min(5u,count_+1);
     uint16_t sorted[5];std::copy(samples_,samples_+count_,sorted);std::sort(sorted,sorted+count_);
     estimateMillivolts=mv<=3300?mv:sorted[count_/2];
-    percent=std::max(0,std::min(100,(int(estimateMillivolts)-3300)*100/800));
+    percent=percentFor(estimateMillivolts,charging);
+  }
+  // While the charger runs, the cell reads above what it holds. Through
+  // 0.20.8 the percentage took that reading as it was and showed 20 to 26
+  // points too many for most of a charge (50% at 26% of the charge, 100% from
+  // 84%), so a unit taken off the charger early looked far fuller than it
+  // was. A StickS3 charged from flat at constant current (2026-11-12,
+  // docs/battery/README.md) puts the rise at about 150 mV: with it taken
+  // off, the percentage stays within 7 points of the charge put in, and
+  // reads 100% only once the charger has finished.
+  static constexpr uint16_t CHARGE_RISE_MV=150;
+  static int percentFor(uint16_t estimateMv,bool chargerRunning) {
+    const int mv=int(estimateMv)-(chargerRunning?CHARGE_RISE_MV:0);
+    return std::max(0,std::min(100,(mv-3300)*100/800));
   }
   bool valid(uint32_t now)const{return voltageOk && now-sampledAt<=STALE_MS;}
   const char *chargeName()const{return !chargeKnown?"unknown":charging?"charging":"not_charging";}

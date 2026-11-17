@@ -1,8 +1,10 @@
 # LaunchLab for M5StickS3
 
-Current checkout: **Analysis 1.0-rc.1**, based on firmware 0.20.8, for **M5StickS3 K150 (ESP32-S3, 8 MB flash / 8 MB OPI PSRAM)**. Runtime: `0.20.8-analysis-1.0-rc.1-pm`. This is a release candidate awaiting hardware acceptance, not a published stable release. See the [RC notes and checklist](../../docs/ANALYSIS_1.0_RC.md).
+Current checkout: **Analysis 1.0-rc.1**, based on firmware 0.20.11, for **M5StickS3 K150 (ESP32-S3, 8 MB flash / 8 MB OPI PSRAM)**. Runtime: `0.20.11-analysis-1.0-rc.1-pm`. This is a release candidate awaiting hardware acceptance, not a published stable release. See the [RC notes and checklist](../../docs/ANALYSIS_1.0_RC.md).
+
+Upstream release baseline: **<!-- current-release:start runtime -->0.20.10-sticks3-songs-pm<!-- current-release:end -->**, the recommended stable release, for **M5StickS3 K150 (ESP32-S3, 8 MB flash / 8 MB OPI PSRAM)**. <!-- current-release:start source -->This folder holds the source of the newer **0.20.11-sticks3-songs-pm** beta release: see its [0.20.11 release notes](../releases/0.20.11-sticks3-songs-pm/README.md) and [build context](../../docs/FIRMWARE_0.20.11.md).<!-- current-release:end -->
 One application supports analog QRE1113 and TCRT5000 through the saved Sensor profile setting.
-See [build context](../../docs/FIRMWARE_0.20.8.md) and [release notes](../releases/0.20.8-sticks3-songs-pm/README.md).
+See <!-- current-release:start build-context -->[build context](../../docs/FIRMWARE_0.20.10.md)<!-- current-release:end --> and <!-- current-release:start release-notes -->[0.20.10 release notes](../releases/0.20.10-sticks3-songs-pm/README.md)<!-- current-release:end -->.
 
 Tilt replay is reliable on hard pulls: the accelerometer uses its ±16 g range, and every IMU sample is read from the BMI270 FIFO, so the live level and recordings no longer drop out at rest or during saves. A pull that reaches the gyro's 2000 °/s limit keeps its replay, marked **Tilt approx.**
 A single click of the side power key saves pending pulls and powers off.

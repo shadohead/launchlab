@@ -1,6 +1,6 @@
 # Analysis 1.0-rc.1
 
-Runtime: `0.20.8-analysis-1.0-rc.1-pm` · M5StickS3 K150 · based on firmware 0.20.8.
+Runtime: `0.20.11-analysis-1.0-rc.1-pm` · M5StickS3 K150 · based on firmware 0.20.11.
 
 This candidate freezes the current predictor and recording format for hardware acceptance. It has not been published or promoted to stable. The analysis feature version is separate from the base firmware version.
 

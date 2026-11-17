@@ -1,6 +1,7 @@
 # Firmware 0.20.8 build context
 
 Published as a beta on 2026-11-06 and promoted to stable on 2026-11-06 after the owner's hand test: the checklist with About, the battery icon and songs without gaps, 0.20.7's Mic RPM and 0.20.6's battery and sleep fixes.
+This document describes the preserved 0.20.8 release; the updater guide names [the current release](UPDATER.md#current-release).
 
 The shipping runtime is `0.20.8-sticks3-songs-pm`, application SHA-256 `581de973164784a34afa91a1284b5d8729c3b93770846f72ae03cb7b71ca1741`. The compiled source snapshot is frozen in the [release directory](../firmware/releases/0.20.8-sticks3-songs-pm/). It uses the same PM SDK, toolchain, bootloader and partition table as [0.13.5](FIRMWARE_0.13.5.md). Use the [USB updater](https://launchlab.beywatch.gg/update) for the shipping image.
 

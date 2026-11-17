@@ -1,15 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {readFile} from 'node:fs/promises';
-import {APP_OFFSET, APP_IDENTITY_BYTES, compareVersions, validateCatalog, verifiedDownload, flashVerified, inspectInstalledApplication} from '../src/flasher.js';
-import {catalog,oldCatalog,base,localFetch,images,oldImages,fake,opts} from './helpers.js';
-const archivedCatalog=JSON.parse(await readFile(new URL('../public/firmware/0.12.1/catalog.json',import.meta.url)));
-const archivedImages=await Promise.all(archivedCatalog.files.map(file=>verifiedDownload(file,base,localFetch)));
-test('default catalog selects exact 0.20.8 while withdrawn 0.12.1 bytes are preserved',()=>{
-  assert.equal(catalog.version,'0.20.8');assert.equal(images[3].data.length,1891648);
+import {existsSync} from 'node:fs';
+import {readdir} from 'node:fs/promises';
+import {APP_OFFSET, APP_IDENTITY_BYTES, MAX_KNOWN_APPLICATIONS, compareVersions, validateCatalog, verifiedDownload, flashVerified, inspectInstalledApplication} from '../src/flasher.js';
+import {catalog,index,current,oldCatalog,base,localFetch,images,oldImages,preserved,newestFirst,downgradeBlocked,fake,opts} from './helpers.js';
+const {catalog:archivedCatalog,images:archivedImages}=await preserved('0.12.1');
+// Every catalog kept on disk, newest first: the listed releases and the archived 0.12.1.
+const onDisk=newestFirst((await readdir(new URL('firmware/',base))).filter(name=>existsSync(new URL('firmware/'+name+'/catalog.json',base))));
+test('default catalog is the latest stable release\'s own catalog while withdrawn 0.12.1 bytes are preserved',async()=>{
+  assert.equal(current,index.latest);assert.deepEqual(catalog,(await preserved(current)).catalog);
+  assert.equal(images[3].data.length,catalog.files[3].size);
+  assert.equal(createHash('sha256').update(images[3].data).digest('hex'),catalog.files[3].sha256);
   assert.equal(oldCatalog.version,'0.10.1');assert.equal(oldImages[3].data.length,731728);
-  assert.equal(catalog.files[3].sha256,'581de973164784a34afa91a1284b5d8729c3b93770846f72ae03cb7b71ca1741');
   assert.equal(archivedImages[3].data.length,808064);
   assert.equal(archivedCatalog.files[3].sha256,'a13d590f11c3c8e8f8ab84a0b8ebd8d69761cf1046e2a0f9fd1d9c162d01ad41');
 });
@@ -26,7 +29,7 @@ test('older verified application updates app only and never erases all',async()=
 });
 test('known newer installed application blocks an older selected target',async()=>{
   const l=fake({app:images[3].data});
-  await assert.rejects(flashVerified({...opts(l),catalog:oldCatalog,images:oldImages}),/Downgrade blocked.*0.20.8.*0.10.1/);
+  await assert.rejects(flashVerified({...opts(l),catalog:oldCatalog,images:oldImages}),downgradeBlocked(current,'0.10.1'));
   assert.equal(l.writes.length,0);
 });
 test('already installed exact version is a no-op; repeated update stays a no-op',async()=>{
@@ -37,7 +40,7 @@ test('already installed exact version is a no-op; repeated update stays a no-op'
 test('Arduino descriptor build label is not interpreted as LaunchLab version',async()=>{
   const descriptor=images[3].data.slice(48,80);assert.notEqual(new TextDecoder().decode(descriptor).split('\0')[0],catalog.version);
   const l=fake({app:images[3].data});const found=await inspectInstalledApplication(l,catalog);
-  assert.equal(found.state,'verified');assert.equal(found.application.version,'0.20.8');
+  assert.equal(found.state,'verified');assert.equal(found.application.version,current);
 });
 test('complete device image checksum is required beyond matching ELF descriptor',async()=>{
   const app=images[3].data.slice();app[10000]^=1;const l=fake({app});
@@ -177,16 +180,36 @@ test('checksummed bundles cannot move a partition, corrupt its embedded digest o
   }
 });
 
-test('every preserved older catalog recognizes 0.20.8 and blocks its downgrade',async()=>{
-  for(const version of ['0.10.1','0.10.7','0.10.11','0.10.14','0.10.21','0.10.22','0.11.1','0.11.2','0.12.1','0.12.2','0.13.5','0.13.7','0.13.8','0.13.9','0.14.0','0.15.0','0.16.0','0.17.0','0.18.0','0.18.1','0.19.0','0.20.0','0.20.1','0.20.2','0.20.3','0.20.4','0.20.5','0.20.6','0.20.7']){
-    const previous=JSON.parse(await readFile(new URL('../public/firmware/'+version+'/catalog.json',import.meta.url)));
-    const previousImages=await Promise.all(previous.files.map(file=>verifiedDownload(file,base,localFetch)));
+// Catalogs that were preserved when 0.20.8 was current; none of them may disappear.
+const preservedBefore=['0.10.1','0.10.7','0.10.11','0.10.14','0.10.21','0.10.22','0.11.1','0.11.2','0.12.1','0.12.2','0.13.5','0.13.7','0.13.8','0.13.9','0.14.0','0.15.0','0.16.0','0.17.0','0.18.0','0.18.1','0.19.0','0.20.0','0.20.1','0.20.2','0.20.3','0.20.4','0.20.5','0.20.6','0.20.7','0.20.8'];
+test('every preserved older catalog recognizes the current release and blocks its downgrade',async()=>{
+  for(const version of preservedBefore)assert.ok(onDisk.includes(version),version+' catalog is still preserved');
+  const older=onDisk.filter(version=>compareVersions(version,current)<0);assert.ok(onDisk.includes(current)&&older.length>0);
+  for(const version of older){
+    const {catalog:previous,images:previousImages}=await preserved(version);
     const loader=fake({app:images[3].data});
-    await assert.rejects(flashVerified({...opts(loader),catalog:previous,images:previousImages}),/Downgrade blocked.*0.20.8/);
+    await assert.rejects(flashVerified({...opts(loader),catalog:previous,images:previousImages}),downgradeBlocked(current,version));
     assert.equal(loader.writes.length,0);
   }
 });
+test('every preserved catalog is valid and recognizes every listed release, betas included',async()=>{
+  const offered=await Promise.all([...index.releases,...index.betaReleases].map(r=>preserved(r.version)));
+  for(const version of onDisk){
+    const {catalog:kept}=await preserved(version);assert.equal(validateCatalog(kept).version,version);
+    for(const {catalog:release} of offered)assert.ok(kept.knownApplications.some(a=>a.version===release.version&&a.sha256===release.files[3].sha256&&a.runtime===release.runtime),version+' recognizes '+release.version);
+  }
+});
 
+// The identity table grows by one with every published release; its bound is a sanity check on fetched data.
+test('a catalog recognizing years of releases validates and only an absurd identity table is refused',()=>{
+  const digest=(kind,n,length)=>createHash('sha256').update(kind+n).digest('hex').slice(0,length);
+  const grown=count=>{const c=structuredClone(catalog);
+    for(let n=c.knownApplications.length;n<count;n++)c.knownApplications.push({version:'1.'+n+'.0',runtime:'1.'+n+'.0-sticks3-future',size:APP_IDENTITY_BYTES+n,sha256:digest('app',n,64),md5:digest('md5',n,32),elfSha256:digest('elf',n,64),sensor:'qre1113'});
+    return c;};
+  assert.ok(catalog.knownApplications.length<=MAX_KNOWN_APPLICATIONS/2,'the real table is half way to its bound: raise MAX_KNOWN_APPLICATIONS here and in the Beywatch copy well before it is reached');
+  for(const count of [catalog.knownApplications.length+120,MAX_KNOWN_APPLICATIONS])assert.equal(validateCatalog(grown(count)).knownApplications.length,count);
+  for(const count of [MAX_KNOWN_APPLICATIONS+1,100000])assert.throws(()=>validateCatalog(grown(count)),/installed-application identities/);
+});
 // Sensor-neutral release names retain all version, path and board guards.
 test('release identity permits original QRE names and current shared-profile names only',()=>{
   assert.equal(validateCatalog(oldCatalog),oldCatalog);

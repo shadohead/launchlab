@@ -10,13 +10,14 @@
 class SettingsSave {
 public:
   static constexpr uint32_t RETRY_MS=1000,FAILED_RETRY_MS=5000;
-  enum Item:uint16_t {Sleep=1,Rpm=2,Brightness=4,Flip=8,Sensor=16,Appearance=32,Mount=64,Pin=128,ExtPower=256,Milestones=512,ShakeWake=1024,BatteryIcon=2048,AnalysisResult=4096};
+  enum Item:uint32_t {Sleep=1,Rpm=2,Brightness=4,Flip=8,Sensor=16,Appearance=32,Mount=64,Pin=128,ExtPower=256,Milestones=512,ShakeWake=1024,BatteryIcon=2048,
+    Bluetooth=4096,Bonds=8192,Name=16384,PassConfirmed=32768,AnalysisResult=65536};
   // Bit for a Controls::Setting row: Sleep, Rpm, Brightness, Flip, Sensor,
   // Theme, BestEffect, Celebrate, Sound, Mount, ShakeWake, then BatteryIcon
   // after Wipe all and About, which save nothing. The three appearance rows
   // share a record; Celebrate is saved with the milestone table.
-  static uint16_t item(unsigned row) {
-    static constexpr uint16_t items[]={Sleep,Rpm,Brightness,Flip,Sensor,Appearance,Appearance,Milestones,Appearance,Mount,ShakeWake,0,0,BatteryIcon};
+  static uint32_t item(unsigned row) {
+    static constexpr uint32_t items[]={Sleep,Rpm,Brightness,Flip,Sensor,Appearance,Appearance,Milestones,Appearance,Mount,ShakeWake,0,0,BatteryIcon,Bluetooth};
     return row<sizeof(items)/sizeof(items[0])?items[row]:0;
   }
   // The owner rechecks everything itself. This only skips a request it would
@@ -27,8 +28,8 @@ public:
   static bool ownerIdle(bool ready,bool suspended,bool opticalIdle,bool signalFault) {
     return ready && !suspended && (opticalIdle || signalFault);
   }
-  void mark(uint16_t items){pending_|=items;}
-  uint16_t pending()const{return pending_;}
+  void mark(uint32_t items){pending_|=items;}
+  uint32_t pending()const{return pending_;}
   bool failed()const{return failed_;}
   bool due(uint32_t now)const {
     return pending_ && (!tried_ || uint32_t(now-lastTry_)>=(failed_?FAILED_RETRY_MS:RETRY_MS));
@@ -37,15 +38,15 @@ public:
   void refused(){++refusals_;}
   // Called after writing inside a granted checkpoint. Once all is saved, the
   // next choice is written at once rather than after a retry interval.
-  void wrote(uint16_t saved) {
-    pending_&=uint16_t(~saved);failed_=pending_!=0;tried_=failed_;
+  void wrote(uint32_t saved) {
+    pending_&=uint32_t(~saved);failed_=pending_!=0;tried_=failed_;
     if(failed_)++errors_;else ++saves_;
   }
   uint32_t saves()const{return saves_;}
   uint32_t errors()const{return errors_;}
   uint32_t refusals()const{return refusals_;}
 private:
-  uint16_t pending_=0;
+  uint32_t pending_=0;
   uint32_t lastTry_=0,saves_=0,errors_=0,refusals_=0;
   bool tried_=false,failed_=false;
 };

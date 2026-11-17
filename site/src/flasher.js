@@ -1,5 +1,8 @@
 export const APP_OFFSET = 0x10000;
 export const APP_IDENTITY_BYTES = 1024;
+// A sanity bound on a fetched catalog, not a product rule: a catalog recognizes every published
+// application, stable and beta, plus the few private builds, so this exceeds both release lists together.
+export const MAX_KNOWN_APPLICATIONS = 1200;
 const EXPECTED_FILES = [['bootloader.bin', 0], ['partitions.bin', 0x8000], ['boot_app0.bin', 0xe000], ['application.bin', APP_OFFSET]];
 // The partition table ends at 0x9000; the NVS area before boot_app0 is not
 // part of its writable slot, even though it is absent from the image bundle.
@@ -47,7 +50,7 @@ export function validateCatalog(catalog) {
     const limit = FILE_REGION_LIMITS[i];
     if (offset + file.size > limit) throw new Error('Firmware exceeds its flash region.');
   });
-  if (!Array.isArray(catalog.knownApplications) || !catalog.knownApplications.length || catalog.knownApplications.length > 100) throw new Error('Missing installed-application identities.');
+  if (!Array.isArray(catalog.knownApplications) || !catalog.knownApplications.length || catalog.knownApplications.length > MAX_KNOWN_APPLICATIONS) throw new Error('Missing installed-application identities.');
   const applications = new Set(), elves = new Set();
   for (const app of catalog.knownApplications) {
     compareVersions(app.version, app.version);

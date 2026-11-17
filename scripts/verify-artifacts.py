@@ -1,5 +1,9 @@
 from pathlib import Path
-import hashlib, json, zipfile
+import argparse, hashlib, json, subprocess, sys, zipfile
+parser = argparse.ArgumentParser(description='Verify published release artifacts and their frozen sources.')
+parser.add_argument('--check-working-source', action='store_true',
+                    help='Also require the development sketch to match the published source snapshot.')
+args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 catalog = json.loads((root/'site/public/firmware/catalog.json').read_text())
 count=0
@@ -76,19 +80,20 @@ for section,base in [('source_sha256',current/'source'),('artifact_sha256',curre
 for line in (current/'SHA256SUMS').read_text().splitlines():
     digest,name=line.split(maxsplit=1)
     assert hashlib.sha256((current/name).read_bytes()).hexdigest()==digest,name
-for path in (root/'firmware/LaunchLabMini').rglob('*'):
-    if path.is_file():
-        # Working instructions can be corrected without changing a frozen
-        # release. Keep exact equality for every production source file.
-        if path == root/'firmware/LaunchLabMini/README.md':
-            assert (current/'source/README.md').is_file()
-            continue
-        assert path.read_bytes()==(current/'source'/path.relative_to(root/'firmware/LaunchLabMini')).read_bytes(),path
-for path in (current/'source').rglob('*'):
-    if path.is_file() and path != current/'source/README.md':
-        working=root/'firmware/LaunchLabMini'/path.relative_to(current/'source')
-        assert working.is_file() and working.read_bytes()==path.read_bytes(),working
-assert (root/'firmware/LaunchLabRpm/analog_tachometer.h').read_bytes()==(current/'source/analog_tachometer.h').read_bytes()
+# Development firmware can differ from a release without changing what the
+# updater ships. Release audits may additionally require an exact source copy.
+if args.check_working_source:
+    for path in (root/'firmware/LaunchLabMini').rglob('*'):
+        if path.is_file():
+            if path == root/'firmware/LaunchLabMini/README.md':
+                assert (current/'source/README.md').is_file()
+                continue
+            assert path.read_bytes()==(current/'source'/path.relative_to(root/'firmware/LaunchLabMini')).read_bytes(),path
+    for path in (current/'source').rglob('*'):
+        if path.is_file() and path != current/'source/README.md':
+            working=root/'firmware/LaunchLabMini'/path.relative_to(current/'source')
+            assert working.is_file() and working.read_bytes()==path.read_bytes(),working
+    assert (root/'firmware/LaunchLabRpm/analog_tachometer.h').read_bytes()==(current/'source/analog_tachometer.h').read_bytes()
 # Current hardware presentation and downloads are independently hash-pinned.
 # Frozen firmware and historical hardware continue through the checks above.
 hardware_provenance=root/'site/public/provenance/hardware.json'
@@ -117,4 +122,9 @@ for entry in h['images']+h['models']:
 proof=root/'site/public'/h['pipeline']['sourceProof']
 assert hashlib.sha256(proof.read_bytes()).hexdigest()==h['pipeline']['sourceProofSha256'],proof
 assert json.loads(proof.read_text())['status']=='PASS'
+# Documents show the current release through blocks generated from the release index.
+# A stale block, or prose that names a current release by hand, fails here, after the
+# generator's own tests on a fixture repository.
+for step in (['test_render_current_release.py'],['render-current-release.py','--check']):
+    if subprocess.run([sys.executable,str(root/'scripts'/step[0]),*step[1:]]).returncode: sys.exit(1)
 print(f"PASS: {count} checksums; all 3MF archives intact; preserved catalog {catalog['version']} and source {source_version} independently match frozen firmware")

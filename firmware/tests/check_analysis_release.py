@@ -9,7 +9,7 @@ from local_firmware import release_identity
 
 identity = release_identity()
 assert identity["analysis_version"] == "1.0-rc.1"
-assert identity["runtime"] == "0.20.8-analysis-1.0-rc.1-pm"
+assert identity["runtime"] == "0.20.11-analysis-1.0-rc.1-pm"
 assert len(identity["runtime"].encode()) < 32  # USB backup runtime field.
 
 sketch = root / "firmware/LaunchLabMini"

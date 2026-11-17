@@ -45,6 +45,8 @@ struct LGFXBase {
     if(y==229)for(const auto &s:spans)assert(s[2]+(s[3]==4?26:s[3]==2?16:8)<=y);
   }
   void drawRoundRect(int x,int y,int w,int h,int,uint16_t){fillRect(x,y,w,h,0);}
+  void fillRoundRect(int x,int y,int w,int h,int r,uint16_t c){drawRoundRect(x,y,w,h,r,c);}
+  void fillScreen(uint16_t c){fillRect(0,0,135,240,c);}
   static int font4Width(const char *text){int width=0;for(const char *p=text;*p;++p)width+=(*p>='0' && *p<='9')?14:*p==':'?7:*p==' '?5:*p=='R'?17:*p=='P'?16:*p=='M'?21:18;return width;}
   int textWidth(const char *text,const int *font){return *font==4?font4Width(text):int(std::strlen(text))*8;}
   // Font 2 is proportional: 8 px a glyph, but 5 for i, l, space and narrow

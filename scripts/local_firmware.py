@@ -20,7 +20,7 @@ CONFIG = CACHE / "launchlab-config.yaml"
 SDK = CACHE / "pm-sdk/esp32-arduino-libs"
 PYTHON = CACHE / "flash-venv/Scripts/python.exe"
 FQBN = "esp32:esp32:esp32s3:CDCOnBoot=cdc,USBMode=hwcdc,FlashSize=8M,PartitionScheme=default_8MB,PSRAM=opi"
-RELEASE = ROOT / "firmware/releases/0.20.8-sticks3-songs-pm"
+RELEASE = ROOT / "firmware/releases/0.20.11-sticks3-songs-pm"
 MANIFEST = BUILD / "local-build.json"
 APP_OFFSET = 0x10000
 FLASH_SIZE = 0x800000
@@ -113,13 +113,16 @@ def build():
             "--build-property",
             "tools.esp32-arduino-libs.path=" + SDK.as_posix(),
             "--build-property",
-            "compiler.cpp.extra_flags=-DVQF_SINGLE_PRECISION -fstack-usage -mtext-section-literals -DLAUNCHLAB_MOTION_ADC_GATE=1 -DLAUNCHLAB_CPU_PM=1",
+            "compiler.cpp.extra_flags=-DVQF_SINGLE_PRECISION -fstack-usage -mtext-section-literals -DLAUNCHLAB_MOTION_ADC_GATE=1 -DLAUNCHLAB_CPU_PM=1 -DLAUNCHLAB_RADIO_CAL_WRAP=1",
+            "--build-property",
+            "compiler.c.elf.extra_flags=-Wl,--wrap=nvs_open",
             "--build-path",
             BUILD,
             ROOT / "firmware/LaunchLabMini",
         ]
     )
     run([PYTHON, ROOT / "firmware/tools/check_stack_usage.py", BUILD])
+    run([PYTHON, ROOT / "firmware/tools/check_static_ram.py", BUILD])
     if before != source_digest():
         raise RuntimeError("Source changed during compilation; rebuild")
     app = BUILD / "LaunchLabMini.ino.bin"

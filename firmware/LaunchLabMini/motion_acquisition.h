@@ -4,6 +4,8 @@
 #include <memory>
 #include "freertos/semphr.h"
 #include "esp_timer.h"
+#include <esp_heap_caps.h>
+#include <esp_memory_utils.h>
 #include "accel_range.h"
 #include "bmi270_fifo.h"
 #include "launch_motion.h"
@@ -38,6 +40,7 @@ public:
     // Raw samples at or beyond full scale; axis bits 0-2 accel x/y/z, 3-5 gyro x/y/z.
     uint32_t clipSamples=0,clipRun=0,maxClipRun=0,lastClipRun=0,lastClipMs=0,lastClipAxes=0;
     bool orientationReady=false,rest=false;
+    LaunchMotion::Quaternion pose; // The latest fused pose, published with fusedUs.
     MountOrientation::Mode mount=MountOrientation::Mode::Top;
     MotionActivity::State activity;
   };
@@ -49,6 +52,15 @@ public:
     if(!gate_)gate_=xSemaphoreCreateMutex();
     if(!ringGate_)ringGate_=xSemaphoreCreateMutex();
     if(!gate_ || !ringGate_)return false;
+    // 57 KB of pre-roll, only touched from tasks: PSRAM, Bluetooth on or off. With
+    // BLE linked (36.8 KB more static RAM), an internal canvas and ring leave about
+    // 18 KB free against stock's 54.7 KB; ring in PSRAM leaves about 75 KB.
+    if(!ring_) {
+      void *memory=heap_caps_malloc(sizeof(LaunchMotion::Ring),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+      if(!memory)memory=heap_caps_malloc(sizeof(LaunchMotion::Ring),MALLOC_CAP_8BIT);
+      if(!memory)return false;
+      ring_=new(memory) LaunchMotion::Ring;
+    }
     M5.Imu.setCalibration(0,0,0);
     TaskHandle_t created=nullptr;
     if(xTaskCreatePinnedToCore(entry,"launch_imu",8192,this,2,&created,0)!=pdPASS)return false;
@@ -106,12 +118,14 @@ public:
     pollMs_.store(ms);return true;
   }
   uint32_t pollMs()const{return pollMs_.load();}
+  uint32_t maxCaptureUs=0;
+  bool ringInPsram()const{return ring_ && esp_ptr_external_ram(ring_);}
   bool setMount(MountOrientation::Mode mode) {
     if(!MountOrientation::valid(unsigned(mode)))return false;
     if(ringGate_ && xSemaphoreTake(ringGate_,pdMS_TO_TICKS(20))!=pdTRUE)return false;
     if(mode_!=mode) {
       mode_=mode;++frame_;
-      orientation_.resetFrame();activity_.reset();ring_.clear();
+      orientation_.resetFrame();activity_.reset();if(ring_)ring_->clear();
       snapshot_={};snapshot_.mount=mode;
     }
     if(ringGate_)xSemaphoreGive(ringGate_);
@@ -121,14 +135,24 @@ public:
     if(!ringGate_ || xSemaphoreTake(ringGate_,pdMS_TO_TICKS(20))!=pdTRUE)return {};
     const Snapshot s=snapshot_;xSemaphoreGive(ringGate_);return s;
   }
+  // The latest fused pose, when ready and not older than STALE_POSE_US: just these
+  // fields under the gate, not a whole snapshot's copy (Bluetooth's live orientation).
+  static constexpr int64_t STALE_POSE_US=250000;
+  bool latestPose(LaunchMotion::Quaternion &out,uint64_t nowUs) {
+    if(!ringGate_ || xSemaphoreTake(ringGate_,pdMS_TO_TICKS(20))!=pdTRUE)return false;
+    const bool ready=snapshot_.orientationReady && int64_t(nowUs-snapshot_.fusedUs)<=STALE_POSE_US;
+    out=snapshot_.pose;xSemaphoreGive(ringGate_);return ready;
+  }
   bool capture(uint64_t start,uint64_t end,float rpm,uint32_t number,LaunchMotion::Trace &out) {
     auto copy=std::unique_ptr<LaunchMotion::Ring>(new(std::nothrow) LaunchMotion::Ring);
-    if(!copy || !ringGate_ || xSemaphoreTake(ringGate_,pdMS_TO_TICKS(20))!=pdTRUE)return false;
-    *copy=ring_;xSemaphoreGive(ringGate_);
+    if(!copy || !ring_ || !ringGate_ || xSemaphoreTake(ringGate_,pdMS_TO_TICKS(20))!=pdTRUE)return false;
+    const int64_t copyStarted=esp_timer_get_time();
+    *copy=*ring_;xSemaphoreGive(ringGate_);
+    maxCaptureUs=std::max(maxCaptureUs,uint32_t(esp_timer_get_time()-copyStarted));
     out=copy->build(start,end,rpm,number);return true;
   }
 private:
-  LaunchMotion::Ring ring_;LauncherOrientation orientation_;MotionActivity activity_;Snapshot snapshot_;
+  LaunchMotion::Ring *ring_=nullptr;LauncherOrientation orientation_;MotionActivity activity_;Snapshot snapshot_;
   MountOrientation::Mode mode_=MountOrientation::Mode::Top;
   uint32_t frame_=0;
   SemaphoreHandle_t gate_=nullptr,ringGate_=nullptr;TaskHandle_t task_=nullptr;
@@ -171,7 +195,7 @@ private:
           const uint64_t fusionStart=esp_timer_get_time();
           if(xSemaphoreTake(ringGate_,pdMS_TO_TICKS(20))==pdTRUE) {
             if(activeFrame!=frame_) {
-              activeFrame=frame_;s.fusedUs=0;s.orientationReady=s.rest=false;
+              activeFrame=frame_;s.fusedUs=0;s.orientationReady=s.rest=false;s.pose={};
               for(unsigned j=0;j<3;++j){s.gravity[j]=s.bias[j]=0;}
               s.biasSigma=0;
             }
@@ -279,7 +303,7 @@ private:
     MountOrientation::mapVector(mode_,s.g,sample.g);
     orientation_.feed(sample,[&](const LaunchMotion::Sample &fused) {
       activity_.feed(fused.us,fused.a,fused.g,!fused.clipped);
-      ring_.feed(fused);s.fusedUs=fused.us;s.orientationReady=fused.fused && fused.settled && !fused.clipped;
+      ring_->feed(fused);s.fusedUs=fused.us;s.pose=fused.q;s.orientationReady=fused.fused && fused.settled && !fused.clipped;
       const float up[3]={0,0,1};LaunchMotion::inverse(fused.q).rotate(up,s.gravity);
     });
   }

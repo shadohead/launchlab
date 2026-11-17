@@ -43,6 +43,9 @@ auto_power = auto_power[:auto_power.index("  const bool measuring=")] + "  ++sle
 # Its hardware shutdown tail is exercised by check_power_key_pipeline.py.
 power_key = function("powerKeyOff")
 power_key = power_key[:power_key.index("  if(micListener.holdsSleep")] + "  ++sleepChecks;\n}\n"
+restart = function("restartForBluetooth")
+restart = restart[:restart.index("  if(flushForShutdown")] + "  ++restartChecks;\n}\n"
+pairing = function("answerPairing")
 
 # The restore guard must run before allocating, decoding, checkpointing, or
 # writing the replacement backup. The existing restore harness owns that tail.
@@ -59,6 +62,8 @@ prefix = r'''
 #include "settings_save.h"
 #include "controls.h"
 #include "power_status.h"
+#include "bluetooth_setting.h"
+#include "analog_tachometer.h"
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
@@ -91,6 +96,19 @@ static bool powerKeyRequested=true,wipeBlocked=false,motionPending=false;
 static uint32_t powerKeyRequestedAt=1000;
 static constexpr uint32_t POWER_KEY_WAIT_MS=10000;
 static unsigned navigationSyncs=0,sleepChecks=0;
+static unsigned restartChecks=0;
+static bool bluetoothOn=true,bluetoothAtBoot=false;
+namespace BleLink {
+  static bool pending=false;
+  static unsigned rejected=0;
+  static bool connected(){return false;}
+  static bool replyFlushed(uint32_t){return true;}
+  static bool comparison(uint32_t&,bool&){return pending;}
+  static void answerComparison(bool accepted){assert(!accepted);pending=false;++rejected;}
+}
+struct Button {bool wasClicked()const{return false;}};
+static struct {Button BtnA,BtnB;} M5;
+static struct Gesture {bool consumed=false;} gestureA,gestureB;
 static void syncNavigation();
 static bool demo=false,diagnostics=false,historyPage=true,tournamentMode=false;
 static uint32_t newSessionAt=0,historyOffset=0;
@@ -112,6 +130,7 @@ static struct {unsigned starts=0;void start(char*,unsigned,unsigned){++starts;}}
 struct Snapshot {
   uint32_t launches=0;bool valid=true;float resultRpm=6000;
   uint64_t burstStartHostUs=0,burstEndHostUs=0;
+  AnalogTachometer::Phase phase=AnalogTachometer::Phase::Ready;
 };
 struct Microphone {
   uint16_t slots[3000]{},raw[3000]{};
@@ -125,6 +144,7 @@ struct Microphone {
   const MicTrace::Trace *trace()const{return hasTrace?&readings:nullptr;}
   bool on()const{return available;}
   bool warm(unsigned)const{return available;}
+  bool holdsSleep(unsigned)const{return false;}
   void drainTrace(){++drains;if(queued){readings.add(pending);queued=false;}}
   void freezeTrace(unsigned elapsed){++freezes;assert(drains);readings.freeze(elapsed);}
   const AudioMetadata::Recorder *audioMetadata(uint32_t launch)const{return launch==audio.launch()?&audio:nullptr;}
@@ -164,6 +184,7 @@ static void reset(){
   clockUs=1000000;dirty=saveError=false;navigationSyncs=sleepChecks=0;usbAwake.blocked=false;
   powerKeyRequested=true;wipeBlocked=motionPending=false;powerKeyRequestedAt=1000;
   demo=diagnostics=tournamentMode=false;historyPage=true;historyView=PracticeUI::View::Recent;
+  restartChecks=0;BleLink::pending=false;BleLink::rejected=0;gestureA={};gestureB={};
   practice={};demoPractice={};newSessionAt=historyOffset=0;Serial.last.clear();
 }
 static Snapshot event(uint32_t number,bool valid=true,uint64_t release=1000000){
@@ -196,6 +217,19 @@ static void check(const CalibrationPacket *packet,uint32_t launch,uint32_t ms,un
   }
 }
 int main(){
+  // A remote Bluetooth restart must capture the raw trace first. A failed
+  // allocation keeps the session intact until the restart retries.
+  reset();seed();failAllocation=1;restartForBluetooth(millis(),event(1));
+  assert(!restartChecks && calibrationCapturePending && controls.page==Controls::Page::Analysis);
+  clockUs+=1000000;restartForBluetooth(millis(),event(1));
+  check(latestCalibration,1,20000,2);
+  assert(restartChecks==1 && controls.page==Controls::Page::Main);
+
+  // Dismiss a pairing already on screen without consuming either button;
+  // the same loop pass can still handle the user's manual stop.
+  reset();seed();BleLink::pending=true;
+  assert(!answerPairing(true,event(1)) && BleLink::rejected==1);
+  assert(!gestureA.consumed && !gestureB.consumed && analysis.running());
   // A physical stop is captured once, including a queued reading, before
   // another launch can overwrite the raw trace or the acoustic metadata.
   reset();seed();
@@ -337,9 +371,10 @@ helpers = "\n".join(function(name) for name in (
 with tempfile.TemporaryDirectory(prefix="analysis-lifecycle-") as directory:
     cpp = Path(directory) / "analysis_lifecycle.cpp"
     exe = Path(directory) / "analysis_lifecycle"
-    cpp.write_text(prefix + navigation_state + state + helpers + navigation + auto_power + power_key + finish_restore + tests)
+    cpp.write_text(prefix + navigation_state + state + helpers + navigation + auto_power + power_key + restart + pairing + finish_restore + tests)
     subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17", "-O1", "-g",
                     "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
+                    "-I" + str(root / "tests/fakes"),
                     "-I" + str(root / "LaunchLabMini"), "-I" + str(root / "LaunchLabRpm"),
                     str(cpp), "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)

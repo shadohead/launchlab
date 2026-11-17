@@ -117,6 +117,7 @@ static void reset(){
   PowerSavers::settings=PowerSavers::Settings{};
 }
 static Snapshot state;
+
 static void display(uint32_t ms){at(ms);tickDisplayPower(ms,state);assert(!boundary);}
 static void poll(uint32_t ms){at(ms);pollBattery(ms,state);assert(!owned);}
 int main(){
@@ -127,8 +128,15 @@ int main(){
   display(31001);assert(M5.Display.writes==2); // A button/activity restores once.
   display(61000);assert(M5.Display.brightness==26);
   inactivity.touch(61000);display(61000);assert(M5.Display.brightness==102);
-  // Shipped: movement keeps the screen at its selected brightness.
-  reset();inactivity.motion(20000);display(30000);assert(!M5.Display.writes);
+  // Shipped: movement does not hold the screen bright (through 0.20.9 it
+  // did, and a unit in a hand never dimmed); only use does.
+  static_assert(PowerSavers::Settings{}.dimIgnoresMotion);
+  reset();inactivity.motion(20000);display(29999);assert(!M5.Display.writes);
+  display(30000);assert(M5.Display.brightness==26 && M5.Display.writes==1);
+  inactivity.motion(40000);display(40000);assert(M5.Display.brightness==26 && M5.Display.writes==1);
+  inactivity.touch(41000);display(41000);assert(M5.Display.brightness==102);
+  // The earlier behaviour, still a battery lab reference.
+  reset();PowerSavers::settings.dimIgnoresMotion=false;inactivity.motion(20000);display(30000);assert(!M5.Display.writes);
   display(50000);assert(M5.Display.brightness==26);
   std::cout<<"PASS: 30-second dim and button/accepted-activity restoration; no repeated brightness writes\n";
   // The battery savers (power_savers.h): a dim that only use undoes, sooner,
@@ -214,7 +222,7 @@ int main(){
 with tempfile.TemporaryDirectory(prefix="idle-power-pipeline-") as tmp:
     path = Path(tmp)
     cpp = path / "pipeline.cpp"
-    cpp.write_text(prefix + function("pollBattery") + "\n" + function("tickDisplayPower") + tests)
+    cpp.write_text(prefix + "static bool displayDark(uint32_t){return false;}\n" + function("pollBattery") + "\n" + function("tickDisplayPower") + tests)
     exe = path / "pipeline"
     subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17", "-O1", "-g", "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-I" + str(root / "firmware/LaunchLabMini"), "-I" + str(root / "firmware/LaunchLabRpm"), str(cpp), "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)

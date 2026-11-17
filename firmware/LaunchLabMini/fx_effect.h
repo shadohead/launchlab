@@ -718,18 +718,22 @@ done:
 // step and MAX_VOICES voices a sample.
 // ---- A song's render cost (engine level 2; docs/FIRMWARE_SOUND_0_20.md,
 // "Render budget"): the music task's share of core 0 at 80 MHz while a song
-// plays, measured on the device (HIL, 7C:E8, 2026-10-23, the sound renderer
-// at -O2): a base for the player and the task, and each sounding voice by its
-// kind, in hundredths of a percent; a filter adds its own. A voice costs
-// while it sounds: from its trigger until its envelope falls below 2^-16 or
-// its drum sample ends. The validator renders a song and holds its busiest
+// plays, fitted to 37 measurements of 31 songs on the device (HIL, 7C:E8,
+// 2026-10-24, the sound renderer at -O2; firmware/tools/hil/song_cost.py): a
+// base for the player and the task, and each sounding voice by its kind, in
+// hundredths of a percent; a filter, a voice in its attack and each kind
+// beyond the first sounding together add their own. A voice costs while it
+// sounds: from its trigger until its envelope falls below 2^-16 or its drum
+// sample ends. The validator renders a song and holds its busiest
 // block of SONG_COST_BLOCK samples to SONG_BUDGET, so with the optical owner
 // (about 30%) and the IMU (about 17%) core 0 keeps IDLE0 clear; the music
 // task's duty cap (music_stream.h) is the guard behind it.
 enum SongVoiceKind:uint8_t {KIND_TONE,KIND_NOISE,KIND_STEPPED,KIND_PULSE,KIND_WAVE,KIND_FM,KIND_DRUM,SONG_KINDS};
-// Tone is its dearest wave (triangle 1.60; sine 1.49, square 1.56, saw 1.42).
-constexpr uint16_t SONG_KIND_COST[SONG_KINDS]={160,110,135,232,425,207,311};
-constexpr uint16_t SONG_FILTER_COST=25,SONG_BASE_COST=345,SONG_BUDGET=2000,SONG_COST_BLOCK=512;
+constexpr uint16_t SONG_KIND_COST[SONG_KINDS]={162,117,143,246,497,220,381};
+constexpr uint16_t SONG_FILTER_COST=42,SONG_ATTACK_COST=60,SONG_BASE_COST=341,SONG_BUDGET=2000,SONG_COST_BLOCK=512;
+// Kinds sounding together cost more than their parts (the render loops of
+// several kinds alternate in each block): each kind beyond the first adds this.
+constexpr uint16_t SONG_MIX_COST=29;
 constexpr SongVoiceKind songVoiceKind(uint8_t type,uint8_t wave) {
   return type==PULSE_VOICE?KIND_PULSE:type==WAVETABLE_VOICE?KIND_WAVE:type==FM_VOICE?KIND_FM:type==DRUM_VOICE?KIND_DRUM:
          type==NOISE_VOICE?(wave==NOISE_STEPPED?KIND_STEPPED:KIND_NOISE):KIND_TONE;

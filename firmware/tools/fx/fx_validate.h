@@ -104,8 +104,12 @@ inline SongLoad songLoad(const Program &p) {
   while(!s.done()) {
     const size_t n=s.run(block,SONG_COST_BLOCK);
     if(!n)break;
-    const Sound::Work &w=s.work();uint64_t cost=uint64_t(SONG_BASE_COST)*n+uint64_t(SONG_FILTER_COST)*(w.filterSamples-before.filterSamples);
-    for(unsigned k=0;k<SONG_KINDS;++k)cost+=uint64_t(SONG_KIND_COST[k])*(w.kindSamples[k]-before.kindSamples[k]);
+    const Sound::Work &w=s.work();uint64_t cost=uint64_t(SONG_BASE_COST)*n+uint64_t(SONG_FILTER_COST)*(w.filterSamples-before.filterSamples)+
+                                         uint64_t(SONG_ATTACK_COST)*(w.attackSamples-before.attackSamples);
+    unsigned kinds=0;
+    for(unsigned k=0;k<SONG_KINDS;++k){cost+=uint64_t(SONG_KIND_COST[k])*(w.kindSamples[k]-before.kindSamples[k]);kinds+=w.kindSamples[k]>before.kindSamples[k];}
+    // Kinds sounding together cost more than their parts (SONG_MIX_COST).
+    if(kinds>1)cost+=uint64_t(SONG_MIX_COST)*(kinds-1)*n;
     const uint32_t share=uint32_t(cost/n);
     if(share>r.worst){r.worst=share;r.worstMs=uint32_t(uint64_t(at)*1000/SOUND_RATE);}
     before=w;at+=uint32_t(n);
