@@ -172,7 +172,7 @@ int main(){
   {lgfx::LGFXBase partial;session.begin(7,true,6000,1000000);session.interrupt(21000000);AnalysisUI::draw(partial,session,22000000,nullptr,MicView::Mic::On,motion,false,false,colors,curve);assert(partial.drew("Interrupted") && partial.drew("No stop recorded"));checkOverlap(partial);}
   // Without readings, the population estimate plus padding sets the horizon until elapsed time passes it.
   session.begin(3,true,6000,1000000);
-  for(unsigned seconds:{11u,37u,121u}){lgfx::LGFXBase gap;AnalysisUI::draw(gap,session,1000000ULL+seconds*1000000ULL,nullptr,MicView::Mic::On,motion,false,false,colors,curve);char label[16];snprintf(label,sizeof(label),"%us",seconds<94?104:seconds+10);assert(gap.drew(label));checkOverlap(gap);}
+  for(unsigned seconds:{11u,37u,121u}){lgfx::LGFXBase gap;AnalysisUI::draw(gap,session,1000000ULL+seconds*1000000ULL,nullptr,MicView::Mic::On,motion,false,false,colors,curve,"READY",true,nullptr,nullptr,nullptr,nullptr,false,94.131f);char label[16];snprintf(label,sizeof(label),"%us",seconds<94?104:seconds+10);assert(gap.drew(label));checkOverlap(gap);}
   // Static content is retained, but time, palette, launch and sensor-state changes invalidate correctly.
   AnalysisUI::Cache cache;AnalysisMode::Session cached;lgfx::LGFXBase canvas;
   auto paint=[&](uint64_t at,const Palette::Colors &palette,const char *state="READY",bool ready=true){
@@ -210,7 +210,7 @@ int main(){
   lgfx::LGFXBase markedGraph;AnalysisUI::draw(markedGraph,markedSession,2000000,&marked,MicView::Mic::On,motion,false,false,colors,curve);assert(markedGraph.grayDots==1 && markedGraph.drew("Finish") && markedGraph.drew("~") && !markedGraph.drew("-:--"));
   lgfx::LGFXBase normalGraph;MicView::draw(normalGraph,&marked,MicView::Mic::On,colors);assert(normalGraph.grayDots==0);
   lgfx::LGFXBase fallback;
-  AnalysisUI::draw(fallback,markedSession,31000000,&marked,MicView::Mic::On,motion,false,false,colors,curve);
+  AnalysisUI::draw(fallback,markedSession,31000000,&marked,MicView::Mic::On,motion,false,false,colors,curve,"READY",true,nullptr,nullptr,nullptr,nullptr,false,38.f);
   assert(fallback.drew("~0:38") && fallback.drew("48s"));
   // No model names on screen: one row of 2x2 dots on the caption line says the
   // model is working. Before the first forecast it grows with elapsed time
@@ -225,13 +225,13 @@ int main(){
    const auto row=computeRow(nine);assert(row.size()==23 && row.back()[1]==colors.accent);}
   assert(!fallback.drew("Early mic estimate") && computeRow(fallback).size()==AnalysisUI::COMPUTE_DOTS);
   {const int at=accentAt(fallback);assert(at>=0);
-   lgfx::LGFXBase next;AnalysisUI::draw(next,markedSession,31000000+AnalysisUI::MODEL_STEP_US,&marked,MicView::Mic::On,motion,false,false,colors,curve);
+   lgfx::LGFXBase next;AnalysisUI::draw(next,markedSession,31000000+AnalysisUI::MODEL_STEP_US,&marked,MicView::Mic::On,motion,false,false,colors,curve,"READY",true,nullptr,nullptr,nullptr,nullptr,false,38.f);
    assert(accentAt(next)==(at+1)%AnalysisUI::COMPUTE_DOTS);
    const auto row=computeRow(fallback);
    for(unsigned i=0;i<row.size();++i)assert(row[i][1]==(int(i)==at?colors.accent:int(i)==(at+AnalysisUI::COMPUTE_DOTS-1)%AnalysisUI::COMPUTE_DOTS?colors.muted:colors.faint));}
   lgfx::LGFXBase before,atTen,pending;
   AnalysisUI::draw(before,markedSession,10999000,nullptr,MicView::Mic::Failed,motion,false,false,colors,curve);
-  AnalysisUI::draw(atTen,markedSession,11000000,nullptr,MicView::Mic::Failed,motion,false,false,colors,curve);
+  AnalysisUI::draw(atTen,markedSession,11000000,nullptr,MicView::Mic::Failed,motion,false,false,colors,curve,"READY",true,nullptr,nullptr,nullptr,nullptr,false,94.131f);
   // Without the mic the caption names the problem instead; nothing animates.
   assert(!before.drew("Finish") && atTen.drew("~1:34") && atTen.drew("Mic unavailable") && computeRow(atTen).empty());
   AnalysisUI::draw(pending,markedSession,32000000,&marked,MicView::Mic::On,motion,false,false,colors,curve,
@@ -343,7 +343,7 @@ int main(){
   for(unsigned i=0;i<Decay::CURVE_POINTS;++i)winner.rpm[i]=6000-10*winner.seconds(i);
   lgfx::LGFXBase prediction;
   AnalysisUI::draw(prediction,live,51000000,nullptr,MicView::Mic::On,motion,false,false,colors,curve,
-                   "READY",true,nullptr,&ranked,samples,&winner,false);
+                   "READY",true,nullptr,&ranked,samples,&winner,false,83.f);
   assert(prediction.drew("~1:23") && prediction.drew("A Replay  B Stop"));
   assert(prediction.drew("93s") && !prediction.drew("60s"));
   // Measured up to the last reading (45 s) as a line; the forecast past it as
@@ -352,9 +352,18 @@ int main(){
   auto forecastDots=[](const lgfx::LGFXBase &f){std::vector<int> xs;for(const auto &d:f.dots)if(d[1]>AnalysisUI::GRAPH_TOP){assert(d[2]==Palette::builtIn(0x07ff,true).accent);xs.push_back(d[0]);}return xs;};
   const auto ahead=forecastDots(prediction);
   assert(ahead.size()>=5 && ahead.front()>=prediction.lines.back()[2]);
+  // The active finish can be well beyond the raw fit. Only its projected
+  // tail moves, and the last dot falls within one pitch of the finish marker.
+  lgfx::LGFXBase adjusted;
+  AnalysisUI::draw(adjusted,live,51000000,nullptr,MicView::Mic::On,motion,false,false,colors,curve,
+                   "READY",true,nullptr,&ranked,samples,&winner,false,120.f);
+  const auto adjustedDots=forecastDots(adjusted);
+  const int endX=AnalysisUI::markerX(26,130,120.f,130.f);
+  assert(adjusted.drew("~2:00") && adjusted.drew("130s") && !adjustedDots.empty());
+  assert(adjustedDots.back()<=endX && endX-adjustedDots.back()<=AnalysisUI::FORECAST_PITCH);
   for(unsigned i=1;i<ahead.size();++i)assert(ahead[i]-ahead[i-1]==AnalysisUI::FORECAST_PITCH);
   {lgfx::LGFXBase next;AnalysisUI::draw(next,live,51000000+AnalysisUI::MODEL_STEP_US,nullptr,MicView::Mic::On,motion,false,false,colors,curve,
-                   "READY",true,nullptr,&ranked,samples,&winner,false);
+                   "READY",true,nullptr,&ranked,samples,&winner,false,83.f);
    assert(forecastDots(next)==ahead);} // The forecast holds still: the caption row is the one animation.
   for(const auto &line:prediction.lines)assert(line[0]>=26 && line[2]<=130);
   checkOverlap(prediction);

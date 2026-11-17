@@ -150,12 +150,13 @@ def decode_audio(blob, duration):
 
 
 def decode(blob):
-    endpoint_reason = blob[:4] == b"LLC9"
+    stamina = blob[:4] == b"LLCA"
+    endpoint_reason = stamina or blob[:4] == b"LLC9"
     relative_pitch = endpoint_reason or blob[:4] == b"LLC8"
     history_shadow = blob[:4] == b"LLC7"
     candidate_shadow = history_shadow or blob[:4] == b"LLC6"
-    riccati_shadow = relative_pitch or candidate_shadow or blob[:4] == b"LLC5"
-    shadow = riccati_shadow or blob[:4] == b"LLC4"
+    riccati_shadow = (relative_pitch and not stamina) or candidate_shadow or blob[:4] == b"LLC5"
+    shadow = stamina or riccati_shadow or blob[:4] == b"LLC4"
     diagnostic = shadow or blob[:4] == b"LLC3"
     immediate = diagnostic or blob[:4] == b"LLC2"
     header = 96 if immediate else HEADER
@@ -169,6 +170,7 @@ def decode(blob):
         b"LLC7",
         b"LLC8",
         b"LLC9",
+        b"LLCA",
     ):
         raise ValueError("Unsupported calibration packet")
     if not immediate:
@@ -182,7 +184,7 @@ def decode(blob):
         or manual > (2 if endpoint_reason else 1)
         or not math.isfinite(rpm)
         or rpm <= 0
-        or best > (7 if diagnostic else 5)
+        or (best not in (0, 8) if stamina else best > (7 if diagnostic else 5))
         or kind > 2
         or used > count
     ):
@@ -258,19 +260,20 @@ def decode(blob):
         )
         offset += 26
     if shadow:
-        sources = {
+        sources = {8: "Stamina predictor"} if stamina else {
             5: "Fixed Riccati",
             6: "Early mic estimate",
             7: "Population estimate",
         }
         checkpoints = []
         for target in (10, 15, 30):
-            if offset + (32 if history_shadow else 28 if candidate_shadow else 24 if riccati_shadow else 16) + 4 > len(blob):
+            if offset + (12 if stamina else 32 if history_shadow else 28 if candidate_shadow else 24 if riccati_shadow else 16) + 4 > len(blob):
                 raise ValueError("Truncated forecast checkpoint")
-            observed, source, current, corrected = struct.unpack_from(
-                "<IIff", blob, offset
-            )
-            offset += 16
+            observed, source, current = struct.unpack_from("<IIf", blob, offset)
+            offset += 12
+            if not stamina:
+                corrected = struct.unpack_from("<f", blob, offset)[0]
+                offset += 4
             if riccati_shadow:
                 limited, accepted, original = struct.unpack_from("<fHH", blob, offset)
                 offset += 8
@@ -352,7 +355,9 @@ def decode(blob):
         "latest_preview": {
             "at_ms": at,
             "raw_count": used,
-            "winner": "Population estimate"
+            "winner": "Stamina predictor"
+            if best == 8
+            else "Population estimate"
             if best == 7
             else "Early mic estimate"
             if best == 6
@@ -364,7 +369,7 @@ def decode(blob):
             "forecast": ("unavailable", "single", "range")[kind],
             "finish_s": [lo, hi] if kind else None,
             "candidate_finish_s": {}
-            if best in (6, 7)
+            if best in (6, 7, 8)
             else {"Fixed Riccati": stops[2]}
             if best == 5
             else {name: (value or None) for name, value in zip(MODELS, stops)},

@@ -8,8 +8,8 @@ sys.path.insert(0, str(root / "scripts"))
 from local_firmware import release_identity
 
 identity = release_identity()
-assert identity["analysis_version"] == "1.0-rc.1"
-assert identity["runtime"] == "0.20.11-analysis-1.0-rc.1-pm"
+assert identity["analysis_version"] == "1.0-rc.2"
+assert identity["runtime"] == "0.20.11-analysis-1.0-rc.2-pm"
 assert len(identity["runtime"].encode()) < 32  # USB backup runtime field.
 
 sketch = root / "firmware/LaunchLabMini"
@@ -31,6 +31,6 @@ while pending:
         pending.append(dependency)
 
 names = {path.name for path in visited}
-assert {"fixed_riccati.h", "early_spin.h", "firmware_version.h"} <= names
+assert {"fixed_riccati.h", "stamina_finish.h", "stamina_weights.h", "firmware_version.h"} <= names
 assert not any("candidate" in name or "offline" in name or "audio_finish" in name for name in names)
 print("PASS: Analysis RC identity, current predictor, and offline model isolation")

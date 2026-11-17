@@ -1,21 +1,23 @@
-# Analysis 1.0-rc.1
+# Analysis 1.0-rc.2
 
-Runtime: `0.20.11-analysis-1.0-rc.1-pm` · M5StickS3 K150 · based on firmware 0.20.11.
+Runtime: `0.20.11-analysis-1.0-rc.2-pm` · M5StickS3 K150 · based on firmware 0.20.11.
 
-This candidate freezes the current predictor and recording format for hardware acceptance. It has not been published or promoted to stable. The analysis feature version is separate from the base firmware version.
+This candidate activates the stamina-trained finish predictor and the updated Stamina Analysis screen for hardware acceptance. It has not been published or promoted to stable. The analysis feature version is separate from the base firmware version.
 
 ## Included
 
 - Hold B on Main to enter Analysis; launch to start recording. Tap B when the physical spin finishes. A toggles replay while recording, and B after stopping opens Analysis Details. Hold B exits.
-- Fixed Riccati live prediction, with the existing early mic-count fallback from ten seconds and a population estimate when the microphone is unavailable. Relative-pitch recovery remains enabled in Analysis. No new prediction coefficients or acceptance thresholds are introduced in this RC.
+- The live stamina forecast updates once per second starting at ten seconds. It blends the accepted-mic curve with Fixed Riccati according to fit support and stability. A regression supplies the finish when both curves lack support. A second, bounded regression adjusts the estimate. Both regressions were trained on manual-stop FB and stamina pulls.
 - The graph and finish label use the same estimate. The axis extends ten seconds beyond the prediction, then follows elapsed time plus ten seconds if the spin continues. Current time and expected finish have dotted markers; the expected finish uses the warning color.
 - Post-stop Fixed Riccati fitting, Free Riccati fallback, and a gray endpoint-only estimate when neither acoustic fit succeeds. The manual endpoint and optical launch anchor are preserved; the fitted tail uses monotone cubic Hermite interpolation.
 - Immediate raw capture at stop, independent fit/metadata attachments, retryable flash saves, and the newest 32 recordings retained across restarts. Full-session audio metadata replaces on-device WAV storage. Existing export formats remain readable.
 - Device page with battery and flash information, plus a battery percentage on the main menu.
 
-The experimental audio ML candidate stays offline and is excluded from the default firmware and this release bundle. Recording metadata does not enable ML inference. The other physics models remain available in the offline comparison tools.
+The experimental audio ML candidate stays offline and is excluded from the default firmware and this release bundle. The active regressions use optical and microphone RPM features. The other physics models remain available in the offline comparison tools.
 
 ## Interpretation and limits
+
+Leave-one-label-out replay on 34 manual FB/stamina pulls gave 8.05 seconds mean absolute error and 70.2% within ten seconds. Excluding each test label from model selection as well gave 8.26 seconds and 65.1%. Accuracy on attack bits and unseen stamina setups requires separate evaluation.
 
 Manual spin time is measured. Predicted finish, the RPM curve, revolutions, RPM-band times and battle stamina are estimates. The optical reading measures launcher-shaft speed. The gray endpoint-only curve is an assumed shape, not a validated acoustic fit.
 
@@ -37,7 +39,9 @@ Substitute the actual Stick port. Do not flash an arbitrary COM port. For a prev
 
 ## Acceptance before stable
 
-Local validation on November 16, 2026:
+RC.2 on November 17, 2026 passed a forecast replay through the firmware service on 80 archived manual launches. All 6,684 one-second estimates matched the frozen candidate within 0.000013 seconds under the same simulated worker timing. The Stick S3 PM build produced a 2,279,568-byte application image. Static globals occupied 92,644 bytes, and the loop stack frame used 912 bytes.
+
+Validation of the previous RC on November 16, 2026:
 
 - After integrating upstream 0.20.11, 108 native suites and 52 Python harness/tool suites passed on Windows. This includes full-session metadata, 32-record retention, interrupted writes, retries, legacy exports, allocation failures, lifecycle handling, Bluetooth restart/pairing interactions and graph layout.
 - The Windows host compiler ran with assertions enabled but without ASan/UBSan runtimes. The complete Linux host suite then passed all 163 suites with ASan/UBSan enabled, including pinned screen renders. The [candidate validation run](https://github.com/trumantse1/launchlab/actions/runs/44004076305) retains the proof for the tested firmware tree.

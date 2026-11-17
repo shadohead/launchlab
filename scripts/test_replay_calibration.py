@@ -18,9 +18,9 @@ class ReplayTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             helper = build_helper(Path(tmp))
             states = replay(run, 10000, helper)
-            self.assertAlmostEqual(states[10000][1][0], 39.0676 + 2.34672, places=4)
+            self.assertAlmostEqual(states[10000][1][0], 136.0522358, places=4)
             for recovered, confidence in ((0, 127), (1, 256)):
-                malformed = f"4300 1\n10000 1\n400 4000 {recovered} {confidence}\n"
+                malformed = f"4300 1\n10000 1\n600 400 4000 {recovered} {confidence} 0\n"
                 self.assertNotEqual(subprocess.run([str(helper)], input=malformed, text=True,
                                                    capture_output=True).returncode, 0)
 
@@ -44,7 +44,7 @@ class ReplayTests(unittest.TestCase):
             self.assertEqual(run["pitch_confidence"], {800: 127})
             with patch("replay_calibration.subprocess.check_output", return_value="10000 3 .8 3800 -500 -1 -1") as call:
                 replay(run, 10000, Path("helper"))
-                self.assertIn("400 4000 0 0\n600 3900 1 0\n800 3800 1 127", call.call_args.kwargs["input"])
+                self.assertIn("600 400 4000 0 0 0\n1000 800 3800 1 127 0\n1200 600 3900 1 0 0", call.call_args.kwargs["input"])
             with patch("replay_calibration.subprocess.check_output", return_value="0 1 1 1 1 3") as call:
                 compare_models([run], Path("helper"), None)
                 self.assertIn("400 4000 0 0\n600 3900 1 0\n800 3800 1 127", call.call_args.kwargs["input"])

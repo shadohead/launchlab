@@ -162,8 +162,7 @@ struct Microphone {
   }
 } micListener;
 static struct {
-  float publishedFinish(uint32_t){return NAN;}
-  Decay::RiccatiSupport publishedSupport(uint32_t){return {};}
+  EarlySpin::Forecast forecast(uint32_t){return {};}
 } analysisResults;
 '''
 
@@ -180,7 +179,7 @@ static void reset(){
   analysis.clear();controls={};controls.page=Controls::Page::Analysis;
   settingsSave={};inactivity={};inactivity.begin(1000);
   capturedAnalysisLaunch=lastCaptureTry=0;calibrationCapturePending=false;
-  previewLaunch=0;calibrationPreview={};shadowLog.reset();micListener.reset();
+  shadowLog.reset();micListener.reset();
   clockUs=1000000;dirty=saveError=false;navigationSyncs=sleepChecks=0;usbAwake.blocked=false;
   powerKeyRequested=true;wipeBlocked=motionPending=false;powerKeyRequestedAt=1000;
   demo=diagnostics=tournamentMode=false;historyPage=true;historyView=PracticeUI::View::Recent;

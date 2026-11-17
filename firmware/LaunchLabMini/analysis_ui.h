@@ -246,22 +246,30 @@ inline void fittedPlot(lgfx::LGFXBase &g, const Palette::Colors &c, const Decay:
   MicView::axes(g, c, left, right, bottom, span, peak, y);
   if (livePreview)
     timeMarkers(g, c, left, right, top, bottom, elapsed, span, predictedFinish, raining, now);
+  // Keep measured times intact and stretch only the projected tail to the
+  // displayed finish. The stamina forecast can differ from the raw Riccati end.
+  const bool retime = livePreview && winner && winner->end > fit.lastTime && predictedFinish > fit.lastTime;
+  auto curveX = [&](float t) {
+    if (retime && t > fit.lastTime)
+      t = fit.lastTime + (t - fit.lastTime) * (predictedFinish - fit.lastTime) / (winner->end - fit.lastTime);
+    return x(t);
+  };
   if (winner)
     for (unsigned i = 1; i < Decay::CURVE_POINTS; ++i) {
       const float start = winner->seconds(i - 1), end = winner->seconds(i);
-      if (start >= span)
+      if (!retime && start >= span)
         break;
-      const float visibleEnd = std::min(end, span);
+      const float visibleEnd = retime ? end : std::min(end, span);
       const float a = winner->rpm[i - 1], b = winner->rpm[i];
       if (!std::isfinite(a) || !std::isfinite(b) || end <= start)
         continue;
       // Split even when the first/last acoustic timestamp falls between vertices.
       float from = start;
-      int px = x(start), py = y(a);
+      int px = curveX(start), py = y(a);
       auto drawTo = [&](float until, uint16_t color, bool forecast = false) {
         if (until <= from)
           return;
-        const int qx = x(until), qy = y(a + (b - a) * ((until - start) / (end - start)));
+        const int qx = curveX(until), qy = y(a + (b - a) * ((until - start) / (end - start)));
         if (forecast) {
           // The prediction ahead of the last reading: 2x2 dots, so it reads
           // apart from what was measured.
@@ -292,7 +300,7 @@ inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session, uint64
                  bool capturing, bool flipped, const Palette::Colors &c, const AnalogTachometer::Curve &curve,
                  const char *detectorState = "READY", bool sensorReady = true, Cache *cache = nullptr,
                  const Decay::Results *fit = nullptr, const Decay::Session *input = nullptr,
-                 const Decay::Curve *winner = nullptr, bool fitting = false, float publishedFinish = NAN,
+                 const Decay::Curve *winner = nullptr, bool fitting = false, float activeFinish = NAN,
                  bool capturePending = false) {
   char text[32];
   if (session.replay() && !capturePending) {
@@ -355,13 +363,8 @@ inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session, uint64
   }
   static const MicTrace::Trace empty;
   const auto &t = trace && trace->launch() == session.number() && launched ? *trace : empty;
-  float predictedFinish = NAN;
+  const float predictedFinish = session.running() ? activeFinish : NAN;
   const bool measured = mic == MicView::Mic::On && t.started();
-  if (session.running()) {
-    const auto active = EarlySpin::select(fit && fit->fixedRiccati && winner ? winner->end : publishedFinish,
-                                          t.earlyReadings(), elapsedUs / 1000, measured);
-    predictedFinish = active.seconds;
-  }
   // The RPM row: the latest heard reading, cyan as the readings on the graph.
   if (!launched) {
     centered(g, c, RPM_Y, "Launch to start", c.muted);

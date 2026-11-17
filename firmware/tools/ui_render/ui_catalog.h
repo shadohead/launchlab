@@ -235,7 +235,7 @@ inline void analysisScreen(lgfx::LGFX_Sprite &g,unsigned index,const Look &look)
   if(is("analysis-ready")){}
   else if(is("analysis-warming")){session.begin(LAUNCH,true,RPM,START);now=START+1200000;t.begin(LAUNCH,RPM);}
   else if(is("analysis-early")){session.begin(LAUNCH,true,RPM,START);now=START+6400000;spinTo(6.3f,true);}
-  else if(is("analysis-early-forecast")){session.begin(LAUNCH,true,RPM,START);now=START+12300000;spinTo(12.2f,true);}
+  else if(is("analysis-early-forecast")){session.begin(LAUNCH,true,RPM,START);now=START+12300000;spinTo(12.2f,true);published=EarlySpin::finish(t.earlyReadings(),12300);}
   else if(is("analysis-forecast")){
     session.begin(LAUNCH,true,RPM,START);now=START+42500000;spinTo(42.4f,true);
     fitTo(42.4f,97.f,false);fitIn=&fit;curveIn=&curve;published=97.f;
@@ -245,7 +245,7 @@ inline void analysisScreen(lgfx::LGFX_Sprite &g,unsigned index,const Look &look)
     session.begin(LAUNCH,true,RPM,START);now=START+57800000;spinTo(57.7f,true);
     fitTo(57.7f,97.f,false);fitIn=&fit;curveIn=&curve;published=97.f;
   }
-  else if(is("analysis-mic-failed")){session.begin(LAUNCH,true,RPM,START);now=START+18000000;}
+  else if(is("analysis-mic-failed")){session.begin(LAUNCH,true,RPM,START);now=START+18000000;published=94.131f;}
   else if(is("analysis-fitting")){session.begin(LAUNCH,true,RPM,START);session.stop(START+95400000);now=START+96000000;spinTo(95.f,true);fitting=true;}
   else if(is("analysis-fitted") || is("analysis-details") || is("analysis-details-more") || is("analysis-details-fitting")){
     session.begin(LAUNCH,true,RPM,START);session.stop(START+95400000);now=START+97000000;spinTo(95.f,true);

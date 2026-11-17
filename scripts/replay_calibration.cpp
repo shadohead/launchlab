@@ -2,6 +2,8 @@
 // the launch RPM, observation times and RPMs, and the requested clock ticks.
 #include "fixed_riccati.h"
 #include "early_spin.h"
+#include "stamina_finish.h"
+#include <vector>
 #include <iomanip>
 #include <iostream>
 
@@ -14,41 +16,60 @@ int main() {
   std::cout << std::setprecision(10);
   // Each block adds the observations newly available at this tick.
   Decay::Results fits;
-  Decay::Curve curve;
-  unsigned fittedCount = 0, earlyReadings = 0, lastFitMs = 0;
-  auto update = [&](unsigned ms) {
-    if (!EarlySpin::refitDue(ms, session.count, lastFitMs, fittedCount)) return;
-    session.stopMs = ms;
-    fits = Decay::fitLiveModels(session, work, curve);
-    fittedCount = session.count;
-    lastFitMs = ms;
-  };
+  struct Arrival { unsigned at; Decay::Sample sample; };
+  std::vector<Arrival> arrivals;
+  StaminaFinish::Publications published;
+  static AcousticClock::Scratch scratch;
+  Decay::Results pending;
+  Decay::Curve pendingCurve;
+  unsigned fittedCount = 0, lastFitMs = 0, readyAt = 0, cursor = 0, nextMs = 100;
   for (unsigned i = 0; i < ticks; ++i) {
     unsigned ms, count;
-    if (!(std::cin >> ms >> count) ||
-        count > Decay::MAX_SAMPLES - session.count)
+    if (!(std::cin >> ms >> count) || count > Decay::MAX_SAMPLES - arrivals.size() || ms < nextMs)
       return 1;
     for (unsigned n = 0; n < count; ++n) {
-      Decay::Sample s;
-      unsigned recovered, confidence;
-      if (!(std::cin >> s.ms >> s.rpm >> recovered >> confidence) || s.ms > ms ||
-          recovered > 1 || confidence > 255 || (confidence && !recovered))
+      Arrival a{};
+      unsigned recovered, confidence, rejected;
+      auto &s = a.sample;
+      if (!(std::cin >> a.at >> s.ms >> s.rpm >> recovered >> confidence >> rejected) ||
+          a.at > ms || s.ms > a.at || recovered > 1 || confidence > 255 ||
+          (confidence && !recovered) || rejected > 1 || (!arrivals.empty() && a.at < arrivals.back().at))
         return 1;
-      s.recovered = recovered != 0;
+      s.recovered = recovered;
       s.pitchConfidence = uint8_t(confidence);
-      const unsigned due = std::max(EarlySpin::FIRST_MS, lastFitMs + EarlySpin::REFIT_MS);
-      if (due < s.ms) update(due);
-      session.samples[session.count++] = s;
-      if (!recovered && s.ms <= EarlySpin::WINDOW_MS) ++earlyReadings;
-      update(s.ms);
+      s.rejected = rejected;
+      arrivals.push_back(a);
     }
-    update(std::min(ms, std::max(EarlySpin::FIRST_MS,lastFitMs + EarlySpin::REFIT_MS)));
-    // Recompute the feature prefix separately when new points are waiting for
-    // the next fit. Preserve the published model used by the finish label.
+    // Model delivery in 100 ms loop steps. Publish completed jobs one step
+    // later so a requested checkpoint cannot use a fit that just started.
+    for (; nextMs <= ms; nextMs += 100) {
+      const auto before = cursor;
+      while (cursor < arrivals.size() && arrivals[cursor].at <= nextMs)
+        session.samples[session.count++] = arrivals[cursor++].sample;
+      if (cursor != before)
+        std::sort(session.samples, session.samples + session.count,
+                  [](const auto &a, const auto &b) { return a.ms < b.ms; });
+      if (readyAt && readyAt <= nextMs) {
+        fits = pending;
+        published.publish(fits.fixedRiccati ? pendingCurve.end : NAN);
+        readyAt = 0;
+      } else if (!readyAt && EarlySpin::refitDue(nextMs, session.count, lastFitMs, fittedCount)) {
+        session.stopMs = lastFitMs = nextMs;
+        fittedCount = session.count;
+        pending = Decay::fitLiveModels(session, work, pendingCurve);
+        readyAt = nextMs + 100;
+      }
+    }
+    session.stopMs = ms;
+    const StaminaFinish::LiveFit input{ms, session.launcherRpm, fits.support.original, fits.support.accepted};
+    const auto get = [&](unsigned j) {
+      const auto &s = session.samples[j];
+      return StaminaFinish::Observation{s.ms, s.rpm, s.recovered, s.rejected};
+    };
+    const double finish = StaminaFinish::predict(input, published, session.count, get, scratch);
     Decay::Results observed;
-    if (fittedCount != session.count) Decay::prepare(session, work, observed, {});
-    const float lastTime = fittedCount == session.count ? fits.lastTime : observed.lastTime;
-    const float finish = fits.fixedRiccati ? curve.end : EarlySpin::finish(earlyReadings, ms);
+    Decay::prepare(session, work, observed, {});
+    const float lastTime = observed.lastTime;
     // Five-second secant on retained observations. A lone point has no rate.
     unsigned begin = work.count;
     if (begin) {

@@ -2,6 +2,28 @@
 #include <cassert>
 #include <iostream>
 int main(){
+  // The frozen stamina fallback starts at ten seconds with no mic. It keeps
+  // ticking through silence and the last live snapshot survives manual stop.
+  {
+    AnalysisResult::Service service;
+    AnalysisMode::Session spin;
+    spin.begin(41,true,4300,1000000);
+    service.tick(true,spin,nullptr,10999000);
+    assert(!std::isfinite(service.forecast(41).seconds));
+    service.tick(true,spin,nullptr,11000000);
+    auto first=service.forecast(41);
+    assert(first.atMs==10000 && first.rawCount==0 && std::abs(first.seconds-129.80848f)<.001f);
+    service.tick(true,spin,nullptr,11999000);
+    assert(service.forecast(41).atMs==10000);
+    service.tick(true,spin,nullptr,31000000);
+    const auto last=service.forecast(41);
+    assert(last.atMs==30000 && last.seconds!=first.seconds);
+    spin.stop(31500000);
+    assert(service.forecast(41).seconds==last.seconds);
+    spin.begin(42,true,4300,32000000);
+    service.tick(true,spin,nullptr,32000000);
+    assert(!std::isfinite(service.forecast(42).seconds) && !std::isfinite(service.forecast(41).seconds));
+  }
   // Generate a spin on the shared drag shape, starting below the IR launch RPM.
   // A harmonic spike is withheld; its raw value is still in the snapshot.
   {

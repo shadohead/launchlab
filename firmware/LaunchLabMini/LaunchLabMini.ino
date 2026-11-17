@@ -996,7 +996,7 @@ LOOP_HELPER static void draw(const Snapshot &s) {
         if(analysis.results())AnalysisResultUI::draw(view,analysis,analysisResults.details(),analysisResults.busy(),analysisResults.failed(),colors);
         else AnalysisUI::draw(view,analysis,esp_timer_get_time(),micListener.trace(),micPageState(),latestMotion,
           motionPending,visibleDisplayFlipped(),colors,latestCurve,s.stateName(),s.ready && !s.signalFault,cacheAnalysis?&analysisCache:nullptr,
-          plot.fit,plot.input,plot.curve,analysisResults.busy(),analysisResults.publishedFinish(analysis.number()),analysisCapturePending());
+          plot.fit,plot.input,plot.curve,analysisResults.busy(),analysisResults.forecast(analysis.number()).seconds,analysisCapturePending());
         break;
       }
       case Controls::Page::MicRpm:
@@ -1390,16 +1390,12 @@ static CalibrationPacket *firstCalibration=nullptr,*latestCalibration=nullptr;
 static uint32_t capturedAnalysisLaunch=0,lastCaptureTry=0;
 static bool calibrationCapturePending=false;
 static bool analysisCapturePending(){return calibrationCapturePending;}
-static uint32_t previewLaunch=0;
-static Calibration::Preview calibrationPreview;
 static ForecastShadow::Log shadowLog;
 
 static void observeForecastCheckpoint(unsigned elapsedMs){
   if(!shadowLog.due(elapsedMs))return;
-  const auto *trace=micListener.trace();
-  if(trace && trace->launch()!=analysis.number())trace=nullptr;
-  shadowLog.observe(elapsedMs,analysis.rpm(),trace,micListener.warm(millis()),
-                    analysisResults.publishedFinish(analysis.number()),analysisResults.publishedSupport(analysis.number()));
+  const auto forecast=analysisResults.forecast(analysis.number());
+  if(forecast.atMs<=elapsedMs)shadowLog.observe(forecast);
 }
 
 static bool calibrationNeedsSave(){
@@ -1439,13 +1435,11 @@ LOOP_HELPER static bool captureStoppedCalibration(){
   if(!memory){settingsSave.mark(SettingsSave::AnalysisResult);saveError=dirty=true;Serial.println("CAL_ERROR stop_capture_no_memory");return false;}
   auto *packet=new(memory) CalibrationPacket;
   packet->count=count;
-  auto preview=previewLaunch==launch && calibrationPreview.count<=count?calibrationPreview:Calibration::Preview{};
-  // A newer prefix may still be fitting. Preserve the published estimate
-  // and its actual prefix length until another result replaces it.
-  if(elapsed>=EarlySpin::FIRST_MS && preview.model!=5){
-    const bool measured=trace && micListener.on() && trace->started();
-    preview={};preview.model=measured?6:7;preview.atMs=elapsed;preview.count=count;preview.kind=1;
-    preview.lo=preview.hi=EarlySpin::finish(measured?trace->earlyReadings():0,elapsed,measured);
+  Calibration::Preview preview;
+  const auto forecast=analysisResults.forecast(launch);
+  if(forecast.atMs && forecast.atMs<=elapsed && forecast.rawCount<=count && std::isfinite(forecast.seconds)){
+    preview.model=unsigned(EarlySpin::Source::Stamina);preview.kind=1;
+    preview.atMs=forecast.atMs;preview.count=forecast.rawCount;preview.lo=preview.hi=forecast.seconds;
   }
   packet->raw=Calibration::packRaw(packet->data(),launch,analysis.rpm(),elapsed,
       unsigned(analysis.stopReason()),esp_app_get_description()->app_elf_sha256,preview,trace,shadowLog);
@@ -1458,34 +1452,21 @@ LOOP_HELPER static bool captureStoppedCalibration(){
   latestCalibration=packet;releaseSavedCalibrations();
   settingsSave.mark(SettingsSave::AnalysisResult);
   capturedAnalysisLaunch=launch;calibrationCapturePending=false;
-  previewLaunch=0;calibrationPreview={};
   return true;
 }
 
 LOOP_HELPER static void captureCalibration(bool completed){
-  auto &preview=calibrationPreview;
+  if(!completed)return;
   const auto *fits=analysisResults.results();
   const auto *input=analysisResults.input();
   if(!fits || !input || !analysisResults.matches(analysis))return;
-  if(analysis.running()){
-    previewLaunch=analysis.number();
-    preview={};
-    preview.atMs=uint32_t(analysis.elapsedUs(esp_timer_get_time())/1000);
-    preview.count=input->count;
-    if(fits->fixedRiccati){
-      const float finish=fits->models[unsigned(Decay::Model::Riccati)].stopSeconds;
-      preview.model=5;preview.kind=1;preview.lo=preview.hi=finish;
-      preview.stops[unsigned(Decay::Model::Riccati)]=finish;
-    }
-  } else if(completed){
-    auto *packet=latestCalibration;
-    if(!packet || packet->fit || packet->count!=input->count ||
-       FlashLayout::get32(packet->data()+4)!=analysis.number() ||
-       FlashLayout::get32(packet->data()+12)!=input->stopMs)return;
-    Calibration::packFit(packet->data()+packet->raw,*input,*fits);
-    packet->fit=Calibration::fitBytes(packet->count);
-    settingsSave.mark(SettingsSave::AnalysisResult);
-  }
+  auto *packet=latestCalibration;
+  if(!packet || packet->fit || packet->count!=input->count ||
+     FlashLayout::get32(packet->data()+4)!=analysis.number() ||
+     FlashLayout::get32(packet->data()+12)!=input->stopMs)return;
+  Calibration::packFit(packet->data()+packet->raw,*input,*fits);
+  packet->fit=Calibration::fitBytes(packet->count);
+  settingsSave.mark(SettingsSave::AnalysisResult);
 }
 
 // Called only inside a granted checkpoint. A failed write keeps both the

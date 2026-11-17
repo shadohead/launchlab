@@ -5,7 +5,7 @@
 // Little-endian calibration archives. Raw observations consume sample storage;
 // their time deltas preserve quiet intervals without padding. LLC9 preserves
 // LLC8 pitch provenance and distinguishes interrupted runs from timeouts.
-// Older packets remain readable; the firmware only writes LLC9 and LLF2.
+// LLCA stores the active stamina forecast in compact checkpoint slots.
 namespace Calibration {
 constexpr size_t HEADER = 96 + Decay::Record::BYTES, MAX_BYTES = HEADER + 5 * Decay::MAX_SAMPLES + 4;
 struct Preview {
@@ -25,9 +25,9 @@ inline void number(uint8_t *&p, float value) {
 // checksummed record and one exclusion bit per raw sample.
 constexpr size_t RAW_HEADER = 96, RAW_MIN = RAW_HEADER + 4;
 inline bool isRawPacket(const uint8_t *data) {
-  return !std::memcmp(data, "LLC", 3) && data[3] >= '2' && data[3] <= '9';
+  return !std::memcmp(data, "LLC", 3) && ((data[3] >= '2' && data[3] <= '9') || data[3] == 'A');
 }
-constexpr size_t RAW_OVERHEAD = RAW_MIN + 26 + 24 * ForecastShadow::COUNT;
+constexpr size_t RAW_OVERHEAD = RAW_MIN + 26 + 12 * ForecastShadow::COUNT;
 // Adjacent relative-pitch readings cost five bytes each. Longer deltas use
 // empty 100 ms slots, so the five-minute trace still fits this bound. Sparse
 // traces reserve six bytes per reading plus two possible four-byte deltas.
@@ -66,7 +66,7 @@ size_t packRaw(uint8_t *data, uint32_t launch, float rpm, uint32_t duration, uns
   const unsigned count = trace ? trace->rawCount() : 0;
   uint8_t *p = data;
   // LLC9 endpoint field: 0 timeout, 1 manual observation, 2 interrupted.
-  put(p, 0x39434c4c);
+  put(p, 0x41434c4c);
   put(p, launch);
   number(p, rpm);
   put(p, duration);
@@ -116,9 +116,7 @@ size_t packRaw(uint8_t *data, uint32_t launch, float rpm, uint32_t duration, uns
     put(p, row.observedMs);
     put(p, unsigned(row.displayed.source));
     number(p, row.displayed.seconds);
-    number(p, row.corrected);
-    number(p, row.limitedFinish);
-    put(p, uint32_t(row.support.accepted) | (uint32_t(row.support.original) << 16));
+
   }
   checksum(data, p);
   return size_t(p - data) + 4;

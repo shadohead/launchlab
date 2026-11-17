@@ -18,7 +18,11 @@ inline float finish(unsigned count, unsigned elapsedMs, bool micAvailable = true
   return start + blend * (end - start);
 }
 
-enum class Source : unsigned { None=0, FixedRiccati=5, EarlyMic=6, Population=7 };
+enum class Source : unsigned { None=0, FixedRiccati=5, EarlyMic=6, Population=7, Stamina=8 };
+struct Forecast {
+  unsigned atMs = 0, rawCount = 0;
+  float seconds = NAN;
+};
 struct Estimate {
   Source source = Source::None;
   float seconds = NAN;

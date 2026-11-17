@@ -32,6 +32,7 @@ def load_runs(folder):
             skipped[reason] = skipped.get(reason, 0) + 1
             continue
         samples = [(p["time_ms"], p["raw_rpm"]) for p in data["samples"]]
+        rejected = {p["time_ms"] for p in data["samples"] if p.get("live_filter_rejected")}
         recovered = set()
         pitch_confidence = {}
         for point in data["samples"]:
@@ -64,7 +65,7 @@ def load_runs(folder):
         ):
             raise ValueError(f"Invalid launch data in {path}")
         # Ignore unrelated export metadata; recovery provenance changes the fit.
-        provenance = [(t in recovered, pitch_confidence.get(t, 0)) for t, _ in samples]
+        provenance = [(t in rejected, t in recovered, pitch_confidence.get(t, 0)) for t, _ in samples]
         key = hashlib.sha256(json.dumps([launch, stop, samples, provenance]).encode()).digest()
         if key not in runs:
             runs[key] = {
@@ -74,6 +75,7 @@ def load_runs(folder):
                 "stop": stop,
                 "samples": samples,
                 "recovered": recovered,
+                "rejected": rejected,
                 "pitch_confidence": pitch_confidence,
             }
     return sorted(runs.values(), key=lambda r: r["order"]), skipped
@@ -136,7 +138,10 @@ def build_helper(folder, historical=False):
 
 def replay(run, step, helper):
     ticks = range(step, run["stop"], step)
-    samples = run["samples"]
+    # Replay arrivals, not window centers. Backfilled acquisition windows can
+    # arrive after a later original. Keep historical post-stop inputs untouched.
+    samples = sorted((t + (600 if t in run["recovered"] and not run.get("pitch_confidence", {}).get(t) else 200),
+                      t, rpm) for t, rpm in run["samples"])
     lines = [f"{run['launch']} {len(ticks)}"]
     i = 0
     for ms in ticks:
@@ -144,10 +149,9 @@ def replay(run, step, helper):
         while i < len(samples) and samples[i][0] <= ms:
             i += 1
         lines.append(f"{ms} {i - start}")
-        lines.extend(
-            f"{t} {rpm} {int(t in run['recovered'])} {run.get('pitch_confidence', {}).get(t, 0)}"
-            for t, rpm in samples[start:i]
-        )
+        for arrival, t, rpm in samples[start:i]:
+            lines.append(f"{arrival} {t} {rpm} {int(t in run['recovered'])} "
+                         f"{run.get('pitch_confidence', {}).get(t, 0)} {int(t in run.get('rejected', ()))}")
     output = subprocess.check_output([str(helper)], input="\n".join(lines), text=True)
     states = {}
     for line in output.splitlines():

@@ -63,7 +63,7 @@ struct PracticeHistory{enum{IMAGE_BYTES=2600};};
 static unsigned available=1000;
 bool nvsAvailable(unsigned &v){v=available;return true;}
 static Decay::Session input;static Decay::Results fit;static Decay::Curve curve;
-struct {float published=NAN;float publishedFinish(unsigned){return published;}Decay::RiccatiSupport publishedSupport(unsigned){return {0,1};}auto results(){return &fit;}auto input(){return &::input;}
+struct {EarlySpin::Forecast snapshot{};EarlySpin::Forecast forecast(unsigned){return snapshot;}auto results(){return &fit;}auto input(){return &::input;}
  bool matches(decltype(analysis)&){return true;}auto winner(){return &curve;}}analysisResults;
 struct {std::vector<uint8_t> stored;
  size_t getBytesLength(const char *k){return !strcmp(k,"analysis_cal")?stored.size():0;}
@@ -108,16 +108,12 @@ int main(int argc,char **argv){
    s.frame=true;s.reason=i==0?MicRpm::Reason::Acquiring:MicRpm::Reason::Tracking;s.recovered=i==0;s.rpm=i==1?0:s.rawRpm;s.rejectedRpm=i==1?s.rawRpm:0;trace.add(s);
    input.samples[i].ms=uint32_t(std::lround(trace.seconds(s.index)*1000));
  }
+ analysisResults.snapshot={10000,2,112.5f};
  observeForecastCheckpoint(9999);assert(shadowLog.next==0);
  observeForecastCheckpoint(10000);assert(shadowLog.next==1);
- auto limited=[&](Decay::RiccatiSupport support,float finish,unsigned ms=15000){
-   ForecastShadow::Log log;log.observe(ms,4300.f,&trace,true,finish,support);
-   const auto &row=log.rows[ms>=30000?2:1];assert(row.displayed.seconds==finish);return row.limitedFinish;
- };
- assert(limited({1,2},88)==88 && limited({0,0},88)==88 && limited({0,2},32)==32);
- assert(std::fabs(limited({0,2},100,60000)-60.f)<.0001f && limited({0,2},55,60000)==55.f);
- analysisResults.published=88.25f;observeForecastCheckpoint(11000);observeForecastCheckpoint(15001);
- analysisResults.published=NAN;micListener.ready=false;observeForecastCheckpoint(30000);micListener.ready=true;
+ observeForecastCheckpoint(15000);assert(shadowLog.next==1); // No new forecast yet.
+ analysisResults.snapshot={15001,3,88.25f};observeForecastCheckpoint(15001);
+ analysisResults.snapshot={30000,3,95.75f};observeForecastCheckpoint(30000);
  captureStoppedCalibration();
  auto *captured=latestCalibration;assert(captureStoppedCalibration() && latestCalibration==captured);
  assert(shadowLog.next==3);shadowLog.reset();assert(shadowLog.next==0 && !shadowLog.rows[0].observedMs);
@@ -154,17 +150,17 @@ int main(int argc,char **argv){
  Calibration::Archive::Index index;assert(Calibration::Archive::scan(spiffsFlash,index) && index.count==1);
  // Two stops with flash unavailable and no completed fits. Mutate the source
  // immediately. Once writes succeed, both frozen packets must still be present.
- previewLaunch=analysis.number();calibrationPreview=prev;calibrationPreview.model=5;
+ analysisResults.snapshot={81000,2,81.5f};
  analysis.ms=83000;capturedAnalysisLaunch=0;captureStoppedCalibration();spiffsFlash.failCommit=true;assert(!saveCalibration());
- trace.begin(10,5000);analysis.ms=84000;capturedAnalysisLaunch=0;captureStoppedCalibration();
+ trace.begin(10,5000);analysisResults.snapshot={};analysis.ms=84000;capturedAnalysisLaunch=0;captureStoppedCalibration();
  assert(firstCalibration!=latestCalibration);
  spiffsFlash.failCommit=false;assert(saveCalibration());
  assert(Calibration::Archive::scan(spiffsFlash,index) && index.count==3);
  Serial.payload.clear();assert(sendStoredCalibration(index.entries[1]));
  assert(FlashLayout::get32(Serial.payload.data()+12)==83000 && FlashLayout::get32(Serial.payload.data()+20)==3);
- assert(FlashLayout::get32(Serial.payload.data()+32)==5 && FlashLayout::get32(Serial.payload.data()+28)==2);
+ assert(FlashLayout::get32(Serial.payload.data()+32)==8 && FlashLayout::get32(Serial.payload.data()+28)==2);
  Serial.payload.clear();assert(sendStoredCalibration(index.entries[2]));
- assert(FlashLayout::get32(Serial.payload.data()+32)==7);
+ assert(FlashLayout::get32(Serial.payload.data()+32)==0);
  assert(FlashLayout::get32(Serial.payload.data()+12)==84000 && FlashLayout::get32(Serial.payload.data()+20)==0);
  for(unsigned i=0;i<38;++i){analysis.ms++;capturedAnalysisLaunch=0;captureStoppedCalibration();assert(saveCalibration());}
  assert(Calibration::Archive::scan(spiffsFlash,index) && index.count==33);
@@ -394,37 +390,10 @@ with tempfile.TemporaryDirectory() as tmp:
     checkpoints = raw_run["forecast_checkpoints"]
     assert [s["checkpoint_s"] for s in checkpoints] == [10, 15, 30]
     assert [s["observed_at_ms"] for s in checkpoints] == [10000, 15001, 30000]
-    assert [s["source"] for s in checkpoints] == [
-        "Early mic estimate",
-        "Fixed Riccati",
-        "Population estimate",
-    ]
-    early = checkpoints[0]
-    assert abs(early["displayed_finish_s"] - (39.0676 + 2 * 2.34672)) < 0.0001
-    # Two original samples, one accepted; the recovered sample is excluded.
-    expected = (
-        early["displayed_finish_s"]
-        - 1.790140
-        - 13.191932 * 0.1
-        + 0.869314 * 0.5
-        - 2.749907 * 0.85
-        + 0.041277 * (4500 / 4300 - 0.75)
-    )
-    assert abs(early["corrected_finish_s"] - expected) < 0.0001
-    assert early["riccati_limited_finish_s"] is None
-    fixed = checkpoints[1]
-    count_finish = 35.4858 + 2 * 1.67287
-    assert abs(fixed["riccati_limited_finish_s"] - count_finish) < .001
-    assert (fixed["riccati_accepted_inliers"], fixed["riccati_original_inliers"]) == (0, 1)
-    assert checkpoints[2]["riccati_limited_finish_s"] is None
-    assert (
-        abs(checkpoints[1]["displayed_finish_s"] - 88.25) < 0.001
-        and checkpoints[1]["corrected_finish_s"] is None
-    )
-    assert (
-        abs(checkpoints[2]["displayed_finish_s"] - 94.131) < 0.001
-        and checkpoints[2]["corrected_finish_s"] is None
-    )
+    assert [s["source"] for s in checkpoints] == ["Stamina predictor"] * 3
+    assert [s["displayed_finish_s"] for s in checkpoints] == [112.5, 88.25, 95.75]
+    assert raw_run["latest_preview"]["at_ms"] == 30000
+    assert raw_run["latest_preview"]["finish_s"] == [95.75, 95.75]
     assert fit_run["forecast_checkpoints"] == checkpoints
 
     assert raw_run["final_fit"] is None and raw_run["observed_stop_ms"] == 82000
@@ -434,13 +403,13 @@ with tempfile.TemporaryDirectory() as tmp:
         raw_run["mic_frame_counts"]["acquiring"] == 1
         and raw_run["mic_frame_counts"]["tracking"] == 2
     )
-    assert raw_run["latest_preview"]["winner"] == "Early mic estimate"
+    assert raw_run["latest_preview"]["winner"] == "Stamina predictor"
     import struct
     import zlib
 
     pitch_blob = pitch_path.read_bytes()
     pitch_run = framed(pitch_blob)
-    assert pitch_blob[:4] == raw_blob[:4] == b"LLC9"
+    assert pitch_blob[:4] == raw_blob[:4] == b"LLCA"
     assert [p["relative_pitch_confidence"] for p in pitch_run["samples"]] == [0, 0, 1, 127, 255]
     assert [p["relative_pitch_recovered"] for p in pitch_run["samples"]] == [False, False, True, True, True]
     assert [p["confirmed_acquisition_recovered"] for p in pitch_run["samples"]] == [False, True, False, False, False]
@@ -480,7 +449,7 @@ with tempfile.TemporaryDirectory() as tmp:
     bad_generic = bytearray(pitch_blob[:pitch_raw_size - 4])
     bad_generic[104] &= ~4   # Pitch flag without generic recovery.
     unsupported = bytearray(raw_blob[:-4])
-    unsupported[:4] = b"LLCA"
+    unsupported[:4] = b"LLCB"
     for invalid in (
         crc_packet(bad_confidence), crc_packet(bad_generic), crc_packet(unsupported),
         pitch_blob[:-1], pitch_blob[:108],
@@ -493,16 +462,27 @@ with tempfile.TemporaryDirectory() as tmp:
         else:
             raise AssertionError("invalid pitch packet accepted")
 
-    prior = bytearray(raw_blob)
+    # Reconstruct a legacy packet, including the historical shadow slots.
+    slots = b"".join((
+        struct.pack("<IIfffHH", 10000, 6, 80., 77., float("nan"), 0, 0),
+        struct.pack("<IIfffHH", 15001, 5, 88.25, float("nan"), 55., 0, 1),
+        struct.pack("<IIfffHH", 30000, 7, 94.131, float("nan"), float("nan"), 0, 0),
+    ))
+    prior = bytearray(raw_blob[:-40] + slots)
+    prior[:4] = b"LLC9"
     struct.pack_into("<I", prior, 32, 7)
-    struct.pack_into("<I", prior, len(prior) - 4, zlib.crc32(prior[:-4]))
+    prior = crc_packet(prior)
+    legacy_checks = decode(prior)["forecast_checkpoints"]
+    assert [s["source"] for s in legacy_checks] == ["Early mic estimate", "Fixed Riccati", "Population estimate"]
+    assert legacy_checks[0]["corrected_finish_s"] == 77.
+    assert legacy_checks[1]["riccati_limited_finish_s"] == 55.
     for reason, name in ((0, "timeout"), (1, "manual"), (2, "interrupted")):
         ended = bytearray(raw_blob[:-4])
         struct.pack_into("<I", ended, 16, reason)
         decoded = decode(crc_packet(ended))
         assert decoded["stop_reason"] == name
         assert decoded["observed_stop_ms"] == (82000 if reason == 1 else None)
-    older_pitch = bytearray(raw_blob[:-4])
+    older_pitch = bytearray(prior[:-4])
     older_pitch[:4] = b"LLC8"
     assert decode(crc_packet(older_pitch))["samples"] == raw_run["samples"]
     struct.pack_into("<I", older_pitch, 16, 2)
@@ -513,14 +493,13 @@ with tempfile.TemporaryDirectory() as tmp:
     else:
         raise AssertionError("LLC8 accepted an LLC9 endpoint reason")
     # Older packets keep their original flag layouts and checkpoint payloads.
-    prefix = bytearray(raw_blob[:96]) + observation_bytes(raw_run["samples"], 3) + raw_blob[-102:-76]
-    slots = raw_blob[-76:-4]
+    prefix = bytearray(prior[:96]) + observation_bytes(raw_run["samples"], 3) + prior[-102:-76]
     legacy4 = bytearray(prefix + b"".join(slots[i:i+16] for i in range(0,72,24)))
     legacy4[:4] = b"LLC4"
     legacy4.extend(struct.pack("<I", zlib.crc32(legacy4)))
     old = decode(bytes(legacy4) + fit_blob[len(raw_blob):])
     assert old["final_fit"] and old["forecast_checkpoints"] == [
-        {k: v for k, v in row.items() if not k.startswith("riccati_")} for row in checkpoints
+        {k: v for k, v in row.items() if not k.startswith("riccati_")} for row in legacy_checks
     ]
     legacy = bytearray(prefix)
     legacy[:4] = b"LLC3"

@@ -3,6 +3,7 @@
 #include "fixed_riccati.h"
 #include "analysis_details.h"
 #include "mic_trace.h"
+#include "stamina_finish.h"
 #include "decay_record.h"
 #include <atomic>
 #include <new>
@@ -46,7 +47,9 @@ class Service {
   bool preview_ = false;
   unsigned snapshotCount_ = 0, lastFitMs_ = 0;
   uint32_t publishedLaunch_ = 0;
-  float publishedFinish_ = NAN;
+  StaminaFinish::Publications publications_;
+  AcousticClock::Scratch forecastScratch_;
+  EarlySpin::Forecast forecast_;
   Decay::RiccatiSupport publishedSupport_{};
   bool needsRecord_ = false;
   Decay::Record::Image record_{};
@@ -163,7 +166,10 @@ public:
   bool matches(const AnalysisMode::Session &session) const {
     return ready_ && launch_ == session.number() && preview_ == session.running();
   }
-  float publishedFinish(uint32_t launch) const { return publishedLaunch_ == launch ? publishedFinish_ : NAN; }
+  EarlySpin::Forecast forecast(uint32_t launch) const {
+    return publishedLaunch_ == launch ? forecast_ : EarlySpin::Forecast{};
+  }
+  float publishedFinish(uint32_t launch) const { return publishedLaunch_ == launch ? publications_.previous : NAN; }
   Decay::RiccatiSupport publishedSupport(uint32_t launch) const {
     return std::isfinite(publishedFinish(launch)) ? publishedSupport_ : Decay::RiccatiSupport{};
   }
@@ -195,8 +201,14 @@ public:
     const bool currentTrace = trace && trace->launch() == s.number();
     const unsigned rawCount = currentTrace ? trace->rawCount() : 0;
     const bool stale = (job_ || previous_ || ready_) && (!open || s.number() != launch_ || live != preview_);
-    if (!open || !live || publishedLaunch_ != s.number())
-      publishedFinish_ = NAN;
+    if (open && live && publishedLaunch_ != s.number()) {
+      publishedLaunch_ = s.number();
+      forecast_ = {};
+      publishedSupport_ = {};
+      publications_ = {};
+    }
+    if (!open || !live)
+      publications_ = {};
     if (stale) {
       if (job_)
         job_->cancel.store(true, std::memory_order_relaxed);
@@ -219,8 +231,7 @@ public:
         ready_ = true;
         needsRecord_ = !preview_;
         if (preview_) {
-          publishedLaunch_ = launch_;
-          publishedFinish_ = job_->results.fixedRiccati ? job_->winner.end : NAN;
+          publications_.publish(job_->results.fixedRiccati ? job_->winner.end : NAN);
           publishedSupport_ = job_->results.support;
         }
         changed = true;
@@ -233,6 +244,21 @@ public:
       }
       return changed;
     }
+    const uint64_t elapsed = live ? s.elapsedUs(now ? now : esp_timer_get_time()) : 0;
+    const unsigned ms = unsigned(elapsed / 1000);
+    // Inference runs once per clock second, even with no new readings or with
+    // a refit in flight. Drawing, replay and flash retries only read the snapshot.
+    if (live && ms >= EarlySpin::FIRST_MS && ms / 1000 != forecast_.atMs / 1000) {
+      auto reading = [&](unsigned i) {
+        const auto rpm = trace->rawRpm(i);
+        if (!rpm) return StaminaFinish::Observation{};
+        return StaminaFinish::Observation{unsigned(std::lround(MicTrace::Trace::seconds(i) * 1000)),
+                                          float(rpm), trace->recovered(i), trace->rejectedRpm(i) != 0};
+      };
+      const StaminaFinish::LiveFit fit{ms, s.rpm(), publishedSupport_.original, publishedSupport_.accepted};
+      forecast_ = {ms, rawCount, float(StaminaFinish::predict(fit, publications_,
+                         currentTrace ? trace->count() : 0, reading, forecastScratch_))};
+    }
     if (ready_ && s.results() && needsRecord_) {
       const unsigned model = unsigned(std::max(0, results()->best));
       Decay::Record::encode(*results(), model, record_);
@@ -243,10 +269,7 @@ public:
     const bool sameAttempt = launch_ == s.number() && preview_ == live;
     if (task_ || (!live && (job_ || sameAttempt)))
       return changed;
-    uint64_t elapsed = 0;
     if (live) {
-      elapsed = s.elapsedUs(now ? now : esp_timer_get_time());
-      const unsigned ms = unsigned(elapsed / 1000);
       if (!EarlySpin::refitDue(ms, rawCount, sameAttempt ? lastFitMs_ : 0, sameAttempt ? snapshotCount_ : 0))
         return changed;
       // Let the UI and exporter consume a completed snapshot for one pass,
