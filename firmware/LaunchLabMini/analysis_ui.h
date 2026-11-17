@@ -27,40 +27,50 @@ inline void timeMarkers(lgfx::LGFXBase &g, const Palette::Colors &c, int left, i
 }
 // Reuse the existing screen sprite: no additional framebuffer or heap allocation.
 // This cache is never used when drawing directly to the display or during replay.
+// It keeps the heading, the hero label and the Launch row; the clock redraws
+// once a second and everything from the Finish row down every frame.
 struct Cache {
-  bool valid = false, ready = false;
+  bool valid = false, ready = false, running = false;
   uint32_t launch = 0;
   float rpm = 0;
   int width = 0;
   uint64_t seconds = 0;
   uint16_t timerColor = 0;
+  AnalysisMode::StopReason reason = AnalysisMode::StopReason::Timeout;
   Palette::Colors colors;
   char state[32] = {};
   void invalidate() { valid = false; }
   bool matches(const AnalysisMode::Session &s, const Palette::Colors &c, int w, const char *name,
                bool sensorReady) const {
     return valid && launch == s.number() && rpm == s.rpm() && colors == c && width == w &&
+           running == s.running() && reason == s.stopReason() &&
            (s.number() || (ready == sensorReady && !std::strcmp(state, name)));
   }
 };
-// Native geometry keeps the stopwatch sharp and follows the selected theme.
-inline void stopwatch(lgfx::LGFXBase &g, int cx, int cy, int radius, uint16_t color) {
-  const int top = cy - radius;
-  g.fillRect(cx - 2, top - 6, 5, 8, color);
-  g.fillRect(cx - 8, top - 10, 16, 5, color);
-  g.fillCircle(cx - 8, top - 8, 2, color);
-  g.fillCircle(cx + 8, top - 8, 2, color);
-  const int diagonal = int(std::lround(radius * 0.70710678f));
-  const int x = cx - diagonal, y = cy - diagonal;
-  // Diagonal stem and rounded upper-left button.
-  g.fillTriangle(x + 2, y - 2, x - 5, y - 9, x - 9, y - 5, color);
-  g.fillTriangle(x + 2, y - 2, x - 9, y - 5, x - 2, y + 2, color);
-  g.fillTriangle(x - 2, y - 10, x - 5, y - 13, x - 13, y - 5, color);
-  g.fillTriangle(x - 2, y - 10, x - 13, y - 5, x - 10, y - 2, color);
-  g.fillCircle(x - 4, y - 11, 2, color);
-  g.fillCircle(x - 11, y - 4, 2, color);
-  for (int inset = 0; inset < 3; ++inset)
-    g.drawCircle(cx, cy, radius - inset, color);
+// Layout rows, top to bottom. The clock is the screen's one large number, in
+// the main screen's Font6; everything else is a Font2 row or a Font1 caption.
+constexpr int CLOCK_Y = 30, LABEL_Y = 82, LAUNCH_Y = 104, FINISH_Y = 122, CAPTION_Y = 140,
+              DYNAMIC_Y = 120, GRAPH_TOP = 156, GRAPH_BOTTOM = 214;
+// m:ss, which Font6 draws: Analysis stops itself at five minutes.
+inline void clock(char *out, unsigned size, uint64_t seconds) {
+  std::snprintf(out, size, "%u:%02u", unsigned(seconds / 60), unsigned(seconds % 60));
+}
+// A muted label on the left and its value on the right, as on Device and Details.
+inline void row(lgfx::LGFXBase &g, const Palette::Colors &c, int y, const char *label, const char *value,
+                uint16_t ink) {
+  g.setTextDatum(top_left);
+  g.setTextColor(c.muted, c.background);
+  g.drawString(label, 4, y, 2);
+  g.setTextDatum(top_right);
+  g.setTextColor(ink, c.background);
+  g.drawString(value, g.width() - 4, y, 2);
+  g.setTextDatum(top_center);
+}
+inline void centered(lgfx::LGFXBase &g, const Palette::Colors &c, int y, const char *text, uint16_t ink,
+                     int font = 2) {
+  g.setTextDatum(top_center);
+  g.setTextColor(ink, c.background);
+  g.drawString(text, g.width() / 2, y, font);
 }
 inline void fittedPlot(lgfx::LGFXBase &g, const Palette::Colors &c, const Decay::Results &fit,
                        const Decay::Session *input, const Decay::Curve *winner, float elapsed, int top = 154,
@@ -127,7 +137,6 @@ inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session, uint64
                  const Decay::Results *fit = nullptr, const Decay::Session *input = nullptr,
                  const Decay::Curve *winner = nullptr, bool fitting = false, float publishedFinish = NAN,
                  bool capturePending = false) {
-  const int cx = g.width() / 2;
   char text[32];
   if (session.replay() && !capturePending) {
     if (cache)
@@ -140,25 +149,33 @@ inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session, uint64
     ControlsUI::footer(g, session.running() ? "A Back  B Stop" : "A Back  B Details");
     return;
   }
+  const bool launched = session.number() != 0;
+  const bool stopped = launched && !session.running();
   const bool reuse = cache && cache->matches(session, c, g.width(), detectorState, sensorReady);
   if (cache) {
     if (reuse)
-      g.fillRect(0, 130, g.width(), 110, c.background);
+      g.fillRect(0, DYNAMIC_Y, g.width(), g.height() - DYNAMIC_Y, c.background);
     else
-      g.fillRect(0, 0, g.width(), 240, c.background);
+      g.fillRect(0, 0, g.width(), g.height(), c.background);
   }
   g.setTextDatum(top_center);
   if (!reuse) {
-    g.setTextColor(c.muted, c.background);
-    g.drawString("Analysis", cx, 3, 1);
-    if (session.number()) {
+    ControlsUI::heading(g, "Analysis");
+    // What the clock is: before a launch the detector's state, as on Main.
+    if (!launched)
+      centered(g, c, LABEL_Y, detectorState, sensorReady ? c.ready : c.warning);
+    else
+      centered(g, c, LABEL_Y,
+               session.running()                                            ? "Spin time"
+               : session.hasManualStop()                                    ? "Spin time"
+               : session.stopReason() == AnalysisMode::StopReason::Timeout ? "Time limit"
+                                                                            : "Interrupted",
+               c.muted);
+    if (launched) {
       snprintf(text, sizeof(text), "%.0f RPM", session.rpm());
-      g.setTextColor(c.number, c.background);
-      const bool large = g.textWidth(text, &fonts::Font4) <= g.width() - 6;
-      g.drawString(text, cx, 16, large ? 4 : 2);
+      row(g, c, LAUNCH_Y, "Launch", text, c.text);
     } else {
-      g.setTextColor(sensorReady ? c.ready : c.warning, c.background);
-      g.drawString(detectorState, cx, 16, 2);
+      centered(g, c, LAUNCH_Y, "Launch to start", c.muted);
     }
     if (cache) {
       cache->valid = true;
@@ -167,122 +184,96 @@ inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session, uint64
       cache->colors = c;
       cache->width = g.width();
       cache->ready = sensorReady;
+      cache->running = session.running();
+      cache->reason = session.stopReason();
       std::snprintf(cache->state, sizeof(cache->state), "%s", detectorState);
     }
   }
 
   const uint64_t elapsedUs = session.elapsedUs(now);
   const uint64_t seconds = elapsedUs / 1000000;
-  const bool stopped = session.number() && !session.running();
-  const uint16_t timerColor = stopped ? c.muted : c.number;
+  // The clock stays at full strength once stopped: it is the result.
+  const uint16_t timerColor = launched ? c.number : c.muted;
   if (!reuse || cache->seconds != seconds || cache->timerColor != timerColor) {
-    snprintf(text, sizeof(text), "%02u:%02u", unsigned(seconds / 60), unsigned(seconds % 60));
-    const int width = g.textWidth(text, &fonts::Font4);
-    if (reuse) {
-      g.fillRect(cx - width / 2, 80, width, 26, c.background);
-    } else {
-      const float halfWidth = width * .5f;
-      const int radius = int(std::ceil(std::sqrt(halfWidth * halfWidth + 13.f * 13.f))) + 2;
-      stopwatch(g, cx, 90, radius, c.muted);
-    }
-    // Visible Font4 digits occupy rows 2..18, centered on the dial at y=90.
+    if (reuse)
+      g.fillRect(0, CLOCK_Y, g.width(), 48, c.background);
+    clock(text, sizeof(text), seconds);
     g.setTextColor(timerColor, c.background);
-    g.drawString(text, cx, 80, 4);
+    g.drawString(text, g.width() / 2, CLOCK_Y, 6);
     if (cache) {
       cache->seconds = seconds;
       cache->timerColor = timerColor;
     }
   }
   static const MicTrace::Trace empty;
-  const auto &t = trace && trace->launch() == session.number() && session.number() ? *trace : empty;
-  char timestamp[16];
-  if (t.heard())
-    AnalysisMode::Session::formatMs(timestamp, sizeof(timestamp),
-                                    uint64_t(std::llround(t.lastSeconds() * 1000)));
-  else
-    snprintf(timestamp, sizeof(timestamp), "--:--:---");
-  snprintf(text, sizeof(text), "Last %s", timestamp);
-  g.setTextColor(c.muted, c.background);
-  g.drawString(text, cx, 131, 1);
-  const char *status = stopped                                ? "Curve unavailable"
-                       : mic == MicView::Mic::Failed          ? "Mic unavailable"
-                       : mic == MicView::Mic::NoMemory        ? "Not enough memory"
-                       : mic == MicView::Mic::Starting        ? "Mic warming up"
-                       : session.running()                    ? "Predicted finish --:--"
-                                                              : "Listening";
-  g.setTextColor(stopped ? c.muted : c.number, c.background);
-  const char *firstLine = status;
-  const char *secondLine = nullptr;
-  char finishLabel[32];
+  const auto &t = trace && trace->launch() == session.number() && launched ? *trace : empty;
+  // One status row and one caption under the Launch row.
   float predictedFinish = NAN;
-  bool forecastLabel = false;
   if (capturePending) {
-    firstLine = "Save pending";secondLine = "Please wait";
-    g.setTextColor(c.alert,c.background);
+    centered(g, c, FINISH_Y, "Save pending", c.alert);
+    centered(g, c, CAPTION_Y, "Please wait", c.muted, 1);
   } else if (stopped && !session.hasManualStop()) {
-    firstLine = session.stopReason()==AnalysisMode::StopReason::Timeout ? "Time limit reached" : "Recording interrupted";
-    secondLine = "No stop recorded";
+    centered(g, c, FINISH_Y, "No stop recorded", c.muted);
   } else if (stopped && fitting) {
-    firstLine = "Computing Best Fit";
-    secondLine = "RPM Curve. . .";
+    centered(g, c, FINISH_Y, "Fitting curve", c.muted);
+  } else if (stopped) {
+    if (winner && fit) {
+      // The endpoint estimate scales the shared shape to the launch and the
+      // stop without a microphone fit: say so.
+      centered(g, c, FINISH_Y, fit->endpointEstimate ? "Estimated curve"
+                               : fit->fixedRiccati   ? "Fixed Riccati fit"
+                                                     : "Free Riccati fit", c.muted);
+    } else {
+      centered(g, c, FINISH_Y, "Curve unavailable", c.muted);
+    }
   } else if (session.running()) {
-    forecastLabel = mic == MicView::Mic::On; // Includes the initial --:-- placeholder.
+    const char *status = mic == MicView::Mic::Failed     ? "Mic unavailable"
+                         : mic == MicView::Mic::NoMemory ? "Not enough memory"
+                         : mic == MicView::Mic::Starting ? "Mic warming up"
+                                                         : nullptr;
     const bool measured = mic == MicView::Mic::On && t.started();
     const auto active = EarlySpin::select(fit && fit->fixedRiccati && winner ? winner->end : publishedFinish,
                                           t.earlyReadings(), elapsedUs / 1000, measured);
     predictedFinish = active.seconds;
-    if(std::isfinite(predictedFinish)){
-      forecastLabel = true;
-      const unsigned sec=unsigned(std::lround(predictedFinish));
-      snprintf(finishLabel,sizeof(finishLabel),"Predicted finish %02u:%02u",sec/60,sec%60);
-      firstLine=finishLabel;secondLine=active.source==EarlySpin::Source::FixedRiccati ? "Fixed Riccati" :
-          measured ? "Early mic estimate" : "Population estimate";
+    if (std::isfinite(predictedFinish)) {
+      // Orange, as the dotted finish line on the graph.
+      clock(text, sizeof(text), uint64_t(std::lround(predictedFinish)));
+      row(g, c, FINISH_Y, "Finish", text, c.warning);
+      centered(g, c, CAPTION_Y,
+               status                                              ? status
+               : active.source == EarlySpin::Source::FixedRiccati ? "Fixed Riccati"
+               : measured                                         ? "Early mic estimate"
+                                                                  : "Population estimate",
+               status ? c.warning : c.muted, 1);
+    } else if (status) {
+      centered(g, c, FINISH_Y, status, mic == MicView::Mic::Starting ? c.muted : c.warning);
+    } else {
+      row(g, c, FINISH_Y, "Finish", "-:--", c.muted);
+      centered(g, c, CAPTION_Y, "Estimate from 10 s", c.muted, 1);
     }
-  } else if (stopped && winner && fit) {
-    firstLine = fit->endpointEstimate ? "Fixed Riccati Estimate"
-                                     : fit->fixedRiccati ? "Fixed Riccati Model" : "Free Riccati Model";
+  } else if (mic == MicView::Mic::Failed || mic == MicView::Mic::NoMemory) {
+    centered(g, c, FINISH_Y, mic == MicView::Mic::Failed ? "Mic unavailable" : "Not enough memory", c.warning);
   }
-  if (forecastLabel)
-    g.setTextColor(c.warning, c.background);
-  g.drawString(firstLine, cx, 141, 1);
-  if (secondLine) {
-    if (forecastLabel)
-      g.setTextColor(c.number, c.background);
-    g.drawString(secondLine, cx, 150, 1);
-  }
-  const int graphTop = secondLine ? 164 : 154;
   const float elapsed = float(elapsedUs) / 1000000.f;
-  const int graphBottom = session.running() ? 207 : 216;
   g.setTextColor(c.muted, c.background);
   if (fit && (input || winner) && (stopped || winner))
-    fittedPlot(g, c, *fit, input, winner, elapsed, graphTop, graphBottom, session.running(), &t, predictedFinish);
+    fittedPlot(g, c, *fit, input, winner, elapsed, GRAPH_TOP, GRAPH_BOTTOM, session.running(), &t, predictedFinish);
   else {
     const float span = std::max(t.elapsed(), graphSpan(elapsed, session.running(), predictedFinish));
-    MicView::plot(g, t, c, 26, g.width() - 5, graphTop, graphBottom,
-                  span, true);
+    MicView::plot(g, t, c, 26, g.width() - 5, GRAPH_TOP, GRAPH_BOTTOM, span, true);
     if (session.running())
-      timeMarkers(g, c, 26, g.width() - 5, graphTop, graphBottom, elapsed, span, predictedFinish);
+      timeMarkers(g, c, 26, g.width() - 5, GRAPH_TOP, GRAPH_BOTTOM, elapsed, span, predictedFinish);
   }
   if (fitting && !session.running()) {
-    const int center = (26 + g.width() - 5) / 2;
+    const int center = (26 + g.width() - 5) / 2, middle = (GRAPH_TOP + GRAPH_BOTTOM) / 2;
     const unsigned phase = unsigned((now / 250000) % 3);
-    g.fillRect(center - 14, 180, 29, 11, c.background);
+    g.fillRect(center - 14, middle - 5, 29, 11, c.background);
     for (unsigned i = 0; i < 3; ++i)
-      g.fillCircle(center + int(i) * 8 - 8, 185, 3, i == phase ? c.accent : c.muted);
+      g.fillCircle(center + int(i) * 8 - 8, middle, 3, i == phase ? c.accent : c.muted);
   }
-  if (capturePending) {
-    ControlsUI::footer(g, "B Retry");
-  } else if (session.running()) {
-    g.setTextDatum(top_left);
-    g.setTextColor(c.muted, c.background);
-    g.drawString("A Replay", 2, 226, 1);
-    const int promptCenter = g.width() - 41;
-    g.setTextDatum(top_center);
-    g.setTextColor(c.alert, c.background);
-    g.drawString("Press B when", promptCenter, 221, 1);
-    g.drawString("spin finishes", promptCenter, 231, 1);
-  } else {
-    ControlsUI::footer(g, session.number() ? "A Replay  B Details" : "Hold B Exit");
-  }
+  ControlsUI::footer(g, capturePending      ? "B Retry"
+                        : session.running() ? "A Replay  B Stop"
+                        : launched          ? "A Replay  B Details"
+                                            : "Hold B Exit");
 }
 }

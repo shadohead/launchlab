@@ -4,81 +4,96 @@
 #include "controls_ui.h"
 #include "palette.h"
 namespace AnalysisResultUI {
+// Rows, top to bottom: five Font2 label/value rows, then the time spent in
+// each 1,000 RPM band as a Font1 table with one bar per band.
+constexpr int ROW_Y = 30, ROW_PITCH = 18, NOTE_Y = 119, TABLE_Y = 128, BAND_Y = 143, BAND_PITCH = 14;
+constexpr int BAR_LEFT = 34, BAR_RIGHT = 88, BAR_HEIGHT = 4;
 inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session,
                  const AnalysisDetails::Summary *details, bool fitting, bool failed,
                  const Palette::Colors &c) {
   char text[40];
   const int cx = g.width() / 2;
-  g.setTextDatum(top_center);
-  g.setTextColor(c.muted, c.background);
-  g.drawString("Analysis Details", cx, 3, 1);
-  snprintf(text, sizeof(text), "%.0f RPM", session.rpm());
-  g.setTextColor(c.number, c.background);
-  g.drawString(text, cx, 16, g.textWidth(text, &fonts::Font4) <= g.width() - 6 ? 4 : 2);
-  g.setTextColor(c.text, c.background);
-  const float duration = session.elapsedUs(0) * .000001f;
-  auto row = [&](const char *label, const char *value, int y) {
+  ControlsUI::heading(g, "Details");
+  int y = ROW_Y;
+  auto row = [&](const char *label, const char *value, uint16_t ink) {
     g.setTextDatum(top_left);
-    g.drawString(label, 2, y, 1);
+    g.setTextColor(c.muted, c.background);
+    g.drawString(label, 4, y, 2);
     g.setTextDatum(top_right);
-    g.drawString(value, g.width() - 2, y, 1);
+    g.setTextColor(ink, c.background);
+    g.drawString(value, g.width() - 4, y, 2);
+    y += ROW_PITCH;
   };
-  snprintf(text, sizeof(text), "%.1fs", duration);
-  row(session.hasManualStop() ? "Total spin time" : "Recorded time", text, 49);
-  bool estimated = details && details->complete;
-  if (session.hasManualStop() && duration > 0)
-    snprintf(text, sizeof(text), "%.0f", session.rpm() / duration);
+  const bool manual = session.hasManualStop();
+  const bool estimated = details && details->complete;
+  const float duration = session.elapsedUs(0) * .000001f;
+  snprintf(text, sizeof(text), "%.0f RPM", session.rpm());
+  row("Launch", text, c.text);
+  snprintf(text, sizeof(text), "%.1f s", duration);
+  row(manual ? "Spin time" : "Recorded", text, c.text);
+  if (manual && duration > 0)
+    snprintf(text, sizeof(text), "%.0f RPM/s", session.rpm() / duration);
   else if (estimated)
-    snprintf(text, sizeof(text), "%.0f", details->decayRate);
+    snprintf(text, sizeof(text), "%.0f RPM/s", details->decayRate);
   else
     snprintf(text, sizeof(text), "--");
-  row("Avg decay RPM/s", text, 64);
+  row("Decay", text, c.text);
   if (estimated)
     snprintf(text, sizeof(text), "%.0f", details->revolutions);
   else
     snprintf(text, sizeof(text), "--");
-  row(session.hasManualStop() ? "Total revs" : "Recorded revs", text, 79);
+  row("Revs", text, c.text);
+  // Battle stamina is a model estimate (time to fall below 1,000 RPM): "~".
   if (session.rpm() > 0 && session.rpm() <= 1000)
-    snprintf(text, sizeof(text), "0.0s");
+    snprintf(text, sizeof(text), "0.0 s");
   else if (details && std::isfinite(details->battleStaminaSeconds))
-    snprintf(text, sizeof(text), "%.1fs", details->battleStaminaSeconds);
+    snprintf(text, sizeof(text), "~%.1f s", details->battleStaminaSeconds);
   else
     snprintf(text, sizeof(text), "--");
-  g.setTextColor(c.accent, c.background);
-  g.setTextDatum(top_left);
-  g.drawString("Estimated", 2, 92, 1);
-  g.drawString("Battle Stamina", 2, 101, 1);
-  g.setTextColor(c.text, c.background);
-  g.setTextDatum(top_right);
-  g.drawString(text, g.width() - 2, 101, 1);
+  row("Stamina", text, c.accent);
+  g.setTextDatum(top_center);
+  if (details && details->endpointEstimate) {
+    g.setTextColor(c.muted, c.background);
+    g.drawString("Estimated curve", cx, NOTE_Y, 1);
+  }
   g.setTextColor(c.muted, c.background);
-  row("RPM band", "Time", 115);
-  g.drawFastHLine(2, 126, g.width() - 4, c.accent);
+  g.setTextDatum(top_left);
+  g.drawString("RPM", 4, TABLE_Y, 1);
+  g.setTextDatum(top_right);
+  g.drawString("Time", g.width() - 4, TABLE_Y, 1);
+  g.drawFastHLine(4, TABLE_Y + 11, g.width() - 8, c.faint);
   unsigned pages = 1;
   if (details && details->count) {
     pages = (details->count + AnalysisDetails::ROWS - 1) / AnalysisDetails::ROWS;
-    unsigned first = session.tablePage() % pages * AnalysisDetails::ROWS;
+    const unsigned first = session.tablePage() % pages * AnalysisDetails::ROWS;
+    // One scale for every page, so bars compare across pages.
+    float longest = 0;
+    for (unsigned i = 0; i < details->count; ++i)
+      longest = std::max(longest, details->seconds[i]);
     for (unsigned i = first; i < std::min(details->count, first + AnalysisDetails::ROWS); ++i) {
-      unsigned band = details->firstBand - i;
-      char label[24];
-      snprintf(label, sizeof(label), "%uK - %uK", band, band - 1);
-      snprintf(text, sizeof(text), "%.1fs", details->seconds[i]);
-      const int y = 132 + int(i - first) * 15;
+      const unsigned band = details->firstBand - i;
+      const int by = BAND_Y + int(i - first) * BAND_PITCH;
+      char label[16];
+      snprintf(label, sizeof(label), "%u-%uK", band, band - 1);
       g.setTextColor(c.text, c.background);
-      row(label, text, y);
-      g.drawFastHLine(2, y + 10, g.width() - 4, c.accent);
+      g.setTextDatum(top_left);
+      g.drawString(label, 4, by, 1);
+      const int width = longest > 0 ? std::max(1, int(std::lround(details->seconds[i] / longest *
+                                                                   (BAR_RIGHT - BAR_LEFT)))) : 0;
+      g.fillRect(BAR_LEFT, by + 2, width, BAR_HEIGHT, c.accent);
+      snprintf(text, sizeof(text), "%.1f s", details->seconds[i]);
+      g.setTextDatum(top_right);
+      g.drawString(text, g.width() - 4, by, 1);
     }
   } else {
     g.setTextDatum(top_center);
-    g.drawString(fitting   ? "Fitting curve..."
+    g.setTextColor(c.muted, c.background);
+    g.drawString(fitting   ? "Fitting curve"
                  : failed  ? "Fit unavailable"
                  : details ? "No complete bands"
                            : "No winning model",
-                 cx, 145, 1);
+                 cx, BAND_Y + 20, 2);
   }
-  if (details && details->endpointEstimate)
-    ControlsUI::footer(g, pages > 1 ? "A Back B More  Est." : "A Back  Estimated");
-  else
-    ControlsUI::footer(g, pages > 1 ? "A Back  B More" : "A Back");
+  ControlsUI::footer(g, pages > 1 ? "A Back  B More" : "A Back");
 }
 }

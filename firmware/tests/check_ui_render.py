@@ -50,6 +50,7 @@ LIGHT_FIXTURE = ROOT / 'firmware/tests/fixtures/ui_render_light.txt'
 # Paper from fixtures/theme_vectors.json: white background, every role readable.
 LIGHT = ['--custom', 'ffff0000738e001f00009a000400c000', 'Paper']
 MIC_FIXTURE = ROOT / 'firmware/tests/fixtures/ui_render_mic.txt'
+ANALYSIS_FIXTURE = ROOT / 'firmware/tests/fixtures/ui_render_analysis.txt'
 MIN_READABLE_HEADER = 0.90
 DEVICE_FRAMES = ROOT / 'firmware/tests/fixtures/effect_device_frames.txt'
 # How far the model may sit from the device. Below it, where it would hide a
@@ -241,6 +242,8 @@ def main():
                                          text=True).stdout for theme in ([], CUSTOM, LIGHT))
         mic = ''.join(subprocess.run([str(build / 'ui_render'), '--mic', *theme], check=True, capture_output=True,
                                      text=True).stdout for theme in ([], CUSTOM, LIGHT))
+        analysis = ''.join(subprocess.run([str(build / 'ui_render'), '--analysis', *theme], check=True, capture_output=True,
+                                          text=True).stdout for theme in ([], CUSTOM, LIGHT))
         costs = cost_rows(build, DEVICE_FRAMES)
         loaded = subprocess.run([str(build / 'ui_render'), '--fx', *map(str, sorted(IDIOM.glob('*.fx')))], check=True,
                                 capture_output=True, text=True).stdout
@@ -276,7 +279,8 @@ def main():
     if illegible:
         print(f'FAIL: {len(illegible)} celebration frames change UI ink or hide the header: ' + ', '.join(illegible[:8]))
         failed += 1
-    for fixture, rendered in ((FIXTURE, frames), (CELEBRATIONS, effects), (LIGHT_FIXTURE, light), (MIC_FIXTURE, mic)):
+    for fixture, rendered in ((FIXTURE, frames), (CELEBRATIONS, effects), (LIGHT_FIXTURE, light), (MIC_FIXTURE, mic),
+                             (ANALYSIS_FIXTURE, analysis)):
         if update:
             fixture.write_text(rendered)
             print(f'Wrote {len(rendered.splitlines())} frame hashes to {fixture.relative_to(ROOT)}')
@@ -293,7 +297,7 @@ def main():
         return int(bool(failed))
     print(f'PASS: {len(frames.splitlines())} screen frames (every screen x 10 built-in themes x both flips, and a custom theme), '
           f'{len(effects.splitlines())} celebration frames, {len(light.splitlines())} light-theme frames and '
-          f'{len(mic.splitlines())} Mic RPM frames match the pinned renders; '
+          f'{len(mic.splitlines())} Mic RPM frames and {len(analysis.splitlines())} Analysis frames match the pinned renders; '
           f'{len(legibility.splitlines())} celebration frames (default, dark and light theme) keep the UI legible, and '
           f'{len(settled.splitlines())} frames from each effect\'s end through the next second equal the recap without it; '
           f'the cost model is at most {MEDIAN_SLACK_US / 1000:g} ms (median frame) and {PEAK_UNDER_US / 1000:g} ms (slowest frame) '

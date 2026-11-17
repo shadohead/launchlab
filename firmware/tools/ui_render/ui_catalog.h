@@ -16,6 +16,8 @@
 #include "power_status.h"
 #include "rpm_estimator.h"
 #include "mic_view_ui.h"
+#include "analysis_ui.h"
+#include "analysis_result_ui.h"
 
 namespace UiCatalog {
 constexpr int WIDTH=135,HEIGHT=240;
@@ -171,6 +173,89 @@ inline void micScreen(lgfx::LGFX_Sprite &g,unsigned index,const Look &look) {
   else if(is("mic-fast")){t.begin(0,12900);for(unsigned i=9;i<60;++i)mark(i,unsigned(12400-(i-9)*40),MicRpm::Reason::Tracking,false);}
   else if(is("mic-no-peak")){t.begin(0);for(unsigned i=9;i<60;++i)mark(i,unsigned(6100-(i-9)*20),MicRpm::Reason::Tracking,false);}
   MicView::draw(g,&t,mic,c);
+}
+
+// The Analysis page's screens, composed as LaunchLabMini.ino's draw() composes
+// them: pinned by the render check, and not in the theme preview.
+inline constexpr Screen ANALYSIS_SCREENS[]={
+  {"analysis-ready","Analysis, ready"},{"analysis-warming","Analysis, mic warming up"},
+  {"analysis-early","Analysis, 6 s in"},{"analysis-early-forecast","Analysis, early mic forecast"},
+  {"analysis-forecast","Analysis, Fixed Riccati forecast"},{"analysis-mic-failed","Analysis, mic unavailable"},
+  {"analysis-fitting","Analysis, fitting after stop"},{"analysis-fitted","Analysis, fitted"},
+  {"analysis-timeout","Analysis, time limit"},{"analysis-save-pending","Analysis, save pending"},
+  {"analysis-details","Analysis details"},{"analysis-details-more","Analysis details, second page"},
+  {"analysis-details-fitting","Analysis details, fitting"},
+};
+constexpr unsigned ANALYSIS_COUNT=sizeof(ANALYSIS_SCREENS)/sizeof(ANALYSIS_SCREENS[0]);
+namespace detail {
+// A 7,300 RPM launch that topples near 600 RPM at 96 s: the shared drag shape.
+inline float demoSpin(float t){return t>=96?0.f:600.f+6700.f*std::pow(1.f-t/96.f,1.6f);}
+}
+inline void analysisScreen(lgfx::LGFX_Sprite &g,unsigned index,const Look &look) {
+  using namespace MicTrace;
+  const auto &c=look.colors;
+  ControlsUI::colors=c;
+  const char *id=ANALYSIS_SCREENS[index].id;
+  auto is=[&](const char *name){return !std::strcmp(id,name);};
+  g.fillScreen(c.background);g.setTextDatum(top_center);g.setTextColor(c.text,c.background);
+  constexpr uint32_t LAUNCH=7;constexpr float RPM=7300;constexpr uint64_t START=1000000;
+  AnalysisMode::Session session;
+  static StoredTrace t;t.clear();
+  static Decay::Session input;input=Decay::Session{};
+  Decay::Results fit;Decay::Curve curve;
+  auto spinTo=[&](float seconds,bool trace){
+    if(trace){t.begin(LAUNCH,RPM);
+      for(unsigned i=0;seconds>0 && Trace::seconds(i)<=std::min(seconds,float(MAX_READINGS-1)*HOP_S);++i){
+        Step s;s.launch=LAUNCH;s.index=uint16_t(i);
+        const float at=Trace::seconds(i);
+        // Silent for the first 0.8 s, then a reading most hops, with the odd miss.
+        const bool heard=at>=.8f && at<95.f && (i%9)!=4;
+        s.reason=heard?MicRpm::Reason::Tracking:MicRpm::Reason::WeakHarmonics;
+        if(heard)s.rpm=uint16_t(std::lround(detail::demoSpin(at)+(int((i*37)%11)-5)*18));
+        t.add(s);
+      }}
+  };
+  auto fitTo=[&](float lastHeard,float end,bool samples){
+    fit.launcherRpm=RPM;fit.launcherTime=0;fit.initialRpm=detail::demoSpin(.8f);fit.acousticStart=.8f;fit.lastTime=lastHeard;
+    fit.fixedRiccati=true;fit.best=int(Decay::Model::Riccati);fit.sampleCount=400;
+    curve.end=end;for(unsigned i=0;i<Decay::CURVE_POINTS;++i)curve.rpm[i]=detail::demoSpin(curve.seconds(i)*96.f/end);
+    if(samples){
+      input.launcherRpm=RPM;
+      for(float at=.8f;at<=lastHeard && input.count<Decay::MAX_SAMPLES;at+=.1f){
+        const unsigned i=input.count;
+        input.samples[input.count++]={uint32_t(std::lround(at*1000)),detail::demoSpin(at)+float(int((i*37)%11)-5)*22.f,false,(i%23)==7};
+      }
+    }
+  };
+  const MicView::Mic mic=is("analysis-warming")?MicView::Mic::Starting:is("analysis-mic-failed")?MicView::Mic::Failed:MicView::Mic::On;
+  const char *state="READY";bool ready=true,fitting=false,pending=false;float published=NAN;
+  const Decay::Results *fitIn=nullptr;const Decay::Session *inputIn=nullptr;const Decay::Curve *curveIn=nullptr;
+  uint64_t now=START;
+  if(is("analysis-ready")){}
+  else if(is("analysis-warming")){session.begin(LAUNCH,true,RPM,START);now=START+1200000;t.begin(LAUNCH,RPM);}
+  else if(is("analysis-early")){session.begin(LAUNCH,true,RPM,START);now=START+6400000;spinTo(6.3f,true);}
+  else if(is("analysis-early-forecast")){session.begin(LAUNCH,true,RPM,START);now=START+12300000;spinTo(12.2f,true);}
+  else if(is("analysis-forecast")){
+    session.begin(LAUNCH,true,RPM,START);now=START+42500000;spinTo(42.4f,true);
+    fitTo(42.4f,97.f,false);fitIn=&fit;curveIn=&curve;published=97.f;
+  }
+  else if(is("analysis-mic-failed")){session.begin(LAUNCH,true,RPM,START);now=START+18000000;}
+  else if(is("analysis-fitting")){session.begin(LAUNCH,true,RPM,START);session.stop(START+95400000);now=START+96000000;spinTo(95.f,true);fitting=true;}
+  else if(is("analysis-fitted") || is("analysis-details") || is("analysis-details-more") || is("analysis-details-fitting")){
+    session.begin(LAUNCH,true,RPM,START);session.stop(START+95400000);now=START+97000000;spinTo(95.f,true);
+    fitTo(94.f,95.4f,true);fitIn=&fit;inputIn=&input;curveIn=&curve;
+  }
+  else if(is("analysis-timeout")){session.begin(LAUNCH,true,RPM,START);session.stop(START+AnalysisMode::Session::LIMIT_US+1000,false);now=START+AnalysisMode::Session::LIMIT_US+2000000;spinTo(120.f,true);}
+  else if(is("analysis-save-pending")){session.begin(LAUNCH,true,RPM,START);session.stop(START+95400000);now=START+95500000;spinTo(95.f,true);pending=true;}
+  if(is("analysis-details") || is("analysis-details-more") || is("analysis-details-fitting")) {
+    session.nextResult();if(is("analysis-details-more"))session.nextResult();
+    const auto summary=AnalysisDetails::summarize(curve,RPM,95.4f);
+    AnalysisResultUI::draw(g,session,is("analysis-details-fitting")?nullptr:&summary,is("analysis-details-fitting"),false,c);
+    return;
+  }
+  static const LaunchMotion::Trace motion{};
+  AnalysisUI::draw(g,session,now,&t,mic,motion,false,false,c,MotionUI::demoCurve(RPM),state,ready,nullptr,
+                   fitIn,inputIn,curveIn,fitting,published,pending);
 }
 
 // Draws screen `index` into a 135x240 16-bit canvas.

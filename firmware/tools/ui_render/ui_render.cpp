@@ -39,6 +39,8 @@
 //
 // --mic renders the Mic RPM page's screens.
 //
+// --analysis renders the Analysis page's screens.
+//
 // tests/check_ui_render.py compares the hashes with fixtures/ui_render.txt,
 // so any change to how a built-in theme draws is caught.
 #include <M5GFX.h>
@@ -54,7 +56,7 @@
 static uint64_t fnv64(const uint8_t *p,size_t n){uint64_t h=0xcbf29ce484222325ull;while(n--){h^=*p++;h*=1099511628211ull;}return h;}
 
 int main(int argc,char **argv) {
-  std::string out,costs;Palette::Custom custom;bool useCustom=false,celebrations=false,legibility=false,settled=false,mic=false;unsigned benchStep=0;
+  std::string out,costs;Palette::Custom custom;bool useCustom=false,celebrations=false,legibility=false,settled=false,mic=false,analysis=false;unsigned benchStep=0;
   std::vector<std::string> effects,sounds;
   for(int i=1;i<argc;++i) {
     const std::string arg=argv[i];
@@ -65,6 +67,7 @@ int main(int argc,char **argv) {
       std::strncpy(custom.name,argv[++i],Palette::Custom::MAX_NAME);
     } else if(arg=="--celebrations")celebrations=true;
     else if(arg=="--mic")mic=true;
+    else if(arg=="--analysis")analysis=true;
     else if(arg=="--legibility")legibility=true;
     else if(arg=="--settled")settled=true;
     else if(arg=="--costs" && i+1<argc)costs=argv[++i];
@@ -202,6 +205,16 @@ int main(int argc,char **argv) {
     for(unsigned s=0;s<UiCatalog::MIC_COUNT;++s) {
       UiCatalog::micScreen(canvas,s,look);
       if(!write(std::string(useCustom?"custom-":"theme0-")+UiCatalog::MIC_SCREENS[s].id))return 1;
+    }
+    return 0;
+  }
+  if(analysis) {
+    UiCatalog::Look look;
+    if(useCustom){look.colors=custom.colors();look.theme=Themes::slotTheme(0);look.name=custom.name;}
+    else {look.colors=Themes::builtIn(Appearance::Theme::Classic);look.theme=Appearance::Theme::Classic;}
+    for(unsigned s=0;s<UiCatalog::ANALYSIS_COUNT;++s) {
+      UiCatalog::analysisScreen(canvas,s,look);
+      if(!write(std::string(useCustom?"custom-":"theme0-")+UiCatalog::ANALYSIS_SCREENS[s].id))return 1;
     }
     return 0;
   }
