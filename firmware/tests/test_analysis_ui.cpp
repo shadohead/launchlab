@@ -260,6 +260,24 @@ int main(){
    assert(computeRow(start).empty() && computeRow(settled).empty() && computeRow(dots).size()==AnalysisUI::COMPUTE_DOTS);
    assert(word(dots,ink,mixed).empty());
    checkOverlap(start);checkOverlap(settled);}
+  // While the mic feeds the model, trails of 2x2 dots fall between the now line
+  // and the finish line, on the markers' 4 px rows; they move every 100 ms.
+  {auto rainDots=[](const lgfx::LGFXBase &f){std::vector<std::array<int,3>> r;
+     for(const auto &d:f.dots)if(d[1]>AnalysisUI::GRAPH_TOP && d[1]<AnalysisUI::GRAPH_BOTTOM)r.push_back(d);return r;};
+   lgfx::LGFXBase a,b,off;
+   for(auto [frame,at,m]:{std::tuple{&a,uint64_t(32000000),MicView::Mic::On},std::tuple{&b,uint64_t(32000000+AnalysisUI::RAIN_STEP_US),MicView::Mic::On},
+                          std::tuple{&off,uint64_t(32000000),MicView::Mic::Failed}})
+     AnalysisUI::draw(*frame,markedSession,at,&marked,m,motion,false,false,colors,curve,
+                      "READY",true,nullptr,nullptr,nullptr,nullptr,false,88.f);
+   const float span=AnalysisUI::graphSpan(31.f,true,88.f);
+   const int nowX=AnalysisUI::markerX(26,130,31.f,span),finishX=AnalysisUI::markerX(26,130,88.f,span);
+   const auto drops=rainDots(a);
+   assert(!drops.empty() && rainDots(off).empty() && rainDots(b)!=drops);
+   for(const auto &d:drops){
+     assert(d[0]>nowX+1 && d[0]+2<=finishX && (d[1]-AnalysisUI::GRAPH_TOP-1)%4==0 && (d[0]-26)%AnalysisUI::RAIN_PITCH==0);
+     assert(d[2]==colors.accent || d[2]==colors.muted || d[2]==colors.faint);
+   }
+   checkOverlap(a);}
   // "~" marks the Finish value as the current estimate. With the sprite cache a
   // new value decodes into place: only its changed digits cycle, muted, and
   // settle left to right within VALUE_DECODE_US.

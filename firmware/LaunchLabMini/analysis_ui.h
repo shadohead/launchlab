@@ -8,18 +8,58 @@ inline float graphSpan(float elapsed, bool recording, float predictedFinish = NA
     return std::max(MicTrace::MIN_SPAN_S, predictedFinish + 10.f);
   return std::max(MicTrace::MIN_SPAN_S, elapsed + (recording ? 10.f : 0.f));
 }
+// A cheap deterministic scramble: the same frame always draws the same glyphs.
+inline uint32_t scramble(uint64_t step, unsigned i) {
+  uint32_t x = uint32_t(step) * 2654435761u ^ (i + 1) * 40503u;
+  x ^= x >> 13;
+  x *= 0x5bd1e995u;
+  return x ^ (x >> 15);
+}
+inline int markerX(int left, int right, float seconds, float span) {
+  return std::min(right - 1, left + int(std::lround(seconds / span * (right - left))));
+}
 inline void timeMarker(lgfx::LGFXBase &g, uint16_t color, int left, int right,
                        int top, int bottom, float seconds, float span) {
   if (!(span > 0) || !std::isfinite(span) || !std::isfinite(seconds) || seconds < 0 || seconds > span)
     return;
-  const int x = std::min(right - 1, left + int(std::lround(seconds / span * (right - left))));
+  const int x = markerX(left, right, seconds, span);
   for (int y = top + 1; y < bottom; y += 4)
     for (int dy = 0; dy < 2 && y + dy < bottom; ++dy)
       for (int dx = 0; dx < 2; ++dx)
         g.drawPixel(x + dx, y + dy, color);
 }
+// While the model works, short trails of 2x2 dots fall between the now line
+// and the finish line (to the graph's edge before there is a finish), on the
+// markers' own 4 px rows. Mostly gray; one column in three leads in accent.
+constexpr int RAIN_PITCH = 6, RAIN_TRAIL = 3;
+constexpr unsigned RAIN_STEP_US = 100000;
+inline void rain(lgfx::LGFXBase &g, const Palette::Colors &c, int left, int right, int top, int bottom,
+                 float elapsed, float span, float predictedFinish, uint64_t now) {
+  if (!(span > 0) || !std::isfinite(span) || !std::isfinite(elapsed))
+    return;
+  const int from = markerX(left, right, elapsed, span) + 4;
+  const int to = predictedFinish > 0 ? markerX(left, right, predictedFinish, span) - 2 : right;
+  const int rows = (bottom - top - 1) / 4;
+  const uint64_t step = now / RAIN_STEP_US;
+  // Columns sit on a fixed screen grid, so they do not slide as the now line moves.
+  for (int x = left + RAIN_PITCH * ((from - left + RAIN_PITCH - 1) / RAIN_PITCH); x + 2 <= to; x += RAIN_PITCH) {
+    const uint32_t h = scramble(uint64_t(x), 7);
+    const unsigned period = unsigned(rows + RAIN_TRAIL) + h % unsigned(rows / 2 + 1);
+    const int head = int((step * (1 + h % 2) + h) % period);
+    for (int k = 0; k < RAIN_TRAIL; ++k) {
+      const int r = head - k;
+      if (r < 0 || r >= rows)
+        continue;
+      const uint16_t ink = k == 0 ? (h % 3 == 0 ? c.accent : c.muted) : k == 1 ? c.muted : c.faint;
+      g.fillRect(x, top + 1 + r * 4, 2, 2, ink);
+    }
+  }
+}
 inline void timeMarkers(lgfx::LGFXBase &g, const Palette::Colors &c, int left, int right,
-                        int top, int bottom, float elapsed, float span, float predictedFinish) {
+                        int top, int bottom, float elapsed, float span, float predictedFinish,
+                        bool raining = false, uint64_t now = 0) {
+  if (raining)
+    rain(g, c, left, right, top, bottom, elapsed, span, predictedFinish, now);
   if (predictedFinish > 0)
     timeMarker(g, c.warning, left, right, top, bottom, predictedFinish, span);
   // Full-contrast 2x2 dots remain distinct from the faint horizontal grid.
@@ -64,13 +104,6 @@ constexpr unsigned MODEL_STEP_US = 250000, WORD_CYCLE_US = 10000000, WORD_SHOW_U
 constexpr int FORECAST_PITCH = 5, COMPUTE_DOTS = 25, COMPUTE_PITCH = 4;
 enum class Work : uint8_t { Listening, Forecasting, Fitting };
 inline int computeLeft(const lgfx::LGFXBase &g) { return (g.width() - (COMPUTE_DOTS - 1) * COMPUTE_PITCH - 2) / 2; }
-// A cheap deterministic scramble: the same frame always draws the same glyphs.
-inline uint32_t scramble(uint64_t step, unsigned i) {
-  uint32_t x = uint32_t(step) * 2654435761u ^ (i + 1) * 40503u;
-  x ^= x >> 13;
-  x *= 0x5bd1e995u;
-  return x ^ (x >> 15);
-}
 inline const char *workWord(Work work, uint64_t cycle) {
   static const char *const listening[] = {"LISTENING", "ANALYZING"};
   static const char *const forecasting[] = {"ANALYZING", "LISTENING", "CALCULATING"};
@@ -191,7 +224,7 @@ inline void progress(lgfx::LGFXBase &g, const Palette::Colors &c, float elapsed,
 inline void fittedPlot(lgfx::LGFXBase &g, const Palette::Colors &c, const Decay::Results &fit,
                        const Decay::Session *input, const Decay::Curve *winner, float elapsed, int top = 154,
                        int bottom = 216, bool livePreview = false, const MicTrace::Trace *trace = nullptr,
-                       float predictedFinish = NAN) {
+                       float predictedFinish = NAN, bool raining = false, uint64_t now = 0) {
   const int left = 26, right = g.width() - 5;
   // An allocation-free endpoint estimate has no copied input. Its raw trace
   // is still available for context, with every unused reading shown in gray.
@@ -212,7 +245,7 @@ inline void fittedPlot(lgfx::LGFXBase &g, const Palette::Colors &c, const Decay:
   g.setTextColor(c.muted, c.background);
   MicView::axes(g, c, left, right, bottom, span, peak, y);
   if (livePreview)
-    timeMarkers(g, c, left, right, top, bottom, elapsed, span, predictedFinish);
+    timeMarkers(g, c, left, right, top, bottom, elapsed, span, predictedFinish, raining, now);
   if (winner)
     for (unsigned i = 1; i < Decay::CURVE_POINTS; ++i) {
       const float start = winner->seconds(i - 1), end = winner->seconds(i);
@@ -408,14 +441,17 @@ inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session, uint64
     centered(g, c, FINISH_Y, mic == MicView::Mic::Failed ? "Mic unavailable" : "Not enough memory", c.warning);
   }
   const float elapsed = float(elapsedUs) / 1000000.f;
+  // The model is at work while the microphone feeds a running analysis.
+  const bool raining = session.running() && measured && !capturePending;
   g.setTextColor(c.muted, c.background);
   if (fit && (input || winner) && (stopped || winner))
-    fittedPlot(g, c, *fit, input, winner, elapsed, GRAPH_TOP, GRAPH_BOTTOM, session.running(), &t, predictedFinish);
+    fittedPlot(g, c, *fit, input, winner, elapsed, GRAPH_TOP, GRAPH_BOTTOM, session.running(), &t, predictedFinish,
+               raining, now);
   else {
     const float span = std::max(t.elapsed(), graphSpan(elapsed, session.running(), predictedFinish));
     MicView::plot(g, t, c, 26, g.width() - 5, GRAPH_TOP, GRAPH_BOTTOM, span, true);
     if (session.running())
-      timeMarkers(g, c, 26, g.width() - 5, GRAPH_TOP, GRAPH_BOTTOM, elapsed, span, predictedFinish);
+      timeMarkers(g, c, 26, g.width() - 5, GRAPH_TOP, GRAPH_BOTTOM, elapsed, span, predictedFinish, raining, now);
   }
   ControlsUI::footer(g, capturePending      ? "B Retry"
                         : session.running() ? "A Replay  B Stop"
