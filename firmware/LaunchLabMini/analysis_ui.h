@@ -51,6 +51,20 @@ struct Cache {
 // the main screen's Font6; everything else is a Font2 row or a Font1 caption.
 constexpr int CLOCK_Y = 30, LABEL_Y = 82, LAUNCH_Y = 104, FINISH_Y = 122, CAPTION_Y = 140,
               DYNAMIC_Y = 120, GRAPH_TOP = 156, GRAPH_BOTTOM = 214;
+// The live model's two cues share one 250 ms step: the Finish leader's lit
+// dot and the forecast curve's drifting dots.
+constexpr unsigned MODEL_STEP_US = 250000;
+constexpr int FORECAST_PITCH = 5, LEADER_PITCH = 5;
+// A dotted leader from the label to the value. While the microphone feeds the
+// forecast one dot is lit and walks toward the value; otherwise it rests.
+inline void leader(lgfx::LGFXBase &g, const Palette::Colors &c, int y, const char *label, const char *value,
+                   bool live, unsigned phase, uint16_t lit) {
+  const int from = 4 + g.textWidth(label, &fonts::Font2) + 6;
+  const int to = g.width() - 4 - g.textWidth(value, &fonts::Font2) - 6;
+  const int dots = to > from ? (to - from) / LEADER_PITCH + 1 : 0;
+  for (int i = 0; i < dots; ++i)
+    g.fillRect(from + i * LEADER_PITCH, y + 8, 2, 2, live && int(phase % unsigned(dots)) == i ? lit : c.faint);
+}
 // m:ss, which Font6 draws: Analysis stops itself at five minutes.
 inline void clock(char *out, unsigned size, uint64_t seconds) {
   std::snprintf(out, size, "%u:%02u", unsigned(seconds / 60), unsigned(seconds % 60));
@@ -75,7 +89,7 @@ inline void centered(lgfx::LGFXBase &g, const Palette::Colors &c, int y, const c
 inline void fittedPlot(lgfx::LGFXBase &g, const Palette::Colors &c, const Decay::Results &fit,
                        const Decay::Session *input, const Decay::Curve *winner, float elapsed, int top = 154,
                        int bottom = 216, bool livePreview = false, const MicTrace::Trace *trace = nullptr,
-                       float predictedFinish = NAN) {
+                       float predictedFinish = NAN, unsigned phase = 0) {
   const int left = 26, right = g.width() - 5;
   // An allocation-free endpoint estimate has no copied input. Its raw trace
   // is still available for context, with every unused reading shown in gray.
@@ -109,18 +123,26 @@ inline void fittedPlot(lgfx::LGFXBase &g, const Palette::Colors &c, const Decay:
       // Split even when the first/last acoustic timestamp falls between vertices.
       float from = start;
       int px = x(start), py = y(a);
-      auto drawTo = [&](float until, uint16_t color) {
+      auto drawTo = [&](float until, uint16_t color, bool forecast = false) {
         if (until <= from)
           return;
         const int qx = x(until), qy = y(a + (b - a) * ((until - start) / (end - start)));
-        g.drawLine(px, py, qx, qy, color);
+        if (forecast) {
+          // The prediction ahead of the last reading: 2x2 dots drifting
+          // toward the finish, one column per frame step.
+          for (int dx = px; dx < qx; ++dx)
+            if (unsigned(dx - left + FORECAST_PITCH * 64 - phase % FORECAST_PITCH) % FORECAST_PITCH == 0)
+              g.fillRect(dx, py + (qy - py) * (dx - px) / std::max(1, qx - px), 2, 2, c.accent);
+        } else {
+          g.drawLine(px, py, qx, qy, color);
+        }
         px = qx;
         py = qy;
         from = until;
       };
       drawTo(std::min(visibleEnd, fit.acousticStart), Palette::DARKGREY);
       drawTo(std::min(visibleEnd, fit.lastTime), c.accent);
-      drawTo(visibleEnd, Palette::DARKGREY);
+      drawTo(visibleEnd, Palette::DARKGREY, livePreview);
     }
   for (unsigned i = 0; i < count; ++i) {
     if (rpm(i) <= 0) continue;
@@ -232,6 +254,7 @@ inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session, uint64
                          : mic == MicView::Mic::Starting ? "Mic warming up"
                                                          : nullptr;
     const bool measured = mic == MicView::Mic::On && t.started();
+    const unsigned phase = unsigned(now / MODEL_STEP_US);
     const auto active = EarlySpin::select(fit && fit->fixedRiccati && winner ? winner->end : publishedFinish,
                                           t.earlyReadings(), elapsedUs / 1000, measured);
     predictedFinish = active.seconds;
@@ -239,6 +262,7 @@ inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session, uint64
       // Orange, as the dotted finish line on the graph.
       clock(text, sizeof(text), uint64_t(std::lround(predictedFinish)));
       row(g, c, FINISH_Y, "Finish", text, c.warning);
+      leader(g, c, FINISH_Y, "Finish", text, measured, phase, c.warning);
       centered(g, c, CAPTION_Y,
                status                                              ? status
                : active.source == EarlySpin::Source::FixedRiccati ? "Fixed Riccati"
@@ -249,6 +273,7 @@ inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session, uint64
       centered(g, c, FINISH_Y, status, mic == MicView::Mic::Starting ? c.muted : c.warning);
     } else {
       row(g, c, FINISH_Y, "Finish", "-:--", c.muted);
+      leader(g, c, FINISH_Y, "Finish", "-:--", measured, phase, c.text);
       centered(g, c, CAPTION_Y, "Estimate from 10 s", c.muted, 1);
     }
   } else if (mic == MicView::Mic::Failed || mic == MicView::Mic::NoMemory) {
@@ -257,7 +282,8 @@ inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session, uint64
   const float elapsed = float(elapsedUs) / 1000000.f;
   g.setTextColor(c.muted, c.background);
   if (fit && (input || winner) && (stopped || winner))
-    fittedPlot(g, c, *fit, input, winner, elapsed, GRAPH_TOP, GRAPH_BOTTOM, session.running(), &t, predictedFinish);
+    fittedPlot(g, c, *fit, input, winner, elapsed, GRAPH_TOP, GRAPH_BOTTOM, session.running(), &t, predictedFinish,
+               unsigned(now / MODEL_STEP_US));
   else {
     const float span = std::max(t.elapsed(), graphSpan(elapsed, session.running(), predictedFinish));
     MicView::plot(g, t, c, 26, g.width() - 5, GRAPH_TOP, GRAPH_BOTTOM, span, true);

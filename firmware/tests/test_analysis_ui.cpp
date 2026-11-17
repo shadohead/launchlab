@@ -40,8 +40,10 @@ struct LGFXBase {
   int width(){return 135;}
   int height(){return 240;}
   void setTextDatum(int d){datum=d;}void setTextColor(uint16_t color,uint16_t){ink=color;}
-  void fillRect(int x,int y,int w,int h,uint16_t){
+  std::vector<std::array<int,3>> dots; // 2x2 squares: leader and forecast dots
+  void fillRect(int x,int y,int w,int h,uint16_t c){
     assert(x>=0 && y>=0 && x+w<=135 && y+h<=240);
+    if(w==2 && h==2)dots.push_back({x,y,c});
     // The footer clears its background after the axes have been drawn.
     if(y==229)for(const auto &s:spans)assert(s[2]+(s[3]==6?48:s[3]==4?26:s[3]==2?16:8)<=y);
   }
@@ -210,10 +212,16 @@ int main(){
   lgfx::LGFXBase fallback;
   AnalysisUI::draw(fallback,markedSession,31000000,&marked,MicView::Mic::On,motion,false,false,colors,curve);
   assert(fallback.drew("Early mic estimate") && fallback.drew("0:38") && fallback.drew("48s"));
+  // While the mic feeds the forecast, one Finish leader dot is lit and walks
+  // toward the value; without the mic the leader rests.
+  auto leaderLit=[&](const lgfx::LGFXBase &f){int lit=-1,count=0;for(const auto &d:f.dots)if(d[1]==AnalysisUI::FINISH_Y+8){if(d[2]!=colors.faint){assert(lit<0 && d[2]==colors.warning);lit=d[0];}++count;}assert(count>=3);return lit;};
+  const int litAt=leaderLit(fallback);assert(litAt>=0);
+  {lgfx::LGFXBase next;AnalysisUI::draw(next,markedSession,31000000+AnalysisUI::MODEL_STEP_US,&marked,MicView::Mic::On,motion,false,false,colors,curve);
+   const int nextLit=leaderLit(next);assert(nextLit==litAt+AnalysisUI::LEADER_PITCH || nextLit<litAt);}
   lgfx::LGFXBase before,atTen,pending;
   AnalysisUI::draw(before,markedSession,10999000,nullptr,MicView::Mic::Failed,motion,false,false,colors,curve);
   AnalysisUI::draw(atTen,markedSession,11000000,nullptr,MicView::Mic::Failed,motion,false,false,colors,curve);
-  assert(!before.drew("Finish") && atTen.drew("1:34") && atTen.drew("Mic unavailable"));
+  assert(!before.drew("Finish") && atTen.drew("1:34") && atTen.drew("Mic unavailable") && leaderLit(atTen)<0);
   AnalysisUI::draw(pending,markedSession,32000000,&marked,MicView::Mic::On,motion,false,false,colors,curve,
                    "READY",true,nullptr,nullptr,nullptr,nullptr,true,88.f);
   assert(pending.drew("Fixed Riccati") && pending.drew("1:28") && pending.drew("98s"));
@@ -262,7 +270,16 @@ int main(){
                    "READY",true,nullptr,&ranked,samples,&winner,false);
   assert(prediction.drew("1:23") && prediction.drew("A Replay  B Stop"));
   assert(prediction.drew("93s") && !prediction.drew("60s"));
-  assert(!prediction.lines.empty() && prediction.lines.back()[2]==119);
+  // Measured up to the last reading (45 s) as a line; the forecast past it as
+  // accent dots every 5 px that step one column right every 250 ms.
+  assert(!prediction.lines.empty() && prediction.lines.back()[2]<100);
+  auto forecastDots=[](const lgfx::LGFXBase &f){std::vector<int> xs;for(const auto &d:f.dots)if(d[1]>AnalysisUI::GRAPH_TOP){assert(d[2]==Palette::builtIn(0x07ff,true).accent);xs.push_back(d[0]);}return xs;};
+  const auto ahead=forecastDots(prediction);
+  assert(ahead.size()>=5 && ahead.front()>=prediction.lines.back()[2]);
+  for(unsigned i=1;i<ahead.size();++i)assert(ahead[i]-ahead[i-1]==AnalysisUI::FORECAST_PITCH);
+  {lgfx::LGFXBase next;AnalysisUI::draw(next,live,51000000+AnalysisUI::MODEL_STEP_US,nullptr,MicView::Mic::On,motion,false,false,colors,curve,
+                   "READY",true,nullptr,&ranked,samples,&winner,false);
+   const auto stepped=forecastDots(next);assert(!stepped.empty() && (stepped.front()-ahead.front()+5)%5==1);}
   for(const auto &line:prediction.lines)assert(line[0]>=26 && line[2]<=130);
   checkOverlap(prediction);
   for(const auto *frame:{&markedGraph,&fallback,&atTen,&pending,&prediction})
