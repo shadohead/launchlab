@@ -128,7 +128,7 @@ class SettingsWalk(unittest.TestCase):
         self.assertEqual(scenarios.BATTERY_ICON_ROW, str(SETTINGS.index('BatteryIcon')))
         # The Menu's rows, top to bottom, are the device's (Controls::MenuRow and ControlsUI::MENU).
         rows = names(r'enum MenuRow:uint8_t \{(.*?)\};')
-        self.assertEqual(rows, [r.upper().replace('STRING WEAR CHECK', 'WEAR').replace('MIC RPM', 'MIC').replace(' ', '_') + '_ROW' for r in scenarios.MENU_ROWS])
+        self.assertEqual(rows, [r.upper().replace('STRING WEAR CHECK', 'WEAR').replace('MIC RPM', 'MIC').replace('DEVICE', 'BATTERY').replace(' ', '_') + '_ROW' for r in scenarios.MENU_ROWS])
         labels = re.search(r'MENU\[\]=\{(.*?)\};', (FIRMWARE / 'LaunchLabMini/controls_ui.h').read_text()).group(1)
         self.assertEqual([l.strip().strip('"') for l in labels.split(',')], scenarios.MENU_ROWS)
         for constant, page in (('ABOUT_PAGE', 'About'), ('SETTINGS_PAGE', 'Settings'), ('EDIT_PAGE', 'Edit'), ('BATTERY_PAGE', 'Battery'), ('MENU_PAGE', 'Menu')):
