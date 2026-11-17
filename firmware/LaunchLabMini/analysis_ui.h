@@ -27,8 +27,9 @@ inline void timeMarkers(lgfx::LGFXBase &g, const Palette::Colors &c, int left, i
 }
 // Reuse the existing screen sprite: no additional framebuffer or heap allocation.
 // This cache is never used when drawing directly to the display or during replay.
-// It keeps the heading, the hero label and the Launch row; the clock redraws
-// once a second and everything from the Finish row down every frame.
+// It keeps the heading and the Launch row; the clock redraws once a second and
+// everything from the RPM row down every frame. It also remembers the shown
+// finish estimate so a new value can decode into place.
 struct Cache {
   bool valid = false, ready = false, running = false;
   uint32_t launch = 0;
@@ -39,7 +40,9 @@ struct Cache {
   AnalysisMode::StopReason reason = AnalysisMode::StopReason::Timeout;
   Palette::Colors colors;
   char state[32] = {};
-  void invalidate() { valid = false; }
+  char finish[8] = {}, previous[8] = {};
+  uint64_t finishSince = 0;
+  void invalidate() { valid = false; finish[0] = previous[0] = 0; }
   bool matches(const AnalysisMode::Session &s, const Palette::Colors &c, int w, const char *name,
                bool sensorReady) const {
     return valid && launch == s.number() && rpm == s.rpm() && colors == c && width == w &&
@@ -48,23 +51,68 @@ struct Cache {
   }
 };
 // Layout rows, top to bottom. The clock is the screen's one large number, in
-// the main screen's Font6; everything else is a Font2 row or a Font1 caption.
-constexpr int CLOCK_Y = 30, LABEL_Y = 82, LAUNCH_Y = 104, FINISH_Y = 122, CAPTION_Y = 140,
-              DYNAMIC_Y = 120, GRAPH_TOP = 156, GRAPH_BOTTOM = 214;
+// the main screen's Font6; a hairline under it runs to the estimated finish;
+// then three Font2 rows and a Font1 caption line above the graph.
+constexpr int CLOCK_Y = 30, PROGRESS_Y = 80, LAUNCH_Y = 86, RPM_Y = 104, FINISH_Y = 122,
+              CAPTION_Y = 141, DYNAMIC_Y = 102, GRAPH_TOP = 156, GRAPH_BOTTOM = 214;
 // While the microphone feeds the forecast, the caption line is one row of
 // 2x2 dots: it grows over the first 10 s as readings gather, then a single lit
-// dot with a short tail glides across while the model refits. It is the
-// screen's only animation, one step every 250 ms on the recording's frames.
-constexpr unsigned MODEL_STEP_US = 250000;
+// dot with a short tail glides across while the model refits. Every ten
+// seconds the row gives way to a word for three seconds, decoded from glyphs.
+constexpr unsigned MODEL_STEP_US = 250000, WORD_CYCLE_US = 10000000, WORD_SHOW_US = 3000000,
+                   DECODE_CHAR_US = 60000, VALUE_DECODE_US = 400000;
 constexpr int FORECAST_PITCH = 5, COMPUTE_DOTS = 25, COMPUTE_PITCH = 4;
+enum class Work : uint8_t { Listening, Forecasting, Fitting };
 inline int computeLeft(const lgfx::LGFXBase &g) { return (g.width() - (COMPUTE_DOTS - 1) * COMPUTE_PITCH - 2) / 2; }
-inline void computing(lgfx::LGFXBase &g, const Palette::Colors &c, uint64_t now, float gathered, bool forecasting) {
+// A cheap deterministic scramble: the same frame always draws the same glyphs.
+inline uint32_t scramble(uint64_t step, unsigned i) {
+  uint32_t x = uint32_t(step) * 2654435761u ^ (i + 1) * 40503u;
+  x ^= x >> 13;
+  x *= 0x5bd1e995u;
+  return x ^ (x >> 15);
+}
+inline const char *workWord(Work work, uint64_t cycle) {
+  static const char *const listening[] = {"LISTENING", "ANALYZING"};
+  static const char *const forecasting[] = {"ANALYZING", "LISTENING", "CALCULATING"};
+  static const char *const fitting[] = {"CALCULATING", "ANALYZING"};
+  switch (work) {
+  case Work::Listening: return listening[cycle % 2];
+  case Work::Forecasting: return forecasting[cycle % 3];
+  default: return fitting[cycle % 2];
+  }
+}
+// The word, if one shows on this frame; `resolved` is how many letters have
+// settled, the rest still cycling glyphs.
+inline const char *cueWord(Work work, uint64_t now, unsigned &resolved) {
+  const uint64_t into = now % WORD_CYCLE_US;
+  if (into < WORD_CYCLE_US - WORD_SHOW_US)
+    return nullptr;
+  resolved = unsigned((into - (WORD_CYCLE_US - WORD_SHOW_US)) / DECODE_CHAR_US);
+  return workWord(work, now / WORD_CYCLE_US);
+}
+inline void computing(lgfx::LGFXBase &g, const Palette::Colors &c, uint64_t now, float gathered, Work work) {
+  unsigned resolved = 0;
+  if (const char *word = cueWord(work, now, resolved)) {
+    static constexpr char GLYPHS[] = "01<>/*+=:#%";
+    const unsigned n = unsigned(std::strlen(word));
+    const int pitch = 7, left = (g.width() - int(n) * pitch + 1) / 2;
+    g.setTextDatum(top_left);
+    char one[2] = {};
+    for (unsigned i = 0; i < n; ++i) {
+      const bool settled = i < resolved;
+      one[0] = settled ? word[i] : GLYPHS[scramble(now / DECODE_CHAR_US, i) % (sizeof(GLYPHS) - 1)];
+      g.setTextColor(settled ? c.muted : c.accent, c.background);
+      g.drawString(one, left + int(i) * pitch, CAPTION_Y, 1);
+    }
+    g.setTextDatum(top_center);
+    return;
+  }
   const int left = computeLeft(g), y = CAPTION_Y + 3;
   const int filled = int(std::clamp(gathered, 0.f, 1.f) * COMPUTE_DOTS);
   const int head = int((now / MODEL_STEP_US) % COMPUTE_DOTS);
   for (int i = 0; i < COMPUTE_DOTS; ++i) {
     uint16_t ink = c.faint;
-    if (forecasting)
+    if (work != Work::Listening)
       ink = i == head ? c.accent : i == head - 1 || (head == 0 && i == COMPUTE_DOTS - 1) ? c.muted : c.faint;
     else if (i < filled)
       ink = c.muted;
@@ -79,15 +127,48 @@ inline void computing(lgfx::LGFXBase &g, const Palette::Colors &c, uint64_t now,
 inline void clock(char *out, unsigned size, uint64_t seconds) {
   std::snprintf(out, size, "%u:%02u", unsigned(seconds / 60), unsigned(seconds % 60));
 }
-// A muted label on the left and its value on the right, as on Device and Details.
-inline void row(lgfx::LGFXBase &g, const Palette::Colors &c, int y, const char *label, const char *value,
-                uint16_t ink) {
+// A colour key, the label muted, and its value on the right. The key matches
+// what the row draws on the graph: white launch, cyan readings, orange finish.
+inline void label(lgfx::LGFXBase &g, const Palette::Colors &c, int y, const char *text, uint16_t key) {
+  g.fillRect(4, y + 6, 3, 3, key);
   g.setTextDatum(top_left);
   g.setTextColor(c.muted, c.background);
-  g.drawString(label, 4, y, 2);
+  g.drawString(text, 12, y, 2);
+}
+inline void row(lgfx::LGFXBase &g, const Palette::Colors &c, int y, const char *name, uint16_t key,
+                const char *value, uint16_t ink) {
+  label(g, c, y, name, key);
   g.setTextDatum(top_right);
   g.setTextColor(ink, c.background);
   g.drawString(value, g.width() - 4, y, 2);
+  g.setTextDatum(top_center);
+}
+// A right-aligned value whose digits after `settled` still cycle, drawn in
+// cells of the true characters' widths so nothing shifts as they settle.
+inline void decodingValue(lgfx::LGFXBase &g, const Palette::Colors &c, int y, const char *value,
+                          const bool *settled, uint16_t ink, uint64_t step) {
+  bool all = true;
+  for (unsigned i = 0; value[i]; ++i)
+    all = all && settled[i];
+  if (all) {
+    g.setTextDatum(top_right);
+    g.setTextColor(ink, c.background);
+    g.drawString(value, g.width() - 4, y, 2);
+    g.setTextDatum(top_center);
+    return;
+  }
+  int x = g.width() - 4 - g.textWidth(value, &fonts::Font2);
+  g.setTextDatum(top_left);
+  char one[2] = {};
+  for (unsigned i = 0; value[i]; ++i) {
+    const bool digit = value[i] >= '0' && value[i] <= '9';
+    const bool fixed = !digit || settled[i];
+    one[0] = fixed ? value[i] : char('0' + scramble(step, i) % 10);
+    g.setTextColor(fixed ? ink : c.muted, c.background);
+    g.drawString(one, x, y, 2);
+    one[0] = value[i];
+    x += g.textWidth(one, &fonts::Font2);
+  }
   g.setTextDatum(top_center);
 }
 inline void centered(lgfx::LGFXBase &g, const Palette::Colors &c, int y, const char *text, uint16_t ink,
@@ -95,6 +176,17 @@ inline void centered(lgfx::LGFXBase &g, const Palette::Colors &c, int y, const c
   g.setTextDatum(top_center);
   g.setTextColor(ink, c.background);
   g.drawString(text, g.width() / 2, y, font);
+}
+// The hairline under the clock: faint end to end, cyan up to now, with an
+// orange cap at the estimated finish.
+inline void progress(lgfx::LGFXBase &g, const Palette::Colors &c, float elapsed, float finish) {
+  const int left = 4, right = g.width() - 4;
+  g.drawFastHLine(left, PROGRESS_Y, right - left, c.faint);
+  if (!(finish > 0) || !std::isfinite(finish))
+    return;
+  const int x = left + int(std::lround(std::clamp(elapsed / finish, 0.f, 1.f) * (right - left - 2)));
+  g.drawFastHLine(left, PROGRESS_Y, x - left, c.accent);
+  g.fillRect(right - 2, PROGRESS_Y - 1, 2, 3, c.warning);
 }
 inline void fittedPlot(lgfx::LGFXBase &g, const Palette::Colors &c, const Decay::Results &fit,
                        const Decay::Session *input, const Decay::Curve *winner, float elapsed, int top = 154,
@@ -192,22 +284,13 @@ inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session, uint64
   }
   g.setTextDatum(top_center);
   if (!reuse) {
-    ControlsUI::heading(g, "Analysis");
-    // What the clock is: before a launch the detector's state, as on Main.
-    if (!launched)
-      centered(g, c, LABEL_Y, detectorState, sensorReady ? c.ready : c.warning);
-    else
-      centered(g, c, LABEL_Y,
-               session.running()                                            ? "Spin time"
-               : session.hasManualStop()                                    ? "Spin time"
-               : session.stopReason() == AnalysisMode::StopReason::Timeout ? "Time limit"
-                                                                            : "Interrupted",
-               c.muted);
+    ControlsUI::heading(g, "Stamina Analysis");
+    // Before a launch the detector's state, as on Main.
     if (launched) {
       snprintf(text, sizeof(text), "%.0f RPM", session.rpm());
-      row(g, c, LAUNCH_Y, "Launch", text, c.text);
+      row(g, c, LAUNCH_Y, "Launch", c.text, text, c.text);
     } else {
-      centered(g, c, LAUNCH_Y, "Launch to start", c.muted);
+      centered(g, c, LAUNCH_Y, detectorState, sensorReady ? c.ready : c.warning);
     }
     if (cache) {
       cache->valid = true;
@@ -239,48 +322,87 @@ inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session, uint64
   }
   static const MicTrace::Trace empty;
   const auto &t = trace && trace->launch() == session.number() && launched ? *trace : empty;
-  // One status row and one caption under the Launch row.
   float predictedFinish = NAN;
+  const bool measured = mic == MicView::Mic::On && t.started();
+  if (session.running()) {
+    const auto active = EarlySpin::select(fit && fit->fixedRiccati && winner ? winner->end : publishedFinish,
+                                          t.earlyReadings(), elapsedUs / 1000, measured);
+    predictedFinish = active.seconds;
+  }
+  // The RPM row: the latest heard reading, cyan as the readings on the graph.
+  if (!launched) {
+    centered(g, c, RPM_Y, "Launch to start", c.muted);
+  } else if (session.running() || t.heard()) {
+    const unsigned latest = t.latestRpm();
+    if (latest)
+      snprintf(text, sizeof(text), "%u RPM", latest);
+    row(g, c, RPM_Y, session.running() ? "Now" : "Last", c.accent, latest ? text : "- RPM",
+        latest && session.running() ? c.accent : c.muted);
+  }
+  if (session.running() && reuse)
+    g.fillRect(0, PROGRESS_Y - 1, g.width(), 3, c.background);
+  if (session.running())
+    progress(g, c, float(elapsedUs) / 1000000.f, predictedFinish);
+  // The Finish row and one caption line under it.
   if (capturePending) {
     centered(g, c, FINISH_Y, "Save pending", c.alert);
     centered(g, c, CAPTION_Y, "Please wait", c.muted, 1);
   } else if (stopped && !session.hasManualStop()) {
-    centered(g, c, FINISH_Y, "No stop recorded", c.muted);
+    centered(g, c, FINISH_Y,
+             session.stopReason() == AnalysisMode::StopReason::Timeout ? "Time limit" : "Interrupted", c.muted);
+    centered(g, c, CAPTION_Y, "No stop recorded", c.muted, 1);
   } else if (stopped && fitting) {
     centered(g, c, FINISH_Y, "Fitting curve", c.muted);
-    computing(g, c, now, 1, true);
+    computing(g, c, now, 1, Work::Fitting);
   } else if (stopped) {
-    if (winner && fit) {
-      // The endpoint estimate scales the shared shape to the launch and the
-      // stop without a microphone fit: say so.
-      centered(g, c, FINISH_Y, fit->endpointEstimate ? "Estimated curve"
-                               : fit->fixedRiccati   ? "Fixed Riccati fit"
-                                                     : "Free Riccati fit", c.muted);
-    } else {
-      centered(g, c, FINISH_Y, "Curve unavailable", c.muted);
-    }
+    // The endpoint estimate scales the shared shape to the launch and the
+    // stop without a microphone fit: say so. Model names stay off screen.
+    centered(g, c, FINISH_Y, !(winner && fit) ? "Curve unavailable"
+                             : fit->endpointEstimate ? "Estimated curve"
+                                                     : "Curve fitted", c.muted);
   } else if (session.running()) {
     const char *status = mic == MicView::Mic::Failed     ? "Mic unavailable"
                          : mic == MicView::Mic::NoMemory ? "Not enough memory"
                          : mic == MicView::Mic::Starting ? "Mic warming up"
                                                          : nullptr;
-    const bool measured = mic == MicView::Mic::On && t.started();
-    const auto active = EarlySpin::select(fit && fit->fixedRiccati && winner ? winner->end : publishedFinish,
-                                          t.earlyReadings(), elapsedUs / 1000, measured);
-    predictedFinish = active.seconds;
     if (std::isfinite(predictedFinish)) {
-      // Orange, as the dotted finish line on the graph.
-      clock(text, sizeof(text), uint64_t(std::lround(predictedFinish)));
-      row(g, c, FINISH_Y, "Finish", text, c.warning);
+      // "~" marks it as the current estimate; orange, as the finish line on the
+      // graph. A new value decodes into place, its changed digits cycling.
+      char value[8];
+      value[0] = '~';
+      clock(value + 1, sizeof(value) - 1, uint64_t(std::lround(predictedFinish)));
+      bool settled[8];
+      std::fill(std::begin(settled), std::end(settled), true);
+      if (cache) {
+        if (std::strcmp(cache->finish, value)) {
+          std::snprintf(cache->previous, sizeof(cache->previous), "%s", cache->finish);
+          std::snprintf(cache->finish, sizeof(cache->finish), "%s", value);
+          cache->finishSince = now;
+        }
+        const uint64_t age = now - cache->finishSince;
+        const unsigned n = unsigned(std::strlen(value));
+        for (unsigned i = 0; i < n; ++i) {
+          const bool changed = std::strlen(cache->previous) != n || cache->previous[i] != value[i];
+          // Left to right, a digit at a time over the decode.
+          settled[i] = !changed || age >= VALUE_DECODE_US * (i + 1) / n;
+        }
+      }
+      label(g, c, FINISH_Y, "Finish", c.warning);
+      decodingValue(g, c, FINISH_Y, value, settled, c.warning, now / (DECODE_CHAR_US));
       if (status)
         centered(g, c, CAPTION_Y, status, c.warning, 1);
       else
-        computing(g, c, now, 1, measured);
+        computing(g, c, now, 1, measured ? Work::Forecasting : Work::Listening);
     } else if (status) {
       centered(g, c, FINISH_Y, status, mic == MicView::Mic::Starting ? c.muted : c.warning);
+    } else if (measured) {
+      // Gathering the first ten seconds: the value cycles until there is one.
+      label(g, c, FINISH_Y, "Finish", c.warning);
+      static constexpr bool none[8] = {};
+      decodingValue(g, c, FINISH_Y, "~0:00", none, c.warning, now / MODEL_STEP_US);
+      computing(g, c, now, float(elapsedUs) / (EarlySpin::FIRST_MS * 1000.f), Work::Listening);
     } else {
-      row(g, c, FINISH_Y, "Finish", "-:--", c.muted);
-      computing(g, c, now, float(elapsedUs) / (EarlySpin::FIRST_MS * 1000.f), false);
+      row(g, c, FINISH_Y, "Finish", c.warning, "-:--", c.muted);
     }
   } else if (mic == MicView::Mic::Failed || mic == MicView::Mic::NoMemory) {
     centered(g, c, FINISH_Y, mic == MicView::Mic::Failed ? "Mic unavailable" : "Not enough memory", c.warning);

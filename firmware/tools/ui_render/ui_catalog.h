@@ -180,7 +180,8 @@ inline void micScreen(lgfx::LGFX_Sprite &g,unsigned index,const Look &look) {
 inline constexpr Screen ANALYSIS_SCREENS[]={
   {"analysis-ready","Analysis, ready"},{"analysis-warming","Analysis, mic warming up"},
   {"analysis-early","Analysis, 6 s in"},{"analysis-early-forecast","Analysis, early mic forecast"},
-  {"analysis-forecast","Analysis, Fixed Riccati forecast"},{"analysis-mic-failed","Analysis, mic unavailable"},
+  {"analysis-forecast","Analysis, Fixed Riccati forecast"},{"analysis-word","Analysis, forecast with a word cue"},
+  {"analysis-mic-failed","Analysis, mic unavailable"},
   {"analysis-fitting","Analysis, fitting after stop"},{"analysis-fitted","Analysis, fitted"},
   {"analysis-timeout","Analysis, time limit"},{"analysis-save-pending","Analysis, save pending"},
   {"analysis-details","Analysis details"},{"analysis-details-more","Analysis details, second page"},
@@ -238,6 +239,11 @@ inline void analysisScreen(lgfx::LGFX_Sprite &g,unsigned index,const Look &look)
   else if(is("analysis-forecast")){
     session.begin(LAUNCH,true,RPM,START);now=START+42500000;spinTo(42.4f,true);
     fitTo(42.4f,97.f,false);fitIn=&fit;curveIn=&curve;published=97.f;
+  }
+  else if(is("analysis-word")){
+    // Into the last three seconds of a ten-second cue cycle: a word, settled.
+    session.begin(LAUNCH,true,RPM,START);now=START+57800000;spinTo(57.7f,true);
+    fitTo(57.7f,97.f,false);fitIn=&fit;curveIn=&curve;published=97.f;
   }
   else if(is("analysis-mic-failed")){session.begin(LAUNCH,true,RPM,START);now=START+18000000;}
   else if(is("analysis-fitting")){session.begin(LAUNCH,true,RPM,START);session.stop(START+95400000);now=START+96000000;spinTo(95.f,true);fitting=true;}

@@ -52,7 +52,7 @@ struct LGFXBase {
   void fillScreen(uint16_t c){fillRect(0,0,135,240,c);}
   static int font4Width(const char *text){int width=0;for(const char *p=text;*p;++p)width+=(*p>='0' && *p<='9')?14:*p==':'?7:*p==' '?5:*p=='R'?17:*p=='P'?16:*p=='M'?21:18;return width;}
   static int font6Width(const char *text){int width=0;for(const char *p=text;*p;++p)width+=*p==':'?12:27;return width;}
-  int textWidth(const char *text,const int *font){return *font==4?font4Width(text):*font==6?font6Width(text):int(std::strlen(text))*8;}
+  int textWidth(const char *text,const int *font){return *font==4?font4Width(text):*font==6?font6Width(text):*font==2?font2Width(text):int(std::strlen(text))*8;}
   // Font 2 is proportional: 8 px a glyph, but 5 for i, l, space and narrow
   // punctuation. Every glyph's estimate is at or above M5GFX Font2's own
   // width: "String wear check" draws 110 px and estimates 127, "Tournament"
@@ -164,7 +164,7 @@ int main(){
   AnalogTachometer::Curve curve;
   const auto colors=Palette::builtIn(0x07ff,true);LaunchMotion::Trace motion;AnalysisMode::Session session;MicTrace::StoredTrace trace;
   for(auto mic:{MicView::Mic::Starting,MicView::Mic::On,MicView::Mic::Failed,MicView::Mic::NoMemory}){
-    lgfx::LGFXBase g;AnalysisUI::draw(g,session,0,nullptr,mic,motion,false,false,colors,curve);assert(g.drew("Analysis") && g.drew("READY") && g.drew("Hold B Exit") && !g.drew("A Replay  B Details"));checkOverlap(g);
+    lgfx::LGFXBase g;AnalysisUI::draw(g,session,0,nullptr,mic,motion,false,false,colors,curve);assert(g.drew("Stamina Analysis") && g.drew("READY") && g.drew("Hold B Exit") && !g.drew("A Replay  B Details"));checkOverlap(g);
   }
   session.begin(1,true,15000,1000000);trace.begin(1,15000);MicTrace::Step step;step.launch=1;step.rpm=9000;trace.add(step);
   for(bool stopped:{false,true}){if(stopped)session.stop(83456000);lgfx::LGFXBase g;AnalysisUI::draw(g,session,83456000,&trace,MicView::Mic::On,motion,false,false,colors,curve);assert(g.drew("1:22") && g.drew(stopped?"82s":"92s") && g.circles==0);checkOverlap(g);} // No stopwatch dial
@@ -179,26 +179,26 @@ int main(){
     canvas.texts.clear();canvas.spans.clear();canvas.circles=0;canvas.setTextDatum(top_right);
     AnalysisUI::draw(canvas,cached,at,nullptr,MicView::Mic::On,motion,false,false,palette,curve,state,ready,&cache);
   };
-  paint(0,colors);assert(canvas.drew("READY") && canvas.drew("Analysis"));
-  paint(100000,colors);assert(!canvas.drew("READY") && !canvas.drew("0:00") && !canvas.drew("Analysis"));
-  paint(200000,colors,"WAIT",false);assert(canvas.drew("WAIT") && canvas.drew("Analysis"));
+  paint(0,colors);assert(canvas.drew("READY") && canvas.drew("Stamina Analysis"));
+  paint(100000,colors);assert(!canvas.drew("READY") && !canvas.drew("0:00") && !canvas.drew("Stamina Analysis"));
+  paint(200000,colors,"WAIT",false);assert(canvas.drew("WAIT") && canvas.drew("Stamina Analysis"));
   cached.begin(1,true,6000,1000000);paint(1000000,colors);assert(canvas.drew("6000 RPM"));
   paint(1100000,colors);assert(!canvas.drew("6000 RPM") && !canvas.drew("0:00"));
-  paint(2000000,colors);assert(canvas.drew("0:01") && !canvas.drew("Analysis"));checkOverlap(canvas);
-  auto changed=colors;changed.number=0xf800;paint(2100000,changed);assert(canvas.drew("6000 RPM") && canvas.drew("Analysis"));
+  paint(2000000,colors);assert(canvas.drew("0:01") && !canvas.drew("Stamina Analysis"));checkOverlap(canvas);
+  auto changed=colors;changed.number=0xf800;paint(2100000,changed);assert(canvas.drew("6000 RPM") && canvas.drew("Stamina Analysis"));
   cached.toggleReplay(2100000);paint(2200000,changed);assert(!cache.valid);
-  cached.toggleReplay(2300000);paint(2300000,changed);assert(canvas.drew("Analysis"));
-  cache.invalidate();paint(2400000,changed);assert(canvas.drew("Analysis"));
+  cached.toggleReplay(2300000);paint(2300000,changed);assert(canvas.drew("Stamina Analysis"));
+  cache.invalidate();paint(2400000,changed);assert(canvas.drew("Stamina Analysis"));
   assert(canvas.timerInk==changed.number);
   // Stopping redraws the labels; the clock keeps full strength: it is the result.
-  cached.stop(2450000);paint(2450000,changed);assert(canvas.drew("0:01") && canvas.drew("Spin time") && canvas.timerInk==changed.number);
+  cached.stop(2450000);paint(2450000,changed);assert(canvas.drew("0:01") && canvas.drew("Curve unavailable") && canvas.timerInk==changed.number);
   cached.begin(2,true,6000,3000000);paint(3000000,changed);assert(canvas.drew("0:00") && canvas.timerInk==changed.number);
   cached.tick(303000000);paint(303000000,changed);assert(canvas.drew("5:00") && canvas.drew("Time limit") && canvas.timerInk==changed.number);
-  session.toggleReplay(83456000);lgfx::LGFXBase replay;AnalysisUI::draw(replay,session,84456000,&trace,MicView::Mic::On,motion,false,false,colors,curve);assert(!replay.drew("Analysis"));
+  session.toggleReplay(83456000);lgfx::LGFXBase replay;AnalysisUI::draw(replay,session,84456000,&trace,MicView::Mic::On,motion,false,false,colors,curve);assert(!replay.drew("Stamina Analysis"));
   lgfx::LGFXBase saving;
   AnalysisUI::draw(saving,session,84456000,&trace,MicView::Mic::On,motion,false,false,colors,curve,
                    "READY",true,nullptr,nullptr,nullptr,nullptr,false,NAN,true);
-  assert(saving.drew("Analysis") && saving.drew("Save pending") && saving.drew("Please wait") && saving.drew("B Retry"));checkOverlap(saving);
+  assert(saving.drew("Stamina Analysis") && saving.drew("Save pending") && saving.drew("Please wait") && saving.drew("B Retry"));checkOverlap(saving);
   for(unsigned i=0;i<saving.texts.size();++i)
     if(saving.texts[i]=="0s")assert(saving.textColors[i]==colors.muted);
   uint16_t values[8]={},rejected[8]={};MicTrace::Trace marked(values,8,rejected);
@@ -207,11 +207,11 @@ int main(){
   assert(marked.heard()==1 && marked.latestRpm()==5900 && marked.lastSeconds()==MicTrace::Trace::seconds(0));
   assert(marked.rejectedRpm(1)==0 && marked.rejectedRpm(2)==12000 && marked.peakRpm()==5900);
   AnalysisMode::Session markedSession;markedSession.begin(12,true,6000,1000000);
-  lgfx::LGFXBase markedGraph;AnalysisUI::draw(markedGraph,markedSession,2000000,&marked,MicView::Mic::On,motion,false,false,colors,curve);assert(markedGraph.grayDots==1 && markedGraph.drew("Finish") && markedGraph.drew("-:--"));
+  lgfx::LGFXBase markedGraph;AnalysisUI::draw(markedGraph,markedSession,2000000,&marked,MicView::Mic::On,motion,false,false,colors,curve);assert(markedGraph.grayDots==1 && markedGraph.drew("Finish") && markedGraph.drew("~") && !markedGraph.drew("-:--"));
   lgfx::LGFXBase normalGraph;MicView::draw(normalGraph,&marked,MicView::Mic::On,colors);assert(normalGraph.grayDots==0);
   lgfx::LGFXBase fallback;
   AnalysisUI::draw(fallback,markedSession,31000000,&marked,MicView::Mic::On,motion,false,false,colors,curve);
-  assert(fallback.drew("0:38") && fallback.drew("48s"));
+  assert(fallback.drew("~0:38") && fallback.drew("48s"));
   // No model names on screen: one row of 2x2 dots on the caption line says the
   // model is working. Before the first forecast it grows with elapsed time
   // (muted, led by one accent dot); once forecasting, one accent dot with a
@@ -233,10 +233,56 @@ int main(){
   AnalysisUI::draw(before,markedSession,10999000,nullptr,MicView::Mic::Failed,motion,false,false,colors,curve);
   AnalysisUI::draw(atTen,markedSession,11000000,nullptr,MicView::Mic::Failed,motion,false,false,colors,curve);
   // Without the mic the caption names the problem instead; nothing animates.
-  assert(!before.drew("Finish") && atTen.drew("1:34") && atTen.drew("Mic unavailable") && computeRow(atTen).empty());
+  assert(!before.drew("Finish") && atTen.drew("~1:34") && atTen.drew("Mic unavailable") && computeRow(atTen).empty());
   AnalysisUI::draw(pending,markedSession,32000000,&marked,MicView::Mic::On,motion,false,false,colors,curve,
                    "READY",true,nullptr,nullptr,nullptr,nullptr,true,88.f);
-  assert(!pending.drew("Fixed Riccati") && pending.drew("1:28") && pending.drew("98s") && accentAt(pending)>=0);
+  assert(!pending.drew("Fixed Riccati") && pending.drew("~1:28") && pending.drew("98s") && accentAt(pending)>=0);
+  // The RPM row: the latest heard reading, cyan as the readings on the graph.
+  for(unsigned i=0;i<pending.texts.size();++i)if(pending.texts[i]=="5900 RPM")assert(pending.textColors[i]==colors.accent);
+  assert(pending.drew("Now") && pending.drew("5900 RPM") && atTen.drew("- RPM"));
+  // Every ten seconds the caption row gives way for three seconds to a word
+  // decoded from glyphs: letters settle left to right in muted; until then
+  // cycling glyphs in accent. No dots while the word shows.
+  {auto word=[](const lgfx::LGFXBase &f,uint16_t &ink,bool &mixed){std::string w;ink=0;mixed=false;
+     for(unsigned i=0;i<f.texts.size();++i)if(f.spans[i][2]==AnalysisUI::CAPTION_Y && f.spans[i][3]==1 && f.texts[i].size()==1){
+       if(!w.empty() && f.textColors[i]!=ink)mixed=true;ink=f.textColors[i];w+=f.texts[i];}
+     return w;};
+   const uint64_t wordAt=AnalysisUI::WORD_CYCLE_US*3-AnalysisUI::WORD_SHOW_US;
+   lgfx::LGFXBase start,settled,dots;
+   for(auto [frame,at]:{std::pair{&start,wordAt},std::pair{&settled,wordAt+AnalysisUI::WORD_SHOW_US-1},std::pair{&dots,wordAt-1}})
+     AnalysisUI::draw(*frame,markedSession,at,&marked,MicView::Mic::On,motion,false,false,colors,curve,
+                      "READY",true,nullptr,nullptr,nullptr,nullptr,false,88.f);
+   uint16_t ink;bool mixed;
+   const auto done=word(settled,ink,mixed);
+   assert((done=="ANALYZING" || done=="LISTENING" || done=="CALCULATING") && ink==colors.muted && !mixed);
+   const auto first=word(start,ink,mixed);
+   assert(first.size()==done.size() && first!=done && ink==colors.accent && !mixed);
+   assert(computeRow(start).empty() && computeRow(settled).empty() && computeRow(dots).size()==AnalysisUI::COMPUTE_DOTS);
+   assert(word(dots,ink,mixed).empty());
+   checkOverlap(start);checkOverlap(settled);}
+  // "~" marks the Finish value as the current estimate. With the sprite cache a
+  // new value decodes into place: only its changed digits cycle, muted, and
+  // settle left to right within VALUE_DECODE_US.
+  {AnalysisUI::Cache cache;
+   auto frame=[&](lgfx::LGFXBase &f,uint64_t at,float finish){
+     AnalysisUI::draw(f,markedSession,at,&marked,MicView::Mic::On,motion,false,false,colors,curve,
+                      "READY",true,&cache,nullptr,nullptr,nullptr,false,finish);};
+   lgfx::LGFXBase appear,shown,change,changed;
+   frame(appear,32000000,88.f);
+   assert(!appear.drew("~1:28") && appear.drew("~") && appear.drew(":"));
+   frame(shown,32000000+AnalysisUI::VALUE_DECODE_US,88.f);
+   assert(shown.drew("~1:28"));
+   frame(change,32500000,89.f);
+   assert(!change.drew("~1:29") && change.drew("~") && change.drew("1") && change.drew("2"));
+   unsigned sawTwo=0;
+   for(unsigned i=0;i+1<change.texts.size();++i)
+     if(change.texts[i]=="2" && change.spans[i][2]==AnalysisUI::FINISH_Y){++sawTwo;
+       assert(change.textColors[i]==colors.warning && change.textColors[i+1]==colors.muted);
+       assert(change.texts[i+1].size()==1 && change.texts[i+1][0]>='0' && change.texts[i+1][0]<='9');
+     }
+   assert(sawTwo==1);checkOverlap(change);
+   frame(changed,32500000+AnalysisUI::VALUE_DECODE_US,89.f);
+   assert(changed.drew("~1:29"));}
   markedSession.stop(2000000);
   for(unsigned phase=0;phase<3;++phase){
     lgfx::LGFXBase loading;
@@ -257,7 +303,7 @@ int main(){
     lgfx::LGFXBase graph;
     AnalysisUI::draw(graph,markedSession,3000000,&marked,MicView::Mic::On,motion,false,false,colors,curve,
                      "READY",true,nullptr,&ranked,samples,&winner,false);
-    assert(graph.drew(fixed?"Fixed Riccati fit":"Free Riccati fit"));
+    assert(graph.drew("Curve fitted") && !graph.drew("Fixed Riccati fit") && !graph.drew("Free Riccati fit"));
     checkOverlap(graph);
   }
   AnalysisMode::Session live;live.begin(13,true,6000,1000000);
@@ -280,7 +326,7 @@ int main(){
   lgfx::LGFXBase prediction;
   AnalysisUI::draw(prediction,live,51000000,nullptr,MicView::Mic::On,motion,false,false,colors,curve,
                    "READY",true,nullptr,&ranked,samples,&winner,false);
-  assert(prediction.drew("1:23") && prediction.drew("A Replay  B Stop"));
+  assert(prediction.drew("~1:23") && prediction.drew("A Replay  B Stop"));
   assert(prediction.drew("93s") && !prediction.drew("60s"));
   // Measured up to the last reading (45 s) as a line; the forecast past it as
   // accent dots every 5 px.
