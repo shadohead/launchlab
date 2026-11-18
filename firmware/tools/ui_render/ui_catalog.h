@@ -16,6 +16,7 @@
 #include "power_status.h"
 #include "rpm_estimator.h"
 #include "mic_view_ui.h"
+#include "battle_ui.h"
 #include "analysis_ui.h"
 #include "analysis_result_ui.h"
 
@@ -40,7 +41,7 @@ inline constexpr Screen SCREENS[]={
   {"bluetooth-forget","Bluetooth, forget phones"},{"bluetooth-pair","Bluetooth, pairing number"},
   {"bluetooth-beyblade-x","Bluetooth, Beyblade X page"},{"bluetooth-beyblade-x-held","Bluetooth, Beyblade X, pass button held"},
   {"theme-editor","Theme editor"},{"effect-editor","Best effect editor"},{"celebrate-editor","Celebrate editor"},
-  {"battery-icon-editor","Battery icon editor, Off"},
+  {"battery-icon-editor","Battery icon editor, Off"},{"min-rpm-editor","Min RPM editor, 10000"},
   {"history","Launch history"},{"pull-trend","Pull trend"},{"session-trend","Session trend"},{"history-empty","History, empty"},
   {"battery","Device"},{"battery-low","Device, battery low"},{"new-session","New session"},{"hold","Hold to enter tournament"},
   {"wipe","Wipe all"},{"wear-check","Wear check"},{"wear-check-retry","Wear check, retry level"},
@@ -132,49 +133,89 @@ inline void celebration(lgfx::LGFX_Sprite &g,const Palette::Colors &c,bool flip,
   renderer.draw({static_cast<uint16_t *>(g.getBuffer()),WIDTH,HEIGHT},effect,elapsed,c.accent,BestEffectUI::Renderer::Anchor(),c.background);
 }
 
-// The Mic RPM page's screens: pinned by the render check, and not in the theme
-// preview, which shows SCREENS.
-inline constexpr Screen MIC_SCREENS[]={
-  {"menu-mic","Menu, Mic RPM"},{"mic-starting","Mic RPM, warming up"},{"mic-failed","Mic RPM, failed"},{"mic-memory","Mic RPM, no memory"},{"mic-ready","Mic RPM, ready"},
-  {"mic-listening","Mic RPM, listening"},{"mic-first","Mic RPM, first reading"},{"mic-spin","Mic RPM, 8 s spin"},
-  {"mic-gaps","Mic RPM, gaps"},{"mic-long","Mic RPM, 2 minutes"},{"mic-ended","Mic RPM, ended"},{"mic-none","Mic RPM, nothing heard"},
-  {"mic-fast","Mic RPM, above the default scale"},{"mic-no-peak","Mic RPM, no optical peak"},
+// The battle cards and the Battles pages: pinned by the render check, and not
+// in the theme preview, which shows SCREENS.
+inline constexpr Screen BATTLE_SCREENS[]={
+  {"menu-battles","Menu, Battles"},{"battle-versus","Battle, open"},{"battle-versus-slower","Battle, the slower launch"},
+  {"battle-versus-wide","Battle, long name and five digits"},{"battle-versus-skip","Battle, hold B to skip"},
+  {"battle-versus-start","Battle, a match starts"},{"battle-versus-match-point","Battle, match point"},{"battle-versus-long","Battle, first to 7"},
+  {"battle-pick-won","Battle, won by"},{"battle-pick-lost","Battle, lost by"},
+  {"battle-result-win","Battle result, win"},{"battle-result-loss","Battle result, loss being told"},
+  {"battle-result-match","Battle result, match won"},{"battle-result-match-lost","Battle result, match lost"},
+  {"battle-result-void","Battle result, both claimed"},{"battle-result-later","Battle result, rival out of reach"},
+  {"battle-result-match-point","Battle result, now match point"},{"battle-result-long","Battle result, first to 7"},
+  {"battle-result-long-match","Battle result, first to 7 won"},
+  {"battles","Battles"},{"battles-off","Battles, off"},{"battles-bluetooth","Battles, Bluetooth off"},{"battles-rival","Battles, a rival row"},
+  {"battles-match","Battles, match length"},{"battles-match-long","Battles, first to 7"},
+  {"battles-more","Battles, second page"},{"battles-back","Battles, Back"},{"rival","Rival"},{"rival-new","Rival, no result yet"},
 };
-constexpr unsigned MIC_COUNT=sizeof(MIC_SCREENS)/sizeof(MIC_SCREENS[0]);
-inline void micScreen(lgfx::LGFX_Sprite &g,unsigned index,const Look &look) {
-  using namespace MicTrace;
+constexpr unsigned BATTLE_COUNT=sizeof(BATTLE_SCREENS)/sizeof(BATTLE_SCREENS[0]);
+inline void battleScreen(lgfx::LGFX_Sprite &g,unsigned index,const Look &look,bool flip) {
+  using Battle::Outcome;using Battle::Finish;
   const auto &c=look.colors;
   ControlsUI::colors=c;
-  const char *id=MIC_SCREENS[index].id;
+  const char *id=BATTLE_SCREENS[index].id;
   auto is=[&](const char *name){return !std::strcmp(id,name);};
+  auto prefix=[&](const char *name){return !std::strncmp(id,name,std::strlen(name));};
   g.fillScreen(c.background);g.setTextDatum(top_center);g.setTextColor(c.text,c.background);
-  if(is("menu-mic")){ControlsUI::list(g,"Menu",ControlsUI::MENU,Controls::MENU_COUNT,Controls::MIC_ROW,Controls::MENU_GROUPS);ControlsUI::cornerBattery(g,detail::corner(),true);return;}
-  static StoredTrace t;t.clear();
-  auto mark=[&](unsigned index,unsigned rpm,MicRpm::Reason reason,bool last){
-    Step s;s.index=uint16_t(index);s.rpm=uint16_t(rpm);s.reason=reason;s.last=last;t.add(s);
-  };
-  auto mic=MicView::Mic::On;
-  if(is("mic-starting"))mic=MicView::Mic::Starting;
-  else if(is("mic-failed"))mic=MicView::Mic::Failed;
-  else if(is("mic-memory"))mic=MicView::Mic::NoMemory;
-  else if(is("mic-listening")){t.begin(0,6900);for(unsigned i=0;i<4;++i)mark(i,0,MicRpm::Reason::BroadbandNoise,false);}
-  else if(is("mic-first"))demo(t,8,6);
-  else if(is("mic-spin"))demo(t,80,6);
-  else if(is("mic-gaps")) {
-    demo(t,30,6);
-    for(unsigned i=30;i<36;++i)mark(i,0,MicRpm::Reason::WeakHarmonics,false);
-    for(unsigned i=36;i<70;++i)mark(i,unsigned(5600-(i-36)*14),MicRpm::Reason::Tracking,false);
-    mark(70,0,MicRpm::Reason::WeakHarmonics,false);mark(71,0,MicRpm::Reason::WeakHarmonics,false);
-    mark(75,4900,MicRpm::Reason::Tracking,false);mark(76,0,MicRpm::Reason::WeakHarmonics,false);
+  if(is("menu-battles")){ControlsUI::list(g,"Menu",ControlsUI::MENU,Controls::MENU_COUNT,Controls::BATTLES_ROW,Controls::MENU_GROUPS);ControlsUI::cornerBattery(g,detail::corner(),true);return;}
+  // A stick with some history: Kai most of all, the others in passing.
+  const uint32_t KAI=0xd5d21001,MAX=0x9fd52002,LONG=0x1d043003,NEW=0xb1e23c11;
+  Battle::Book book;uint16_t tag=0;
+  // Each battle takes the next two tags, mine first (one statement each: the
+  // order of a call's arguments is unspecified).
+  auto begin=[&](uint32_t id,uint16_t mine,uint16_t theirs,uint8_t matchTo=Battle::MATCH_SHORT){
+    const uint16_t myTag=++tag;const uint16_t theirTag=++tag;book.begin(id,myTag,theirTag,mine,theirs,matchTo);};
+  auto battle=[&](uint32_t id,uint16_t mine,uint16_t theirs,Outcome o,Finish f){begin(id,mine,theirs);if(o!=Outcome::None)book.claim(id,o,f);};
+  battle(MAX,5980,6105,Outcome::Lost,Finish::Over);battle(MAX,6230,6012,Outcome::Won,Finish::Spin);book.rename(MAX,"Max");
+  battle(LONG,6100,11250,Outcome::Lost,Finish::Xtreme);book.rename(LONG,"SixteenCharsLong");
+  battle(NEW,6050,5400,Outcome::None,Finish::Spin);
+  // Kai: a match won 4 - 1, and 2 - 1 into the next.
+  const struct {Outcome outcome;Finish finish;} kai[]={{Outcome::Won,Finish::Xtreme},{Outcome::Lost,Finish::Spin},{Outcome::Won,Finish::Spin},
+    {Outcome::Won,Finish::Over},{Outcome::Lost,Finish::Spin}};
+  for(unsigned i=0;i<5;++i)battle(KAI,uint16_t(6000+i*31),uint16_t(6200-i*47),kai[i].outcome,kai[i].finish);
+  book.rename(KAI,"Kai");
+  if(prefix("battles")) {
+    if(is("battles-more"))for(uint32_t i=0;i<5;++i){battle(0x70000000u+i,6000,5900,Outcome::Won,Finish::Spin);}
+    const unsigned row=is("battles-rival")?BattleUI::FIRST_RIVAL_ROW:prefix("battles-match")?BattleUI::MATCH_ROW:is("battles-more")?8:
+      is("battles-back")?book.count()+BattleUI::FIRST_RIVAL_ROW:0;
+    BattleUI::battles(g,book,row,!is("battles-bluetooth"),!is("battles-off"),is("battles-match-long")?Battle::MATCH_LONG:Battle::MATCH_SHORT);
+    ControlsUI::cornerBattery(g,detail::corner());return;
   }
-  else if(is("mic-long"))demo(t,MAX_READINGS,8,100);
-  else if(is("mic-ended")){demo(t,120,9);for(unsigned i=120;i<200;++i)mark(i,0,MicRpm::Reason::Quiet,i==199);}
-  else if(is("mic-none")){t.begin(0,5200);for(unsigned i=0;i<=LOST_READINGS;++i)mark(i,0,MicRpm::Reason::WeakHarmonics,i==LOST_READINGS);}
-  else if(is("mic-fast")){t.begin(0,12900);for(unsigned i=9;i<60;++i)mark(i,unsigned(12400-(i-9)*40),MicRpm::Reason::Tracking,false);}
-  else if(is("mic-no-peak")){t.begin(0);for(unsigned i=9;i<60;++i)mark(i,unsigned(6100-(i-9)*20),MicRpm::Reason::Tracking,false);}
-  MicView::draw(g,&t,mic,c);
+  if(is("rival")){BattleUI::rival(g,*book.find(KAI));return;}
+  if(is("rival-new")){BattleUI::rival(g,*book.find(NEW));return;}
+  // Zed: first to 7, 4 - 2 into the match.
+  const uint32_t ZED=0x2e0d4004;
+  for(auto o:{Outcome::Won,Outcome::Lost,Outcome::Won}){begin(ZED,6100,6000,Battle::MATCH_LONG);book.claim(ZED,o,Finish::Over);}
+  book.rename(ZED,"Zed");
+  // The battle on screen: against Kai, 2 - 1 into the match.
+  if(is("battle-versus-match-point"))battle(KAI,6100,6000,Outcome::Won,Finish::Spin);
+  if(is("battle-versus-start"))battle(KAI,6100,6000,Outcome::Won,Finish::Spin),battle(KAI,6100,6000,Outcome::Won,Finish::Spin);
+  begin(KAI,is("battle-versus-slower")?5870:6420,5980);
+  uint32_t rival=KAI;
+  if(is("battle-versus-wide")){begin(LONG,12480,11250);rival=LONG;}
+  if(prefix("battle-versus-long") || prefix("battle-result-long")){begin(ZED,6380,6215,Battle::MATCH_LONG);rival=ZED;}
+  if(prefix("battle-versus")) {
+    BattleUI::versus(g,c,"Ready",ScreensUI::Tone::Ready,*book.find(rival));
+    ScreensUI::level(g,c,WIDTH/2,StickS3Level::forDisplay({StickS3Level::State::Valid,1.4f,.2f,-.35f},flip));
+    ControlsUI::footer(g,"A Won  B Lost");
+    if(is("battle-versus-skip"))ControlsUI::hold(g,"Skip battle",600,1000);
+    return;
+  }
+  if(is("battle-pick-won")){BattleUI::picker(g,c,*book.find(rival),Outcome::Won,Finish::Spin);return;}
+  if(is("battle-pick-lost")){BattleUI::picker(g,c,*book.find(rival),Outcome::Lost,Finish::Burst);return;}
+  auto told=BattleUI::Told::Agreed;
+  if(is("battle-result-win"))book.claim(KAI,Outcome::Won,Finish::Spin);
+  else if(is("battle-result-loss")){book.claim(KAI,Outcome::Lost,Finish::Burst);told=BattleUI::Told::Telling;}
+  else if(is("battle-result-match"))book.claim(KAI,Outcome::Won,Finish::Xtreme);
+  else if(is("battle-result-match-lost")){book.claim(KAI,Outcome::Lost,Finish::Xtreme);}
+  else if(is("battle-result-void")){Battle::Claim both;both.rev=1;both.outcome=Outcome::Void;book.merge(KAI,book.find(KAI)->theirTag,both);}
+  else if(is("battle-result-later")){book.claim(KAI,Outcome::Won,Finish::Over);told=BattleUI::Told::Later;}
+  else if(is("battle-result-match-point"))book.claim(KAI,Outcome::Won,Finish::Spin);
+  else if(is("battle-result-long"))book.claim(ZED,Outcome::Lost,Finish::Burst);
+  else if(is("battle-result-long-match"))book.claim(ZED,Outcome::Won,Finish::Xtreme);
+  BattleUI::result(g,c,*book.find(rival),told);
 }
-
 // The Analysis page's screens, composed as LaunchLabMini.ino's draw() composes
 // them: pinned by the render check, and not in the theme preview.
 inline constexpr Screen ANALYSIS_SCREENS[]={
@@ -318,7 +359,7 @@ inline void draw(lgfx::LGFX_Sprite &g,unsigned index,const Look &look,bool flip)
     Controls::State state;
     // A new unit's settings: every value is its default.
     const uint8_t values[]={InactivityTimer::DEFAULT_MINUTES,uint8_t(RpmEstimator::DEFAULT_MODE),Brightness::DEFAULT_PERCENT,uint8_t(flip),0,uint8_t(look.theme),uint8_t(Appearance::Effect::Random),uint8_t(Milestones::DEFAULT_MODE),0,0,uint8_t(InactivityTimer::SHAKE_WAKE_DEFAULT),
-      0,0,uint8_t(Controls::BATTERY_ICON_DEFAULT),0};  // Wipe all and About have no value; Bluetooth is Off
+      0,0,uint8_t(Controls::BATTERY_ICON_DEFAULT),0,MinRpm::DEFAULT_STEPS};  // Wipe all and About have no value; Bluetooth is Off
     static_assert(sizeof(values)==Controls::SETTING_COUNT,"a default for every setting");
     static const Milestones::Config defaults;ControlsUI::milestones=&defaults;
     ControlsUI::runtime="0.20.8-sticks3-songs-pm";  // fixed, so a release number never moves a pinned frame
@@ -343,6 +384,8 @@ inline void draw(lgfx::LGFX_Sprite &g,unsigned index,const Look &look,bool flip)
     }
     else if(is("theme-editor")){state.page=Page::Edit;state.setting=5;state.draft=uint8_t(look.theme);ControlsUI::editor(g,state,false,false);}
     else if(is("battery-icon-editor")){state.page=Page::Edit;state.setting=unsigned(Controls::Setting::BatteryIcon);state.draft=0;ControlsUI::editor(g,state,false,false);}
+    // Its widest value.
+    else if(is("min-rpm-editor")){state.page=Page::Edit;state.setting=unsigned(Controls::Setting::MinRpm);state.draft=MinRpm::MAX_STEPS;ControlsUI::editor(g,state,false,false);}
     else if(is("effect-editor")) {
       state.page=Page::Edit;state.setting=unsigned(Controls::Setting::BestEffect);state.draft=uint8_t(Appearance::Effect::Orbit);ControlsUI::editor(g,state,false,false);
       static BestEffectUI::Renderer renderer;BestEffectUI::Renderer::Anchor card;

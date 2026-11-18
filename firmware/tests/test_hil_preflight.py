@@ -3,7 +3,8 @@
 The 0.20.8 gate lost three 85-minute HIL all runs to state on the unit, not to
 the firmware: the owner's Mounting Sidecar (wear_check, whose main cases assume
 Top, failed 54 checks) and nvs_tight's filler left by a run stopped inside it
-(themes failed 21 checks on nvs_space)."""
+(themes failed 21 checks on nvs_space). Min RPM (0.21.0) goes to 1,000 rpm:
+its 4,000 rpm default would keep back the slower pulls many scenarios measure."""
 import inspect
 from pathlib import Path
 import sys
@@ -24,8 +25,9 @@ import scenarios  # noqa: E402
 
 class Unit:
     """A HIL image's answers to the preflight's commands."""
-    def __init__(self, mounting, filler, clears=True, bluetooth=None, restarts=True):
+    def __init__(self, mounting, filler, clears=True, bluetooth=None, restarts=True, min_rpm='1000'):
         self.mounting, self.filler, self.clears, self.sent = mounting, filler, clears, []
+        self.min_rpm = min_rpm
         self.bluetooth, self.restarts, self.boot = bluetooth, restarts, 7
 
     def mark(self):
@@ -45,6 +47,9 @@ class Unit:
         elif command == f'set {scenarios.MOUNT_ROW} 0':
             self.mounting = 'Top'
             text = f'HIL_SET row={scenarios.MOUNT_ROW} value=0 error=0 page=5 ms=1'
+        elif command == f'set {scenarios.MIN_RPM_ROW} {scenarios.MIN_RPM_OFF}':
+            self.min_rpm = '1000'
+            text = f'HIL_SET row={scenarios.MIN_RPM_ROW} value={scenarios.MIN_RPM_OFF} error=0 page=5 ms=1'
         elif command == f'set {scenarios.BLUETOOTH_ROW} 0':
             if self.restarts:
                 self.bluetooth, self.boot = '0', self.boot + 1
@@ -56,7 +61,8 @@ class Unit:
         return hil_device.Line(len(self.sent), 0.0, text)
 
     def status(self):
-        status = {'MOUNT_STATUS': {'selected': self.mounting}, 'NVS_STATUS': {'used_entries': str(361 + self.filler)}}
+        status = {'MOUNT_STATUS': {'selected': self.mounting}, 'NVS_STATUS': {'used_entries': str(361 + self.filler)},
+                  'RPM_STATUS': {'min_rpm': self.min_rpm}}
         if self.bluetooth is not None:
             status['BLE_STATUS'] = {'started': self.bluetooth}
         return status
@@ -91,6 +97,14 @@ class Preflight(unittest.TestCase):
         self.assertEqual(off.sent, ['reset', 'nvsfill 0'])
         with self.assertRaises(RuntimeError):
             scenarios.preflight(rig(Unit('Top', 0, bluetooth='1', restarts=False)))
+
+    def test_min_rpm_at_its_default(self):
+        # A freshly flashed unit has Min RPM 4000 (0.21.0): the preflight sets 1000.
+        unit = Unit('Top', 0, min_rpm='4000')
+        found = scenarios.preflight(rig(unit))
+        self.assertEqual(unit.sent, ['reset', 'nvsfill 0', f'set {scenarios.MIN_RPM_ROW} {scenarios.MIN_RPM_OFF}', 'home'])
+        self.assertEqual((unit.min_rpm, found.get('min_rpm_was')), ('1000', '4000'))
+        self.assertEqual(scenarios.MIN_RPM_OFF * 500, 1000)
 
     def test_filler_that_stays(self):
         with self.assertRaises(RuntimeError):

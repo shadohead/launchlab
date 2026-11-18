@@ -93,8 +93,7 @@ public:
   // one the search has no prior, and it cannot end a spin being heard: the
   // page keeps what it shows until this one is heard.
   void launch(uint32_t number,bool valid,float rpm,uint64_t startUs,uint64_t endUs) {
-    if(!on() || !endUs)return;
-    if(!valid && job_.load()==Job::Following)return;
+    if(!MicSession::follows(on(),valid,job_.load()==Job::Following,startUs,endUs))return;
 #if LAUNCHLAB_HIL
     Hil::micTone.begin();
     if(lagUs_){delayed_={true,number,valid,rpm,startUs,endUs,esp_timer_get_time()+int64_t(lagUs_)};return;}

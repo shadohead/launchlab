@@ -21,12 +21,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from hil_device import Device  # noqa: E402
+import port_guard  # noqa: E402
 from rig import Rig  # noqa: E402
 import scenarios  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[3]
 DEFAULT = ['normal', 'hard', 'weak', 'back_to_back', 'rearm', 'history_save_pull', 'long_save_pull', 'adc_stall', 'frame_rows', 'power_log_pull', 'standby', 'sleep_blockers', 'imu_timeline',
-           'imu_faults', 'imu_faults_pull', 'imu_backlog', 'settings', 'about_page', 'battery_icon', 'bluetooth_off', 'ble_tap', 'bluetooth_storage', 'themes', 'milestones', 'request_burst', 'effect_set', 'nvs_tight',
+           'imu_faults', 'imu_faults_pull', 'imu_backlog', 'settings', 'about_page', 'battery_icon', 'min_rpm', 'bluetooth_off', 'ble_tap', 'battle', 'battle_air', 'bluetooth_storage', 'themes', 'milestones', 'request_burst', 'effect_set', 'nvs_tight', 'restore_partial', 'nvs_erased',
            'effect_times', 'effect_bench_fixed', 'loaded_store', 'songs', 'wear_check', 'mic_page', 'stray_bytes']
 # effect_stages needs a BEST_EFFECT_PROFILE build (!effectstages); run it by name on one.
 
@@ -82,17 +83,6 @@ def utc():
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')
 
 
-def usb_serial(port):
-    """The USB serial (an M5's MAC) list_ports gives for `port`, without opening it."""
-    try:
-        from serial.tools import list_ports
-    except ImportError:
-        return None
-    name = port.replace('/dev/tty.', '/dev/cu.')
-    return next((p.serial_number for p in list_ports.comports()
-                 if p.device.replace('/dev/tty.', '/dev/cu.') == name and p.serial_number), None)
-
-
 class Stopped(BaseException):
     """SIGTERM, e.g. release_gate.py stopping this rig after another rig's failure (not an
     Exception, so Rig.run does not record it as a failed scenario and carry on)."""
@@ -114,7 +104,9 @@ def main():
     p.add_argument('--build-dir', type=Path, default=REPO / 'firmware/build-m5-hil',
                    help='build of the flashed image; its build-info.json is recorded in run.json')
     p.add_argument('scenario', nargs='+', help=f"scenario names, or 'all': {', '.join(scenarios.SCENARIOS)}")
+    port_guard.add_arguments(p)
     a = p.parse_args()
+    port_guard.apply(a, a.port)
     names = DEFAULT if a.scenario == ['all'] else a.scenario
     unknown = [n for n in names if n not in scenarios.SCENARIOS]
     if unknown:
@@ -126,7 +118,7 @@ def main():
     commit, dirty = source()
     info = a.build_dir / 'build-info.json'
     run = {'tool': 'firmware/tools/hil/run_hil.py', 'scenarios': names, 'runtime': None, 'boot_id': None,
-           'rig': {'port': a.port, 'usb_serial': usb_serial(a.port)}, 'fail_fast': a.fail_fast, 'stopped': None,
+           'rig': {'port': a.port, 'usb_serial': port_guard.usb_serial(a.port)}, 'fail_fast': a.fail_fast, 'stopped': None,
            'source_commit': commit, 'source_dirty': dirty,
            'build_info': json.loads(info.read_text()) if info.exists() else None,
            'started_utc': utc(), 'finished_utc': None, 'completed': False, 'failed_checks': None}

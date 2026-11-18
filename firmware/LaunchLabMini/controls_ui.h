@@ -11,11 +11,11 @@
 #include "wipe_confirmation.h"
 
 namespace ControlsUI {
-static constexpr const char *MENU[]={"History","New session","Tournament","String wear check","Mic RPM","Device","Bluetooth","Settings","Back"};
+static constexpr const char *MENU[]={"History","New session","Tournament","Battles","String wear check","Analysis","Device","Bluetooth","Settings","Back"};
 static_assert(sizeof(MENU)/sizeof(MENU[0])==Controls::MENU_COUNT,"one label per menu row");
 static constexpr const char *HISTORY[]={"Launches","Pull trend","Session trend","Back"};
 // By Controls::Setting value; the list shows them in Controls::ORDER.
-static constexpr const char *SETTINGS[]={"Sleep after","RPM method","Brightness","Flip display","Sensor profile","Theme","Best effect","Celebrate","Sound","Mounting","Shake to wake","Wipe all","About","Battery icon","Bluetooth","Back"};
+static constexpr const char *SETTINGS[]={"Sleep after","RPM method","Brightness","Flip display","Sensor profile","Theme","Best effect","Celebrate","Sound","Mounting","Shake to wake","Wipe all","About","Battery icon","Bluetooth","Min RPM","Back"};
 static_assert(sizeof(SETTINGS)/sizeof(SETTINGS[0])==Controls::SETTING_COUNT+1,"one label per setting, then Back");
 // Set by the UI owner before rendering: the visible theme's colors, the
 // names the Theme row shows (custom themes; the built-in names otherwise),
@@ -40,11 +40,13 @@ inline void heading(lgfx::LGFXBase &g,const char *label) {
 inline void list(lgfx::LGFXBase &g,const char *title,const char *const *labels,unsigned count,unsigned selected,unsigned groups=0) {
   heading(g,title);
   int space=0;
+  // Eight rows close up to clear the footer; nine, in groups, further, and
+  // the Menu's ten (with Battles) to a row for each line of text.
+  const bool ten=count>9;
   for(unsigned i=0;i<count;++i) {
-    // Eight rows close up to clear the footer; the Menu's nine, in groups, further.
-    if((groups>>i)&1u)space+=5;
-    const int pitch=count>8?20:count>7?23:27,y=(count>8?30:42)+int(i)*pitch+space;
-    if(i==selected)g.drawRoundRect(4,y-(count>8?2:4),g.width()-8,count>8?20:25,4,colors.accent);
+    if((groups>>i)&1u)space+=ten?3:5;
+    const int pitch=ten?19:count>8?20:count>7?23:27,y=(ten?28:count>8?30:42)+int(i)*pitch+space;
+    if(i==selected)g.drawRoundRect(4,y-(count>8?2:4),g.width()-8,ten?19:count>8?20:25,4,colors.accent);
     g.setTextColor(i==selected?colors.accent:colors.text,colors.background);
     g.drawString(labels[i],g.width()/2,y,2);
   }
@@ -67,13 +69,17 @@ inline void value(char *out,unsigned length,unsigned setting,unsigned value) {
     case Controls::Setting::WipeAll:snprintf(out,length,"Erase device data");break;
     case Controls::Setting::About:snprintf(out,length,"Firmware %.*s",versionLength(runtime),runtime);break;
     case Controls::Setting::BatteryIcon:snprintf(out,length,"%s",value?"On":"Off");break;
+    case Controls::Setting::MinRpm:MinRpm::label(out,length,uint8_t(value));break;
   }
 }
 inline void settings(lgfx::LGFXBase &g,const Controls::State &state,const uint8_t *values) {
   heading(g,"Settings");char text[24];
-  // Pages of five rows (Controls::ORDER): general, appearance, then
-  // Mounting, Battery icon, Wipe all, About and Back.
-  const unsigned at=Controls::position(state.setting),first=at<5?0:at<10?5:10,last=std::min(first+4,Controls::ROWS);
+  // Pages of five rows (Controls::ORDER): general, appearance, then the
+  // unit's own six: Mounting, Flip display, Battery icon, Wipe all, About and
+  // Back, whose sixth row takes the space the "B Next" hint has on the others.
+  using Controls::PAGE_ROWS;using Controls::LAST_PAGE;
+  const unsigned at=Controls::position(state.setting),first=at<LAST_PAGE?at/PAGE_ROWS*PAGE_ROWS:LAST_PAGE,
+    last=first<LAST_PAGE?first+PAGE_ROWS-1:Controls::ROWS;
   for(unsigned p=first;p<=last;++p) {
     const unsigned i=Controls::rowAt(p);
     const int y=33+int(p-first)*31;
@@ -82,7 +88,7 @@ inline void settings(lgfx::LGFXBase &g,const Controls::State &state,const uint8_
     g.drawString(SETTINGS[i],g.width()/2,y,2);
     if(i<Controls::SETTING_COUNT){value(text,sizeof(text),i,values[i]);g.drawString(text,g.width()/2,y+18,1);}
   }
-  if(first<10){g.setTextColor(colors.muted,colors.background);g.drawString(first?"B Next: mounting":"B Next: appearance",g.width()/2,194,1);}
+  if(first<LAST_PAGE){g.setTextColor(colors.muted,colors.background);g.drawString(first?"B Next: mounting":"B Next: appearance",g.width()/2,194,1);}
   const bool opens=state.setting==unsigned(Controls::Setting::WipeAll) || state.setting==unsigned(Controls::Setting::About);
   footer(g,opens?"A Open  B Next":state.setting<Controls::SETTING_COUNT?"A Edit  B Next":"A Back  B Next");
 }
@@ -118,6 +124,11 @@ inline void editor(lgfx::LGFXBase &g,const Controls::State &state,bool failed,bo
       g.drawString(line,g.width()/2,154,1);
       g.drawString(mode==Milestones::Mode::Both?"and new bests":"Edit table online",g.width()/2,169,1);
     }
+  }
+  if(state.setting==unsigned(Controls::Setting::MinRpm)) {
+    g.setTextColor(colors.text,colors.background);
+    g.drawString("Slower pulls and",g.width()/2,154,1);
+    g.drawString("rewinds not saved",g.width()/2,169,1);
   }
   if(state.setting==unsigned(Controls::Setting::Mount)) {
     g.setTextColor(colors.text,colors.background);

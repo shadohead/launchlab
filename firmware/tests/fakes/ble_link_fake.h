@@ -19,6 +19,7 @@ inline bool takeBondsChanged(){return false;}
 inline void forget(){}
 inline void *bondPrefs=nullptr;
 inline const char *fullName(){return "LaunchLab-TEST";}
+inline char chosenName[17]="";
 template<class Prefs>inline bool saveBonds(Prefs &){return true;}
 template<class Prefs>inline bool saveName(Prefs &){return true;}
 template<class Prefs>inline void loadName(Prefs &){}
@@ -26,7 +27,8 @@ inline void publishLaunch(uint32_t,uint32_t,float){}
 inline void status(){}
 template<class Canvas>inline void drawIcon(Canvas &,uint16_t,uint16_t,uint16_t,uint16_t){}
 }
-namespace BattlePass {inline constexpr char NAME[]="BEYBLADE_TOOL01";}
+// The Battle Pass profile's packets are the real ones (no stack in them).
+#include "ble_battle_pass.h"
 namespace BattlePassFeed {inline void tick(uint32_t){}inline void launched(){}inline void tickButton(bool,bool){}}
 namespace BleCommands {
 inline int32_t run(uint8_t,const uint8_t *,size_t,uint8_t *,size_t){return -4;}

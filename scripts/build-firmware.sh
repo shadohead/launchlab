@@ -96,6 +96,8 @@ build() {
   python3 tools/check_stack_usage.py "$PWD/$dir"
   # Static internal RAM taken before boot: too much leaves the ADC's DMA without memory.
   python3 tools/check_static_ram.py "$PWD/$dir"
+  # A wrapped function must start at its first instruction (LaunchLabMini/src/link_wraps/link_wraps.cpp).
+  python3 tools/check_link_wraps.py "$PWD/$dir" "$radio_cal_link${link:+ $link}"
   [[ $(python3 ../scripts/firmware_tests.py --fingerprint) == "$tree" ]] || {
     echo "The source changed during the build; build again." >&2
     exit 1
@@ -105,8 +107,9 @@ build() {
 
 build build ''
 if [[ $hil == 1 ]]; then
-  # Preferences' NVS setters are wrapped so tests can force failed or slow writes.
-  build build-hil '-DLAUNCHLAB_HIL=1' '-Wl,--wrap=nvs_set_blob -Wl,--wrap=nvs_set_u8 -Wl,--wrap=nvs_set_u32'
+  # Preferences' NVS setters are wrapped so tests can force failed or slow writes,
+  # and its blob reads so a write can land without reading back.
+  build build-hil '-DLAUNCHLAB_HIL=1' '-Wl,--wrap=nvs_set_blob -Wl,--wrap=nvs_set_u8 -Wl,--wrap=nvs_set_u32 -Wl,--wrap=nvs_get_blob'
   # The internal RAM the HIL image takes beyond production's, for the songs scenario's heap floor.
   python3 tools/hil_overhead.py build-hil build
 fi

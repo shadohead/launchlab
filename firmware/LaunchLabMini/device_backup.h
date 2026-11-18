@@ -15,6 +15,7 @@
 #include "rpm_estimator.h"
 #include "sensor_profile.h"
 #include "mount_orientation.h"
+#include "min_rpm.h"
 #include "theme_library.h"
 #include "fx_effect.h"
 
@@ -66,6 +67,11 @@ struct UserSettings {
   // 0.20.8: byte 7, 1 for Battery icon Off, the same way (On by default,
   // Controls::BATTERY_ICON_DEFAULT).
   bool batteryIcon=true;
+  // 0.21.0: Min RPM's step count (min_rpm.h) in a ninth byte, present only
+  // when it is not the 4,000 rpm default: a backup with the default is byte
+  // for byte as before, and firmware before 0.21.0 refuses one without it
+  // (the section's length) before writing anything.
+  uint8_t minRpmSteps=MinRpm::DEFAULT_STEPS;
 };
 
 struct Contents {
@@ -101,8 +107,8 @@ struct Contents {
   }
 };
 
-constexpr unsigned SETTINGS_BYTES=8;
-constexpr unsigned MAX_BYTES=HEADER_BYTES+6*8+PracticeHistory::IMAGE_BYTES+16+32+LaunchMotion::IMAGE_BYTES+SETTINGS_BYTES+
+constexpr unsigned SETTINGS_BYTES=8,MIN_RPM_SETTINGS_BYTES=SETTINGS_BYTES+1;
+constexpr unsigned MAX_BYTES=HEADER_BYTES+6*8+PracticeHistory::IMAGE_BYTES+16+32+LaunchMotion::IMAGE_BYTES+MIN_RPM_SETTINGS_BYTES+
   Themes::Library::IMAGE_BYTES+8+Milestones::Config::IMAGE_BYTES+8+EffectSet::Config::IMAGE_BYTES+4;
 using Buffer=std::array<uint8_t,MAX_BYTES>;
 // With every slot full: the largest format 7 backup, and its base64 (a
@@ -137,9 +143,10 @@ inline size_t encode(const Contents &c,const char *runtime,uint8_t *out,size_t c
   Appearance::Config::Image look;c.look.encode(look);section(Look,look.data(),look.size());
   Appearance::Bests::Image bests;c.bests.encode(bests);section(Bests,bests.data(),bests.size());
   if(c.hasMotion && c.motion.valid()){LaunchMotion::encode(c.motion,1,*motion);section(Motion,motion->data(),motion->size());}
-  const uint8_t settings[SETTINGS_BYTES]={c.settings.sleepMinutes,c.settings.brightness,uint8_t(c.settings.rpmMethod),
-    uint8_t(c.settings.sensorProfile),uint8_t(c.settings.flipped),uint8_t(c.settings.mount),uint8_t(!c.settings.shakeWake),uint8_t(!c.settings.batteryIcon)};
-  section(Settings,settings,sizeof(settings));
+  const uint8_t settings[MIN_RPM_SETTINGS_BYTES]={c.settings.sleepMinutes,c.settings.brightness,uint8_t(c.settings.rpmMethod),
+    uint8_t(c.settings.sensorProfile),uint8_t(c.settings.flipped),uint8_t(c.settings.mount),uint8_t(!c.settings.shakeWake),uint8_t(!c.settings.batteryIcon),
+    c.settings.minRpmSteps};
+  section(Settings,settings,c.settings.minRpmSteps==MinRpm::DEFAULT_STEPS?SETTINGS_BYTES:MIN_RPM_SETTINGS_BYTES);
   const uint32_t format=c.format();
   if(c.themesSection()){Themes::Library::Image themes;c.themes.encode(themes);section(CustomThemes,themes.data(),themes.size());}
   if(format==MILESTONES_FORMAT){Milestones::Config::V1Image table;c.milestones.encodeV1(table);section(MilestoneTable,table.data(),table.size());}
@@ -233,14 +240,15 @@ inline bool decode(const uint8_t *data,size_t n,Contents &out) {
         // zero (Top); older firmware rejects Sidecar before writing anything.
         // The next carries Shake to wake Off (0.20.2), the same way, and the
         // last Battery icon Off (0.20.8). Bluetooth is not in backups: a restore
-        // never turns a radio on or off.
-        if(length!=SETTINGS_BYTES || body[6]>1 || body[7]>1)break;
+        // never turns a radio on or off. A ninth byte is Min RPM (0.21.0).
+        if((length!=SETTINGS_BYTES && length!=MIN_RPM_SETTINGS_BYTES) || body[6]>1 || body[7]>1 ||
+           (length==MIN_RPM_SETTINGS_BYTES && !MinRpm::valid(body[8])))break;
         auto &s=c->settings;
         ok=InactivityTimer::validMinutes(body[0]) && Brightness::valid(body[1]) &&
           RpmEstimator::valid(body[2]) && StickS3SensorProfile::valid(body[3]) && body[4]<=1 && MountOrientation::valid(body[5]);
         if(ok){s.sleepMinutes=body[0];s.brightness=body[1];s.rpmMethod=RpmEstimator::Mode(body[2]);
           s.sensorProfile=StickS3SensorProfile::Mode(body[3]);s.flipped=body[4];s.mount=MountOrientation::Mode(body[5]);s.shakeWake=!body[6];
-          s.batteryIcon=!body[7];}
+          s.batteryIcon=!body[7];s.minRpmSteps=length==MIN_RPM_SETTINGS_BYTES?body[8]:MinRpm::DEFAULT_STEPS;}
         break;
       }
     }
@@ -278,6 +286,16 @@ template<class Line> void base64Lines(const uint8_t *data,size_t n,unsigned widt
     if(used>=width || i+3>=n){text[used]=0;line(text);used=0;}
   }
 }
+// The whole base64 text of data in out, one string for a `data=` field (each
+// base64Lines line is only part of it). capacity counts the terminator; false,
+// with out empty, when the text does not fit.
+inline bool base64Text(const uint8_t *data,size_t n,char *out,size_t capacity) {
+  if(!capacity)return false;
+  out[0]=0;
+  if((n+2)/3*4>=capacity)return false;
+  size_t used=0;base64Lines(data,n,96,[&](const char *line){const size_t k=strlen(line);memcpy(out+used,line,k);used+=k;});
+  out[used]=0;return true;
+}
 inline bool base64Decode(const char *text,size_t n,uint8_t *out,size_t capacity,size_t &written) {
   written=0;
   if(n%4)return false;
@@ -307,6 +325,8 @@ public:
   void cancel(){active_=false;}
   bool active()const{return active_;}
   bool timedOut(uint32_t now)const{return active_ && uint32_t(now-last_)>=IDLE_MS;}
+  // Inside a line (or a "." line without its newline): its rest may still come.
+  bool midLine()const{return line_ || dot_;}
   unsigned received()const{return length_;}
   const char *error()const{return error_;}
   Event feed(char c,uint32_t now) {
@@ -344,6 +364,8 @@ public:
   void cancel(){active_=false;}
   bool active()const{return active_;}
   bool timedOut(uint32_t now)const{return active_ && uint32_t(now-last_)>=IDLE_MS;}
+  // Inside a line (or a "." line without its newline): its rest may still come.
+  bool midLine()const{return line_ || dot_;}
   size_t received()const{return length_;}
   const char *error()const{return error_;}
   Event feed(char c,uint32_t now) {

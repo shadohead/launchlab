@@ -66,6 +66,9 @@ static volatile size_t commandLength=0;
 static size_t replyLength=0,replySent=0;
 static uint8_t replyOp=0,replySeq=0,replyFlags=0;
 static bool replying=false,advertising=false;
+// A battle frame is being told (battle_radio.h): it has the stack's one
+// advertisement, also while a phone is connected.
+static bool battleBeacon=false;
 static uint32_t lastAdvertiseTry=0,lastFrame=0,notifies=0,startedAt=0;
 static size_t heapBefore=0,heapAfter=0;
 static State shown=State::Off;
@@ -436,7 +439,8 @@ inline bool tick(uint32_t now,bool enabled,bool busy) {
     if(!linkUp)passOffAt=0;
     else if(passOffAt && passOutbox.empty() && int32_t(now-passOffAt)>=0){passOffAt=0;server->disconnect(server->getConnId());}
     // One phone at a time; the stack would otherwise accept a second link.
-    if(linkUp && ble_gap_adv_active())BLEDevice::getAdvertising()->stop();
+    // A battle frame cannot be connected to, and stays.
+    if(linkUp && ble_gap_adv_active() && !battleBeacon)BLEDevice::getAdvertising()->stop();
   }
   // What the profiles send, to a phone on the radio link or to the rig's tap.
   const bool link=(started && enabled && linkUp) || tapped();

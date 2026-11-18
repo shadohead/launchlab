@@ -12,7 +12,7 @@ import os
 import pathlib
 import subprocess
 import tempfile
-from history_log_glue import HELPERS, glue
+from history_log_glue import glue
 
 parser = argparse.ArgumentParser()
 parser.add_argument('firmware', nargs='?', type=pathlib.Path,
@@ -50,7 +50,12 @@ def block(prefix):
 
 def shutdown_flush():
     enum = source.index('enum class ShutdownFlush')
-    return source[enum:source.index('};', enum) + 2] + '\n' + body(source.index('static ShutdownFlush flushForShutdown('))
+    return source[enum:source.index('};', source.index('enum class ShutdownWhy')) + 2] + '\n' + body(source.index('static ShutdownFlush flushForShutdown('))
+
+
+def boot_from():
+    start = source.index('static struct {HistoryLog::Source history')
+    return source[start:source.index('} bootFrom;', start) + len('} bootFrom;')]
 
 
 prefix = r'''
@@ -77,8 +82,10 @@ static bool calibrationNeedsSave(){return !calibrationWritable;}
 #include "display_flip_setting.h"
 #include "bluetooth_setting.h"
 #include "ble_link_fake.h"
+#include "battles_setting.h"
 #include "shake_wake_setting.h"
 #include "battery_icon_setting.h"
+#include "min_rpm_setting.h"
 #include "display_orientation.h"
 #include "sensor_profile_setting.h"
 #include "start_mark_reference.h"
@@ -94,6 +101,7 @@ static bool calibrationNeedsSave(){return !calibrationWritable;}
 #define LOOP_HELPER
 using Action=StickS3Acquisition::Action;using Snapshot=StickS3Acquisition::Snapshot;using D=AnalogTachometer;
 static StickS3Acquisition acquisition;static std::array<uint16_t,4096> storage{};
+static ShutdownSaveGuard shutdownSaves;
 // Fault injection for the owner's reply path: a reply that never reaches the
 // UI (its request times out after 2 s) or a command that is never executed.
 static bool dropReplies=false,dropCommands=false;
@@ -130,10 +138,12 @@ static uint8_t stored(const char *key){uint8_t value=0;assert(prefs.getBytes(key
 struct {struct {unsigned brightness=0,rotation=0;void setBrightness(unsigned v){brightness=v;}void setRotation(unsigned v){rotation=v;}}Display;}M5;
 static Controls::State controls;static SettingsSave settingsSave;
 static bool motionPending=false,settingsSaveError=false,restorePreview=false,displayFlipped=false,dirty=false,extPower=false,shakeToWake=ShakeWakeSetting::DEFAULT_ON,
-  batteryIcon=BatteryIconSetting::DEFAULT_ON,bluetoothOn=BluetoothSetting::DEFAULT_ON;
+  batteryIcon=BatteryIconSetting::DEFAULT_ON,bluetoothOn=BluetoothSetting::DEFAULT_ON,battlesOn=BattlesSetting::DEFAULT_ON;
+static uint8_t battleMatchTo=Battle::MATCH_SHORT;
 static uint32_t passConfirmed=0;static constexpr const char *PASS_CONFIRMED_KEY="bp_confirmed";
 static bool saveError=false,wipeCheckpointHeld=false,orphanSeen=false;
 static uint8_t brightnessPercent=Brightness::DEFAULT_PERCENT;static uint32_t orphanSince=0;
+static uint8_t minRpmSteps=MinRpm::DEFAULT_STEPS;
 static constexpr uint32_t ORPHAN_CHECKPOINT_MS=1000,HISTORY_COALESCE_MS=10000,HISTORY_SAVE_RETRY_MS=5000;
 static uint32_t lastSaveTry=0,saveCount=0,saveErrors=0,maxSaveUs=0,lastAcceptedAt=0,historyPendingSince=0;
 static HistoryCheckpoint::Stillness imuStill{true,0}; // launcher set down
@@ -157,7 +167,11 @@ static EffectSet::Config effectSet;static AppearanceStore<EffectSet::Config> eff
 static Appearance::Effect upcomingEffect=Appearance::Effect::Off;
 static unsigned freeEntries=158;static bool nvsAvailable(unsigned &available){available=freeEntries;return true;}
 static void cancelSettingEdit(){if(controls.page==Controls::Page::Edit)controls.page=Controls::Page::Settings;}
-static void prepareMotion(const Snapshot&){lastAcceptedAt=millis();}static void logLaunchMetrics(const Snapshot&){}
+static void prepareMotion(const Snapshot&,bool=true){lastAcceptedAt=millis();}static void logLaunchMetrics(const Snapshot&){}
+// What the shared launch event handler (routeEvent) reads besides the above.
+static struct {void launch(uint32_t,bool,float,uint64_t,uint64_t){}}micListener;
+template<class E> static void followAnalysisLaunch(const E &e){micListener.launch(e.launches,e.valid,e.resultRpm,e.burstStartHostUs,e.burstEndHostUs);}  // Analysis closed
+static uint32_t lastRevision=0,lastBelowMin=0;static AnalogTachometer::Phase lastPhase=AnalogTachometer::Phase::Paused;static bool lastFault=false;
 '''
 
 tests = r'''
@@ -182,6 +196,7 @@ static void pass(int value=1000) {
     if(practice.accept(event.launches,event.valid,event.resultRpm,millis())){lastAcceptedAt=millis();if(!historyPendingSince)historyPendingSince=lastAcceptedAt;}
   const uint32_t now=millis();Snapshot s=acquisition.snapshot();
   saveHistory(now,s);s=acquisition.snapshot();
+  saveRivals(now,s);
   saveSettings(now,s);s=acquisition.snapshot();
   releaseOrphanCheckpoint(now,s);
   optical(5000,value);
@@ -200,7 +215,8 @@ static void boot() {
   assert(acquisition.initAdc());ownerPump=pump;acquisition.setRequestHook(quietImuForFlash);
   dropReplies=dropCommands=false;imuAcquisition={};controls={};settingsSave={};
   motionPending=settingsSaveError=restorePreview=displayFlipped=dirty=extPower=saveError=wipeCheckpointHeld=orphanSeen=false;shakeToWake=ShakeWakeSetting::DEFAULT_ON;
-  batteryIcon=BatteryIconSetting::DEFAULT_ON;bluetoothOn=BluetoothSetting::DEFAULT_ON;
+  batteryIcon=BatteryIconSetting::DEFAULT_ON;bluetoothOn=BluetoothSetting::DEFAULT_ON;battlesOn=BattlesSetting::DEFAULT_ON;battleMatchTo=Battle::MATCH_SHORT;minRpmSteps=MinRpm::DEFAULT_STEPS;
+  rivals={};loggedRivals=0;
   brightnessPercent=Brightness::DEFAULT_PERCENT;orphanSince=lastSaveTry=saveCount=saveErrors=maxSaveUs=lastAcceptedAt=historyPendingSince=0;
   inactivity={};launchFeedback={};practice={};appearance={};personalBests={};
   rpmEstimator=RpmEstimator::DEFAULT_MODE;sensorProfile=StickS3SensorProfile::DEFAULT_MODE;
@@ -259,6 +275,17 @@ static void batteryIconSave() {
   assert(!SettingsSave::item(unsigned(S::WipeAll)) && !SettingsSave::item(unsigned(S::About)));
   freeEntries=158;
   std::cout<<"PASS: Battery icon applies at once and saves its own key in the next checkpoint, never held back by the NVS reserve\n";
+}
+// Min RPM (0.21.0): Apply takes the new floor at once and its own key follows
+// in the next checkpoint; an out-of-range value is refused and saves nothing.
+static void minRpmSave() {
+  using S=Controls::Setting;
+  boot();freeEntries=0;apply(unsigned(S::MinRpm),12);
+  assert(minRpmSteps==12 && SettingsSave::item(unsigned(S::MinRpm))==SettingsSave::MinRpm && SettingsSave::MinRpm>0xffff);
+  passes(1000);assert(!settingsSave.pending() && stored(MinRpmSetting::KEY)==12 && running());
+  apply(unsigned(S::MinRpm),MinRpm::MAX_STEPS+1);assert(settingsSaveError && minRpmSteps==12 && !settingsSave.pending());
+  freeEntries=158;
+  std::cout<<"PASS: Min RPM applies at once and saves its own key in the next checkpoint, never held back by the NVS reserve\n";
 }
 
 static void imuVeto() {
@@ -321,7 +348,7 @@ static void usbDeviceSettings() {
 static void shutdownFlush() {
   boot();calibrationWritable=false;settingsSave.mark(SettingsSave::AnalysisResult);
   passes(1700);assert(settingsSave.failed() && settingsSave.pending()==SettingsSave::AnalysisResult);
-  assert(flushForShutdown(millis(),snap())==ShutdownFlush::SaveFailed && running());
+  assert(flushForShutdown(millis(),snap(),ShutdownWhy::SideKey)==ShutdownFlush::SaveFailed && running());
   calibrationWritable=true;passes(SettingsSave::FAILED_RETRY_MS+100);
   assert(!settingsSave.pending() && running());
 
@@ -331,13 +358,13 @@ static void shutdownFlush() {
   boot();imuAcquisition.veto=true;apply(2,70);apply(unsigned(Controls::Setting::Mount),uint8_t(MountOrientation::Mode::Sidecar));
   const auto other=RpmEstimator::next(RpmEstimator::DEFAULT_MODE);apply(1,uint8_t(other));
   assert(settingsSave.pending()==(SettingsSave::Brightness|SettingsSave::Mount|SettingsSave::Rpm));imuAcquisition.veto=false;
-  assert(flushForShutdown(millis(),snap())==ShutdownFlush::Ready);
+  assert(flushForShutdown(millis(),snap(),ShutdownWhy::SideKey)==ShutdownFlush::Ready);
   assert(!settingsSave.pending() && stored("bright_pct")==70 && liveMount==MountOrientation::Mode::Sidecar && imuAcquisition.mode==liveMount);
   MountOrientation::Mode mount;assert(MountOrientationSetting::load(prefs,mount) && mount==MountOrientation::Mode::Sidecar);
   RpmEstimator::Mode metric;assert(RpmEstimatorSetting::load(prefs,metric) && metric==other);
   assert(acquisition.request(Action::CheckpointEnd) && running() && snap().estimator==other);
   boot();imuAcquisition.veto=true;apply(2,70);imuAcquisition.veto=false;Preferences::failWrite=true;
-  assert(flushForShutdown(millis(),snap())==ShutdownFlush::Ready && settingsSave.failed());
+  assert(flushForShutdown(millis(),snap(),ShutdownWhy::SideKey)==ShutdownFlush::Ready && settingsSave.failed());
   Preferences::failWrite=false;assert(acquisition.request(Action::CheckpointEnd));
   passes(SettingsSave::FAILED_RETRY_MS+10);assert(!settingsSave.pending() && stored("bright_pct")==70);
   std::cout<<"PASS: shutdown writes pending settings in its own checkpoint; a settings write failure never blocks power-off\n";
@@ -351,18 +378,18 @@ static void startMarkSaves() {
   auto pulls=[](std::initializer_list<float> marks){
     for(float m:marks){Snapshot e;e.valid=true;e.startMark=m;e.sensorProfile=sensorProfile;noteStartMark(e);}};
   boot();pulls({1000,1010,990});assert(startMarksDirty);
-  assert(flushForShutdown(millis(),snap())==ShutdownFlush::Ready && !startMarksDirty && prefs.isKey("start_marks"));
+  assert(flushForShutdown(millis(),snap(),ShutdownWhy::SideKey)==ShutdownFlush::Ready && !startMarksDirty && prefs.isKey("start_marks"));
   StartMarkReference::Image image;assert(prefs.getBytes("start_marks",image,sizeof(image))==sizeof(image));
   StartMarkReference::Reference back;assert(back.decode(image,sizeof(image)) && back.count==3 && back.floor(80)==400);
   assert(acquisition.request(Action::CheckpointEnd));
   // A sensor profile change removes it, with the setting.
   apply(unsigned(Controls::Setting::Sensor),uint8_t(StickS3SensorProfile::Mode::Tcrt));
-  assert(flushForShutdown(millis(),snap())==ShutdownFlush::Ready && !prefs.isKey("start_marks"));
+  assert(flushForShutdown(millis(),snap(),ShutdownWhy::SideKey)==ShutdownFlush::Ready && !prefs.isKey("start_marks"));
   assert(startMarks.count==0 && startMarks.profile==uint8_t(StickS3SensorProfile::Mode::Tcrt));
   assert(acquisition.request(Action::CheckpointEnd));
   // Without the reserve a first save is refused and kept for the next power-off; power-off goes ahead.
   boot();pulls({1000,1010,990});freeEntries=NvsBudget::blobEntries(PracticeHistory::IMAGE_BYTES)+NvsBudget::RESERVE_ENTRIES;
-  assert(flushForShutdown(millis(),snap())==ShutdownFlush::Ready && startMarksDirty && !prefs.isKey("start_marks"));
+  assert(flushForShutdown(millis(),snap(),ShutdownWhy::SideKey)==ShutdownFlush::Ready && startMarksDirty && !prefs.isKey("start_marks"));
   freeEntries=158;assert(acquisition.request(Action::CheckpointEnd));
   std::cout<<"PASS: the start-mark reference saves in the shutdown checkpoint within the NVS reserve, and a profile change removes it\n";
 }
@@ -749,11 +776,76 @@ static void historyLogSaves() {
    assert(again.loadHistory(back,mirrored) && back.size()==1 && mirrored==practiceStore.savedGeneration());
    Appearance::Bests bests;assert(again.loadBests(bests,mirrored) && bests.generation()==personalBests.generation());}
   // Power-off writes the NVS mirror.
-  assert(practiceStore.pending(practice) && flushForShutdown(millis(),snap())==ShutdownFlush::Ready);
+  assert(practiceStore.pending(practice) && flushForShutdown(millis(),snap(),ShutdownWhy::SideKey)==ShutdownFlush::Ready);
   assert(!practiceStore.pending(practice) && imuAcquisition.windows==windows+1);
   assert(acquisition.request(StickS3Acquisition::Action::CheckpointEnd));
   historyLog=Log{};  // closed again
   std::cout<<"PASS: with the history log open, a coalesced save writes the log only, the ADC sampling throughout (no checkpoint, no NVS); power-off writes the NVS mirror\n";
+}
+
+// The battle records are saved to the history log alone, in a pause
+// after the pull, with the ADC sampling throughout: no checkpoint, no IMU
+// quiet window, no NVS write. A write the log refuses is tried again later,
+// and power-off saves what is unsaved without ever waiting for it. With the
+// log closed they are not saved at all, and nothing fails or waits.
+static void battleRecordSaves() {
+  using Log=HistoryLog::Store<NorFlash>;
+  const uint32_t rival=0x22220002;
+  boot();spiffsFlash=NorFlash{};historyLog=Log{};assert(historyLog.open(spiffsFlash)==Log::Log::Open::Formatted);
+  pull();passes(1700);assert(practice.size()==1);
+  loggedHistory=practice.generation();loggedBests=personalBests.generation();  // the pull itself is in the log
+  const auto nvs=Preferences::data;const unsigned windows=imuAcquisition.windows,writes=guardedWrites,programs=spiffsFlash.writes,erases=spiffsFlash.erases;
+  // A launch made together, three seconds into the battle: the record changes.
+  rivals.begin(rival,1,2,6420,5980);assert(rivalsUnsaved());
+  // Not while its capture runs, however long that takes.
+  motionPending=true;passes(HistoryCheckpoint::AGED_QUIET_MS+1000);assert(rivalsUnsaved() && spiffsFlash.writes==programs);
+  motionPending=false;
+  for(unsigned t=0;t<1000 && rivalsUnsaved();t+=5){passes(5);assert(running() && !acquisition.checkpoint_);}
+  assert(!rivalsUnsaved() && spiffsFlash.writes>programs && spiffsFlash.erases==erases);
+  assert(imuAcquisition.windows==windows && guardedWrites==writes && Preferences::data==nvs && running());
+  // Not in the first seconds after a pull either: the next one may follow.
+  pull();passes(1700);loggedHistory=practice.generation();loggedBests=personalBests.generation();
+  rivals.begin(rival,3,4,6100,6000);assert(rivals.claim(rival,Battle::Outcome::Won,Battle::Finish::Xtreme));
+  const unsigned before=spiffsFlash.writes;
+  passes(HistoryCheckpoint::AGED_QUIET_MS-1700-100);assert(rivalsUnsaved() && spiffsFlash.writes==before);
+  passes(300);assert(!rivalsUnsaved());
+  // After a reboot the log has it.
+  {Log again;assert(again.open(spiffsFlash)==Log::Log::Open::Ready);Battle::Book back;
+   assert(again.loadRivals(back) && back.count()==1 && back.find(rival)->wins==1 && back.find(rival)->pointsFor==3 && back.find(rival)->duels==2);}
+  // A write the flash refuses: the record stays unsaved, and is tried again
+  // only after the failure pause, not on every pass.
+  assert(rivals.claim(rival,Battle::Outcome::Won,Battle::Finish::Spin));
+  spiffsFlash.dead=true;passes(200);assert(rivalsUnsaved() && running());
+  spiffsFlash.restore();passes(HISTORY_SAVE_RETRY_MS-1000);assert(rivalsUnsaved());
+  passes(1500);assert(!rivalsUnsaved());
+  // Power-off saves an unsaved record on its way, and a refused one does not keep the unit on.
+  assert(rivals.claim(rival,Battle::Outcome::Lost,Battle::Finish::Over) && rivalsUnsaved());
+  assert(flushForShutdown(millis(),snap(),ShutdownWhy::SideKey)==ShutdownFlush::Ready && !rivalsUnsaved());
+  assert(acquisition.request(StickS3Acquisition::Action::CheckpointEnd) && running());
+  {Log again;assert(again.open(spiffsFlash)==Log::Log::Open::Ready);Battle::Book back;
+   assert(again.loadRivals(back) && back.find(rival)->losses==1 && !back.find(rival)->wins);}
+  assert(rivals.claim(rival,Battle::Outcome::Won,Battle::Finish::Burst));
+  spiffsFlash.dead=true;
+  assert(flushForShutdown(millis(),snap(),ShutdownWhy::SideKey)==ShutdownFlush::Ready && rivalsUnsaved() && !saveError);
+  spiffsFlash.restore();assert(acquisition.request(StickS3Acquisition::Action::CheckpointEnd) && running());
+  // With the log closed (another layout in its partition): nothing is unsaved, written or waited for.
+  historyLog=Log{};
+  const unsigned closedWrites=spiffsFlash.writes;const auto closedNvs=Preferences::data;
+  rivals.begin(rival,5,6,6000,6000);assert(!rivalsUnsaved());
+  passes(HistoryCheckpoint::AGED_QUIET_MS+2000);
+  assert(spiffsFlash.writes==closedWrites && Preferences::data==closedNvs && running());
+  assert(flushForShutdown(millis(),snap(),ShutdownWhy::SideKey)==ShutdownFlush::Ready);
+  assert(acquisition.request(StickS3Acquisition::Action::CheckpointEnd) && running());
+  // Auto battles is a setting like the others: saved in a checkpoint, read back at boot.
+  boot();battlesOn=false;settingsSave.mark(SettingsSave::Battles);
+  passes(1000);assert(!settingsSave.pending() && stored(BattlesSetting::KEY)==0 && running());
+  {bool on=true;uint8_t to=0;assert(BattlesSetting::load(prefs,on,to) && !on && to==Battle::MATCH_SHORT);}
+  // The match length shares the byte, saved the same way.
+  battleMatchTo=Battle::MATCH_LONG;settingsSave.mark(SettingsSave::Battles);
+  passes(1000);assert(!settingsSave.pending() && stored(BattlesSetting::KEY)==BattlesSetting::LONG_MATCH && running());
+  {bool on=true;uint8_t to=0;assert(BattlesSetting::load(prefs,on,to) && !on && to==Battle::MATCH_LONG);}
+  std::cout<<"PASS: battle records go to the history log alone, in a pause after the pull with the ADC sampling throughout (no checkpoint, no NVS); "
+             "a refused write is retried and never holds up power-off; with the log closed nothing is saved or waited for\n";
 }
 
 // With the history log open, NVS holds a copy of what the log holds. A copy
@@ -770,22 +862,159 @@ static void historyLogNvsRefused() {
     pull();passes(1700);assert(practice.size()==1 && historyUnsaved());
     if(coalesced){for(unsigned t=0;t<HISTORY_COALESCE_MS+1000;t+=50)passes(50);assert(!historyUnsaved());}
     Preferences::failWrite=true;
-    const auto flushed=flushForShutdown(millis(),snap());
+    const auto flushed=flushForShutdown(millis(),snap(),ShutdownWhy::Restart);
     Preferences::failWrite=false;
     if(flushed!=ShutdownFlush::Ready)std::cout<<"a refused NVS copy kept the unit awake\n";
     assert(flushed==ShutdownFlush::Ready && practiceStore.pending(practice) && !historyUnsaved() && !bestsUnsaved() && !saveError);
     assert(acquisition.request(StickS3Acquisition::Action::CheckpointEnd) && running());
     {Log again;assert(again.open(spiffsFlash)==Log::Log::Open::Ready);PracticeHistory back;uint32_t mirrored=0;
      assert(again.loadHistory(back,mirrored) && back.size()==1);
-     PracticeHistory nvs;PracticeStore reader;const bool inNvs=reader.begin(nvs) && reader.found();
+     PracticeHistory nvs;PracticeStore reader;const bool opened=reader.begin(nvs);
+     const auto inNvs=reader.found()?HistoryLog::Nvs::Found:opened?HistoryLog::Nvs::Absent:HistoryLog::Nvs::Unreadable;
      assert(HistoryLog::pick(true,mirrored,inNvs,reader.savedGeneration())==HistoryLog::Source::Log);}
     historyLog=Log{};  // closed again
   }
-  boot();pull();passes(1700);assert(practiceStore.pending(practice));
+  // With the log closed NVS is the only store. A Bluetooth restart
+  // (ShutdownWhy::Restart) never goes ahead over a refused save; a sleep or power-off is
+  // held back ShutdownSaveGuard::LIMIT times in a row, then goes ahead with
+  // sampling stopped and the pull still pending (lost, as on a flat battery).
+  boot();shutdownSaves={};pull();passes(1700);assert(practiceStore.pending(practice));
   Preferences::failWrite=true;
-  assert(flushForShutdown(millis(),snap())==ShutdownFlush::SaveFailed && saveError && running());
+  for(unsigned n=0;n<2*ShutdownSaveGuard::LIMIT;++n)
+    assert(flushForShutdown(millis(),snap(),ShutdownWhy::Restart)==ShutdownFlush::SaveFailed && saveError && running() && !shutdownSaves.refusals());
+  for(unsigned n=1;n<ShutdownSaveGuard::LIMIT;++n) {
+    assert(flushForShutdown(millis(),snap(),ShutdownWhy::Sleep)==ShutdownFlush::SaveFailed && saveError && running());
+    assert(shutdownSaves.refusals()==n);
+  }
+  const auto unsaved=flushForShutdown(millis(),snap(),ShutdownWhy::Sleep);
+  if(unsaved!=ShutdownFlush::Ready)std::cout<<"a refused save with the log closed kept the unit awake\n";
+  assert(unsaved==ShutdownFlush::Ready && practiceStore.pending(practice) && saveError && !running());
+  assert(acquisition.request(StickS3Acquisition::Action::CheckpointEnd) && running());
+  // Still refusing after the unit stayed on (USB at the last moment): it goes ahead at once.
+  assert(flushForShutdown(millis(),snap(),ShutdownWhy::Sleep)==ShutdownFlush::Ready && practiceStore.pending(practice));
+  assert(acquisition.request(StickS3Acquisition::Action::CheckpointEnd));
+  // A power-off flush that saves starts the count again.
   Preferences::failWrite=false;
-  std::cout<<"PASS: with the history log open, an NVS copy refused at power-off no longer keeps the unit on (the log holds the pull, written first if behind); with the log closed it still does\n";
+  assert(flushForShutdown(millis(),snap(),ShutdownWhy::Sleep)==ShutdownFlush::Ready && !practiceStore.pending(practice) && !saveError);
+  assert(!shutdownSaves.refusals() && acquisition.request(StickS3Acquisition::Action::CheckpointEnd));
+  std::cout<<"PASS: with the history log open, an NVS copy refused at power-off no longer keeps the unit on (the log holds the pull, written first if behind); "
+             "with the log closed a refusal holds a sleep or power-off back "<<unsigned(ShutdownSaveGuard::LIMIT)<<" times in a row, then it goes ahead unsaved, and never a Bluetooth restart\n";
+}
+
+// A restart of the sketch's stores and log over what NVS and the history
+// log hold (boot() starts from blank NVS), through the sketch's own boot
+// choice (pickLoggedBests, pickLoggedHistory).
+// NVS without a namespace (Preferences::spaces empty) is virgin: the log is
+// opened and its records disowned before any store opens one, as setup() does.
+static void restartKeepingStorage() {
+  using Log=HistoryLog::Store<NorFlash>;
+  const auto nvs=Preferences::data;const auto spaces=Preferences::spaces;boot();Preferences::data=nvs;Preferences::spaces=spaces;
+  historyLog=Log{};assert(historyLog.open(spiffsFlash)==Log::Log::Open::Ready);
+  disownLostNvs(Preferences::spaces.empty());
+  practice={};personalBests={};practiceStore=PracticeStore{};bestStore={};
+  saveError=!practiceStore.begin(practice);
+  const bool bestsInNvs=bestStore.begin(personalBests,"ll-bests","best0","best1") && bestStore.present();
+  pickLoggedBests(bestsInNvs);pickLoggedHistory();
+}
+// The Arduino core at boot after NO_FREE_PAGES or NEW_VERSION_FOUND: the whole partition erased.
+static void coreErase(){Preferences::data.clear();Preferences::spaces.clear();}
+static void eraseSpace(const char *space) {
+  for(auto i=Preferences::data.begin();i!=Preferences::data.end();)i=i->first.rfind(space,0)==0?Preferences::data.erase(i):std::next(i);
+}
+static void loggedSession(float rpm) {
+  pull();passes(1700);assert(personalBests.observe(0,0,true,rpm) || personalBests.rpm[0]>=rpm);
+  for(unsigned t=0;t<HISTORY_COALESCE_MS+1000;t+=50)passes(50);
+  assert(!historyUnsaved() && !bestsUnsaved());
+}
+
+// Wipe all on 0.15-0.17 after a rollback erases NVS only (those firmwares do
+// not know the history log). Upgraded again before any pull, NVS holds no
+// history or bests and the log does: the log's records said NVS held them, so
+// boot loads neither and logs the empty ones over them. The log still loads
+// when NVS refused the copies (full), and NVS when an older firmware saved there.
+static void historyLogNvsErased() {
+  using Log=HistoryLog::Store<NorFlash>;using HistoryLog::Source;
+  boot();spiffsFlash=NorFlash{};historyLog=Log{};assert(historyLog.open(spiffsFlash)==Log::Log::Open::Formatted);
+  loggedHistory=practice.generation();loggedBests=personalBests.generation();
+  // The first session is logged while NVS holds none; power-off takes NVS's
+  // first copies and logs them again at once, saying NVS holds them.
+  loggedSession(9100);
+  assert(flushForShutdown(millis(),snap(),ShutdownWhy::SideKey)==ShutdownFlush::Ready && !practiceStore.pending(practice) && !bestStore.pending(personalBests));
+  assert(acquisition.request(StickS3Acquisition::Action::CheckpointEnd));
+  {Log r;assert(r.open(spiffsFlash)==Log::Log::Open::Ready);PracticeHistory back;Appearance::Bests bests;uint32_t mh=0,mb=0;
+   assert(r.loadHistory(back,mh) && mh==practiceStore.savedGeneration() && mh!=HistoryLog::NOT_MIRRORED);
+   assert(r.loadBests(bests,mb) && mb==bestStore.savedGeneration() && mb!=HistoryLog::NOT_MIRRORED);}
+  const unsigned records=practice.size();assert(records==1);
+  // Rolled back, a newer pull there is NVS's: it wins on the upgrade, as before.
+  {const auto nvs=Preferences::data;PracticeHistory older=practice;assert(older.accept(77,true,8800,clockUs/1000));
+   PracticeStore other;PracticeHistory read;directWrites=true;assert(other.begin(read) && other.save(older));directWrites=false;
+   restartKeepingStorage();assert(bootFrom.history==Source::Nvs && practice.size()==records+1);
+   Preferences::data=nvs;}
+  // Rolled back, Wipe all there, upgraded again: nothing comes back.
+  eraseSpace("ll-practice");eraseSpace("ll-bests");
+  restartKeepingStorage();
+  if(practice.size())std::cout<<"wiped history resurrected: "<<practice.size()<<" records after Wipe all on the older firmware\n";
+  assert(bootFrom.history==Source::None && bootFrom.bests==Source::None && practice.size()==0 && personalBests.rpm[0]==0);
+  // The empty records went over the wiped ones: the next boot loads nothing either.
+  restartKeepingStorage();
+  assert(bootFrom.history==Source::Log && bootFrom.bests==Source::Log && practice.size()==0 && personalBests.rpm[0]==0);
+  // NVS refuses the copies from the start (full): the log, saying NVS holds none, still loads.
+  boot();spiffsFlash=NorFlash{};historyLog=Log{};assert(historyLog.open(spiffsFlash)==Log::Log::Open::Formatted);
+  loggedHistory=practice.generation();loggedBests=personalBests.generation();
+  loggedSession(9200);
+  Preferences::failWrite=true;assert(flushForShutdown(millis(),snap(),ShutdownWhy::SideKey)==ShutdownFlush::Ready);Preferences::failWrite=false;
+  assert(acquisition.request(StickS3Acquisition::Action::CheckpointEnd));
+  restartKeepingStorage();
+  assert(bootFrom.history==Source::Log && bootFrom.bests==Source::Log && practice.size()==1 && personalBests.rpm[0]>=9200);
+  // An older copy in NVS and the next refused: NVS still at the mirrored generation, the log loads.
+  assert(flushForShutdown(millis(),snap(),ShutdownWhy::SideKey)==ShutdownFlush::Ready);  // NVS takes it now
+  assert(acquisition.request(StickS3Acquisition::Action::CheckpointEnd));
+  loggedSession(9300);
+  Preferences::failWrite=true;assert(flushForShutdown(millis(),snap(),ShutdownWhy::SideKey)==ShutdownFlush::Ready);Preferences::failWrite=false;
+  assert(acquisition.request(StickS3Acquisition::Action::CheckpointEnd));
+  restartKeepingStorage();
+  assert(bootFrom.history==Source::Log && practice.size()==2 && personalBests.rpm[0]>=9300);
+  // A store holding no NVS copy says generation 0 (the log's NOT_MIRRORED), and a real first one is never 0.
+  {PracticeStore p;PracticeHistory h;Appearance::Bests b;AppearanceStore<Appearance::Bests> bs;coreErase();
+   assert(p.begin(h) && !p.found() && p.savedGeneration()==HistoryLog::NOT_MIRRORED);
+   assert(bs.begin(b,"ll-bests","best0","best1") && !bs.present() && bs.savedGeneration()==HistoryLog::NOT_MIRRORED);
+   assert(h.accept(1,true,7000,1000) && h.generation()!=HistoryLog::NOT_MIRRORED);
+   b.observe(0,0,true,7000);assert(b.generation()!=HistoryLog::NOT_MIRRORED);
+   PracticeHistory restored;restored.supersede(p.savedGeneration());
+   assert(restored.generation()!=HistoryLog::NOT_MIRRORED);}
+  historyLog=Log{};  // closed again
+  std::cout<<"PASS: Wipe all on an older firmware (NVS erased, the log left) loads no history or bests on the upgrade and logs the empty ones over them; "
+             "the log still loads when NVS refused the copies, NVS when an older firmware saved there; NVS's first copy is logged again at once\n";
+}
+
+// The Arduino core erases the whole NVS partition at boot when nvs_flash_init()
+// finds no free page or a newer format (initArduino): a near-full NVS and a
+// power cut in a page move. NVS lost, not wiped: setup() finds no namespace,
+// the log's records are disowned before any store opens one, and history and
+// bests load, on that boot and the ones after, until NVS takes copies again.
+static void historyLogNvsLost() {
+  using Log=HistoryLog::Store<NorFlash>;using HistoryLog::Source;
+  boot();spiffsFlash=NorFlash{};historyLog=Log{};assert(historyLog.open(spiffsFlash)==Log::Log::Open::Formatted);
+  loggedHistory=practice.generation();loggedBests=personalBests.generation();
+  loggedSession(9100);
+  assert(flushForShutdown(millis(),snap(),ShutdownWhy::SideKey)==ShutdownFlush::Ready && acquisition.request(StickS3Acquisition::Action::CheckpointEnd));
+  loggedSession(9400);  // logged saying NVS holds the first session's copy
+  const unsigned records=practice.size();assert(records==2);
+  coreErase();
+  restartKeepingStorage();
+  if(practice.size()!=records)std::cout<<"history lost with NVS: "<<practice.size()<<" of "<<records<<" records after the core erased NVS\n";
+  assert(bootFrom.nvsLost && bootFrom.history==Source::Log && bootFrom.bests==Source::Log && practice.size()==records && personalBests.rpm[0]>=9400);
+  // The next boot (NVS no longer virgin, still without the copies) loads them too: they say NOT_MIRRORED now.
+  restartKeepingStorage();
+  assert(!bootFrom.nvsLost && bootFrom.history==Source::Log && practice.size()==records && personalBests.rpm[0]>=9400);
+  // Power-off gives NVS its copies again, logged at once; an old firmware's Wipe all after that is noticed again.
+  assert(flushForShutdown(millis(),snap(),ShutdownWhy::SideKey)==ShutdownFlush::Ready && acquisition.request(StickS3Acquisition::Action::CheckpointEnd));
+  eraseSpace("ll-practice");eraseSpace("ll-bests");
+  restartKeepingStorage();
+  assert(bootFrom.history==Source::None && bootFrom.bests==Source::None && practice.size()==0);
+  historyLog=Log{};
+  std::cout<<"PASS: NVS erased whole by the core at boot (no namespace left) loads history and bests from the log, that boot and after; "
+             "an old firmware's Wipe all, which leaves its namespaces, still loads none\n";
 }
 
 static void sensorFaultHistory() {
@@ -803,7 +1032,7 @@ static void sensorFaultHistory() {
 
 main = r'''
 int main() {
-  freshEdgeAtApply();imuVeto();shakeWakeSave();batteryIconSave();applyDuringPull();lostReplies();usbDeviceSettings();shutdownFlush();startMarkSaves();themeRequests();milestoneRequests();milestoneImport();effectSetRequests();nvsReserve();historyLogSaves();historyLogNvsRefused();sensorFaultHistory();
+  freshEdgeAtApply();imuVeto();shakeWakeSave();batteryIconSave();minRpmSave();applyDuringPull();lostReplies();usbDeviceSettings();shutdownFlush();startMarkSaves();themeRequests();milestoneRequests();milestoneImport();effectSetRequests();nvsReserve();historyLogSaves();battleRecordSaves();historyLogNvsRefused();historyLogNvsErased();historyLogNvsLost();sensorFaultHistory();
 }
 '''
 
@@ -813,7 +1042,8 @@ functions = '\n'.join([
     statement('static constexpr const char *START_MARKS_KEY='), function('noteStartMark'), function('saveStartMarks'),
     function('quietImuForFlash', 'bool'), function('previewSetting'), function('writeSettings'),
     function('saveSettings'), function('applySetting', 'bool'), function('commitSetting'), function('saveHistory'),
-    function('releaseOrphanCheckpoint'), shutdown_flush(),
+    function('saveRivals'),
+    function('releaseOrphanCheckpoint'), function('logWearPull'), function('routeEvent', 'bool'), shutdown_flush(), boot_from(), function('disownLostNvs'), function('pickLoggedBests'), function('pickLoggedHistory'),
     function('themeReply'), function('themesChanged'), function('selectTheme'), function('finishThemeRequest'),
     function('milestoneReply'), function('*milestoneStoreName', 'const char'),
     function('finishMilestoneRequest'),

@@ -29,8 +29,12 @@ Only pyserial is needed. Ports are chosen by USB serial number, never by name.
 """
 import argparse
 import json
+from pathlib import Path
 import sys
 import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / 'hil'))
+import port_guard  # noqa: E402  refuses the owner's units, unidentified units and a held port
 
 FLAGS = {'charging': 1, 'charge_known': 2, 'vin': 4, 'usb_host': 8, 'sampling': 16, 'display_on': 32, 'booted': 64, 'end': 128}
 
@@ -46,6 +50,7 @@ def find_port(serial_number):
 def open_port(args):
     import serial
     port = args.port or find_port(args.serial)
+    port_guard.apply(args, port)
     return serial.Serial(port, 115200, timeout=0.2)
 
 
@@ -305,6 +310,7 @@ def main():
     an.add_argument('--reference', type=int, default=0)
     an.add_argument('--settle', type=int, default=120, help='seconds dropped after each profile switch')
     an.add_argument('--include-usb', action='store_true', help='keep records with USB power (a charge-off run)')
+    port_guard.add_arguments(p)
     args = p.parse_args()
     if args.cmd != 'analyze' and not (args.serial or args.port):
         p.error('--serial (or --port) is required')

@@ -31,7 +31,7 @@ def shutdown_flush():
         depth += (source[cursor] == "{") - (source[cursor] == "}")
         cursor += 1
     enum = source.index("enum class ShutdownFlush")
-    return source[enum:source.index("};", enum) + 2] + "\n" + source[start:cursor]
+    return source[enum:source.index("};", source.index("enum class ShutdownWhy")) + 2] + "\n" + source[start:cursor]
 prefix = r'''
 #include "history_checkpoint.h"
 #include "controls.h"
@@ -60,6 +60,7 @@ static IdleFake &pm1Idle(){static IdleFake idle;return idle;}
 static Controls::State controls;
 // The mic is off unless a test says otherwise: leaving its page stops it.
 static struct {bool running=false;bool off()const{return !running;}bool holdsSleep(uint32_t)const{return running;}void dump(){}void askBench(){}void armTape(){}void sendTape(){}void launch(uint32_t,bool,float,uint64_t,uint64_t){}}micListener;
+template<class E> static void followAnalysisLaunch(const E &e){micListener.launch(e.launches,e.valid,e.resultRpm,e.burstStartHostUs,e.burstEndHostUs);}  // Analysis closed
 static unsigned micPageLeaves=0;static void leaveMicPage(){++micPageLeaves;micListener.running=false;}
 static bool wipeBlocked=false;
 static Appearance::Config appearance;static Appearance::Bests personalBests;
@@ -115,7 +116,7 @@ struct ImuAcquisition {
     orientation.feed(raw,[&](const LaunchMotion::Sample &s){ring->feed(s);fused=s.us;});}
 } imuAcquisition;
 #include "ble_link_fake.h"
-static InactivityTimer inactivity;static OpticalSleepGuard opticalGuard;static UsbHostAwake usbAwake;static bool usbAutoOffInhibited=false;
+static InactivityTimer inactivity;static OpticalSleepGuard opticalGuard;static ShutdownSaveGuard shutdownSaves;static UsbHostAwake usbAwake;static bool usbAutoOffInhibited=false;
 static void pollUsbAwake(uint32_t,const Snapshot&,bool=false){}static PowerDiagnostics::Image powerLog;static bool powerLogDirty=false;
 static bool extPower=false,reachedSleep=false;
 enum class TournamentView:uint8_t {RecordingOnly,Rpm};static TournamentView tournamentView=TournamentView::RecordingOnly;
@@ -134,6 +135,9 @@ struct {bool arm(){return true;}bool restore(){return true;}bool clear(){return 
 static bool shakeToWake=true;static uint8_t unusedWakes=0;
 static unsigned restoreFailureNotes=0;static void noteMotionRestoreFailure(){++restoreFailureNotes;}
 static void logLaunchMetrics(const Snapshot&){}static void noteStartMark(const Snapshot&){}static void saveStartMarks(){}
+// No event reaches the shutdown flush here (takeEvent is empty): its handler,
+// routeEvent, runs in check_power_key_pipeline and check_save_paths.
+static bool routeEvent(const Snapshot&,uint32_t,bool){return false;}
 // Settings persistence has its own production harness (check_save_paths.py).
 static void writeSettings(){}
 static bool calibrationNeedsSave(){return false;}

@@ -165,7 +165,26 @@ static void aReleaseBeforeTheSessionIsHeardFromTheOldestSample() {
   assert(resume(0,30*RATE,USABLE,MARGIN)==30*RATE-(USABLE-MARGIN));
   assert(resume(0,USABLE-1,USABLE,MARGIN)==0);
 }
+// The pull results the listener follows, as the loop hands them over on each
+// new revision. A valid pull is followed from its release; an invalid result
+// with no burst end (a pull the detector lost, a sensor fault) is not. Through
+// 0.20.10 such a result carried the previous pull's end: the listener followed
+// that old spin again under a new launch number, its pull time wrapped (end
+// before start), and the page showed the old spin.
+static void aLostPullIsNotFollowed() {
+  constexpr uint64_t S=1000000;
+  assert(follows(true,true,false,10*S,12*S));                  // a valid pull
+  assert(follows(true,false,false,10*S,12*S));                 // an unmeasured burst: heard without a prior
+  assert(!follows(true,false,true,10*S,12*S));                 // which never ends a spin being followed
+  assert(!follows(false,true,false,10*S,12*S));                // the mic off
+  assert(!follows(true,false,false,20*S,0));                   // lost: no burst end
+  if(follows(true,false,false,20*S,12*S))std::puts("a result whose end is before its start was followed");
+  assert(!follows(true,false,false,20*S,12*S));                // the previous pull's end, after a valid one
+  assert(!follows(true,true,false,20*S,12*S) && !follows(true,true,false,12*S,12*S));
+  assert(!follows(true,true,false,0,12*S));                    // no start: no pull time
+}
 int main() {
+  aLostPullIsNotFollowed();
   aReleaseInTheRingIsReadFromTheRelease();aLappedReleaseIsHeardLateNotDropped();aReleaseBeforeTheSessionIsHeardFromTheOldestSample();
   anOwnerWhoNeverOpensThePageNeverLeavesOff();theSpeakerPowersDownFirst();aPlayingSpeakerIsNotAMemoryShortage();leavingWhileTheSpeakerPowersDownStartsNothing();
   leavingStopsItAndGivesTheSpeakerBack();leavingDuringTheStartStillStops();reopeningWhileItStopsWaitsForIt();

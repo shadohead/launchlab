@@ -60,6 +60,9 @@ public:
     // The start floor in force and the last launch's weakest start mark
     // (StartMarkReference), and the windows the floor held back.
     float startFloor=0,startMark=0;uint32_t soundHeld=0;
+    // Min RPM (Settings): the floor in force (0: none), the results it kept
+    // from being published since boot, and the last of them.
+    float minRpm=0,belowMinRpm=0;uint32_t belowMin=0;
     const char *stateName() const {
       if(suspended)return resting?"RESTING":"EXPORT";
       if(!ready)return "ADC ERROR";
@@ -96,6 +99,16 @@ public:
   // From the UI loop: the marks a launch must start on while a sound plays
   // (0: the profile's own floor). The optical task applies it before each batch.
   void setStartFloor(float floor){uint32_t bits;std::memcpy(&bits,&floor,4);startFloor_.store(bits,std::memory_order_relaxed);}
+  // From the UI loop: Min RPM (0.21.0), the slowest result published (0:
+  // every result). The detector measures every burst as before; a valid
+  // result reading slower, as the estimator selects it, is never published:
+  // the snapshot's revision and launch count skip it and it keeps showing
+  // the result before it, so no record, best, recap, phone or battle ever
+  // sees it. One optical channel cannot tell a pull from the string fed back
+  // into the launcher (owner captures, 2026-10-27: retractions measured
+  // 3,515-3,991 rpm), so a pull slower than the floor goes the same way.
+  // Requests carry the published launch count, as the snapshot gives it.
+  void setLaunchFloor(float rpm){uint32_t bits;std::memcpy(&bits,&rpm,4);launchFloor_.store(bits,std::memory_order_relaxed);}
   bool request(Action action,uint32_t value=0) {
     if(hook_ && !hook_(action,false,false))return false;
     const bool ok=send(action,value);
@@ -138,7 +151,41 @@ private:
   uint16_t *storage_=nullptr;
   SampleRing ring_{nullptr,0};
   AnalogTachometer detector_;
-  std::atomic<uint32_t> startFloor_{0};
+  std::atomic<uint32_t> startFloor_{0},launchFloor_{0};
+  // Min RPM: results judged so far (by the detector's revision), how many it
+  // kept back, whether the detector's latest result is one of them, and the
+  // result fields last published, which the snapshot shows meanwhile.
+  uint32_t judgedRevision_=0,hidden_=0;bool hidingLatest_=false;float hiddenRpm_=0;
+  struct Shown {
+    bool valid=false;AnalogTachometer::End ended=AnalogTachometer::End::None;uint32_t revolutions=0;
+    float resultRpm=0,peakRpm=0,sustainedPeakRpm=0,singlePeakRpm=0,amplitude=0,startNoise=0,startMark=0;
+    uint64_t burstStartHostUs=0,burstEndHostUs=0;
+    void take(const Snapshot &s) {
+      valid=s.valid;ended=s.ended;revolutions=s.revolutions;resultRpm=s.resultRpm;peakRpm=s.peakRpm;
+      sustainedPeakRpm=s.sustainedPeakRpm;singlePeakRpm=s.singlePeakRpm;amplitude=s.amplitude;
+      startNoise=s.startNoise;startMark=s.startMark;burstStartHostUs=s.burstStartHostUs;burstEndHostUs=s.burstEndHostUs;
+    }
+    void give(Snapshot &s)const {
+      s.valid=valid;s.ended=ended;s.revolutions=revolutions;s.resultRpm=resultRpm;s.peakRpm=peakRpm;
+      s.sustainedPeakRpm=sustainedPeakRpm;s.singlePeakRpm=singlePeakRpm;s.amplitude=amplitude;
+      s.startNoise=startNoise;s.startMark=startMark;s.burstStartHostUs=burstStartHostUs;s.burstEndHostUs=burstEndHostUs;
+    }
+  } shown_;
+  float launchFloor()const {
+    const uint32_t bits=launchFloor_.load(std::memory_order_relaxed);float rpm;std::memcpy(&rpm,&bits,4);return rpm;
+  }
+  // Each result once, as the detector publishes it: a valid one slower than
+  // the floor is kept back. Anything else (a measured pull, a cleared or lost
+  // result) is published and ends the hiding.
+  void judge() {
+    if(detector_.resultRevision==judgedRevision_)return;
+    judgedRevision_=detector_.resultRevision;
+    const float rpm=RpmEstimator::select(estimator_,detector_.sustainedPeakRpm,detector_.singlePeakRpm);
+    hidingLatest_=detector_.resultValid && rpm>0 && rpm<launchFloor();
+    if(hidingLatest_){++hidden_;hiddenRpm_=rpm;}
+  }
+  // The detector's count for a launch count the UI read from a snapshot.
+  uint32_t detectorLaunches(uint32_t published)const{return published+hidden_;}
   RpmEstimator::Mode estimator_=RpmEstimator::DEFAULT_MODE;
   StickS3SensorProfile::Mode sensorProfile_=StickS3SensorProfile::DEFAULT_MODE;
   adc_continuous_handle_t adc_=nullptr;
@@ -163,6 +210,10 @@ private:
   esp_err_t error_=ESP_OK;
   uint64_t samples_=0,sum_=0;
   uint64_t burstStartHostUs_=0,burstEndHostUs_=0;
+  // The result revision burstEndHostUs_ ended. Any other revision (a burst
+  // lost to a sample gap, USB R or a forced stop, a sensor fault, a cleared
+  // result) has no burst end: its events carry 0, never the last pull's end.
+  uint32_t burstEndRevision_=0;
   uint32_t count_=0,minimum_=4095,maximum_=0,last_=0,maxBatchUs_=0,maxReadGapUs_=0;
   int64_t windowStart_=0,lastRead_=0,lastPublish_=0,retryAt_=0,checkpointAt_=0;
   uint64_t processingUs_=0;
@@ -302,6 +353,7 @@ private:
         reinterpret_cast<const adc_digi_output_data_t *>(buffer+i)->type2.data;
       ring_.record(value|marks);marks=0;
       detector_.feed(value);
+      if(detector_.resultRevision!=judgedRevision_)judge();
       last_=value;sum_+=value;++count_;++samples_;
       minimum_=std::min(minimum_,uint32_t(value));maximum_=std::max(maximum_,uint32_t(value));
     }
@@ -310,10 +362,12 @@ private:
     // approximate at DMA-frame/IMU-poll resolution, not a hardware sync pulse.
     if(detector_.attempts!=attempts && detector_.nowUs>=detector_.burstStartUs)
       burstStartHostUs_=uint64_t(lastRead_)-(detector_.nowUs-detector_.burstStartUs);
-    if(detector_.resultRevision!=revision && detector_.nowUs>=detector_.burstEndUs)
-      burstEndHostUs_=uint64_t(lastRead_)-(detector_.nowUs-detector_.burstEndUs);
-    if(detector_.resultRevision!=revision && detector_.resultValid) {
-      portENTER_CRITICAL(&curveMux_);curve_=detector_.curve;curveRevision_=detector_.resultRevision;portEXIT_CRITICAL(&curveMux_);
+    if(detector_.resultRevision!=revision && (detector_.ended==AnalogTachometer::End::Slowdown || detector_.ended==AnalogTachometer::End::Gap) &&
+       detector_.nowUs>=detector_.burstEndUs) {
+      burstEndHostUs_=uint64_t(lastRead_)-(detector_.nowUs-detector_.burstEndUs);burstEndRevision_=detector_.resultRevision;
+    }
+    if(detector_.resultRevision!=revision && detector_.resultValid && !hidingLatest_) {
+      portENTER_CRITICAL(&curveMux_);curve_=detector_.curve;curveRevision_=detector_.resultRevision-hidden_;portEXIT_CRITICAL(&curveMux_);
     }
     const uint32_t duration=uint32_t(esp_timer_get_time()-started);
     processingUs_+=duration;maxBatchUs_=std::max(maxBatchUs_,duration);
@@ -349,10 +403,10 @@ private:
       case Action::ShutdownForce: {
         // A verified Ready idle pause already owns a stopped ADC and checkpoint.
         // Convert it into ordinary shutdown ownership without restarting ADC.
-        if(c.action!=Action::IdleCheckpointBegin && idlePaused_ && checkpoint_ && adc_ && detector_.launches==c.value) {
+        if(c.action!=Action::IdleCheckpointBegin && idlePaused_ && checkpoint_ && adc_ && detector_.launches==detectorLaunches(c.value)) {
           idlePaused_=false;break;
         }
-        if(suspended_ || detector_.launches!=c.value){ok=false;break;}
+        if(suspended_ || detector_.launches!=detectorLaunches(c.value)){ok=false;break;}
         // A sleep the detector refused again and again (OpticalSleepGuard):
         // marks that never became a pull, or a Launch long past any pull.
         // They are dropped as a sample gap drops them (a completed result
@@ -371,7 +425,7 @@ private:
       case Action::HistoryIdleCheckpointBegin:
         // Automatic coalesced history saves may flush after Ready. Recheck
         // candidates and the accepted counter on the ADC owner before stopping.
-        if(!ready_ || suspended_ || !HistoryCheckpoint::allowedIdle(detector_,c.value) ||
+        if(!ready_ || suspended_ || !HistoryCheckpoint::allowedIdle(detector_,detectorLaunches(c.value)) ||
            (c.action==Action::IdlePause && detector_.phase!=AnalogTachometer::Phase::Ready)){ok=false;break;}
         error_=adc_continuous_stop(adc_);ok=error_==ESP_OK;
         if(ok){checkpointResult_=HistoryCheckpoint(detector_);checkpointAt_=esp_timer_get_time();ready_=false;suspended_=checkpoint_=true;
@@ -418,8 +472,9 @@ private:
   }
   void publish(bool force=false) {
     if(heldCount_)sendHeld();
+    judge();
     const int64_t now=esp_timer_get_time();
-    const bool changed=detector_.resultRevision!=previousRevision_ || detector_.phase!=previousPhase_ || detector_.signalFault!=previousFault_;
+    const bool changed=detector_.resultRevision-hidden_!=previousRevision_ || detector_.phase!=previousPhase_ || detector_.signalFault!=previousFault_;
     if(!force && !changed && now-lastPublish_<10000)return;
     Snapshot s;
     s.phase=detector_.phase;s.ended=detector_.ended;s.ready=ready_;s.suspended=suspended_;s.resting=idlePaused_;
@@ -427,7 +482,7 @@ private:
     s.opticalIdle=detector_.historyCheckpointIdle();
     s.pin=pin_;s.error=error_;s.samples=samples_;s.detectorUs=detector_.nowUs;s.strongTurns=detector_.strongTurns;
     s.ringCount=ring_.count();s.ringFirst=ring_.first();
-    s.burstStartHostUs=burstStartHostUs_;s.burstEndHostUs=burstEndHostUs_;
+    s.burstStartHostUs=burstStartHostUs_;s.burstEndHostUs=burstEndRevision_==detector_.resultRevision?burstEndHostUs_:0;
     s.revision=detector_.resultRevision;s.launches=detector_.launches;s.revolutions=detector_.revolutions;
     s.edges=detector_.opticalEdges;s.weak=detector_.weakWindows;s.slow=detector_.slowWindows;
     s.shape=detector_.rejectedShape;s.inconsistent=detector_.inconsistentWindows;
@@ -445,6 +500,11 @@ private:
     s.noise=detector_.noiseBand;s.amplitude=RpmEstimator::select(estimator_,detector_.sustainedPeakAmplitude,detector_.singlePeakAmplitude);s.startNoise=detector_.startNoiseBand;
     s.startFloor=detector_.startFloor;s.startMark=detector_.startMark;s.soundHeld=detector_.soundHeldWindows;
     s.contrast=detector_.signalContrast;s.hysteresis=detector_.hysteresis;
+    // A kept-back result: the published count and revision skip it, and
+    // after its burst the result before it shows again.
+    s.revision=detector_.resultRevision-hidden_;s.launches=detector_.launches-hidden_;
+    if(detector_.phase!=AnalogTachometer::Phase::Launch){if(hidingLatest_)shown_.give(s);else shown_.take(s);}
+    s.minRpm=launchFloor();s.belowMin=hidden_;s.belowMinRpm=hiddenRpm_;
     portENTER_CRITICAL(&snapshotMux_);snapshot_=s;portEXIT_CRITICAL(&snapshotMux_);
     // A change the queue cannot take is held and sent in order on the next
     // publish (every batch); dropping it lost a counted launch's record.

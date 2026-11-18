@@ -85,6 +85,14 @@ inline Effect next(Effect e,Mask mask) {
     if(c!=Effect::Random && offers(mask,c))return c;
   return Effect::Off;
 }
+// BLE Get options for Best effect: the current choice first, even a saved one
+// the set no longer offers, then the cycle on from it, each choice once.
+// next() never returns to an effect outside the set, so the walk stops at the
+// first choice already listed, and after one value per mask bit at most.
+template<class Emit> void choices(Effect current,Mask mask,Emit emit) {
+  Mask listed;Effect e=current;
+  for(unsigned n=0;n<=Mask::BITS && !listed.has(e);++n){emit(e);listed|=flag(e);e=next(e,mask);}
+}
 // A Random pick: an offered effect other than the previous pick, or the only
 // one offered. With every drawn effect offered it equals Appearance::pick.
 inline Effect pick(uint32_t bits,Effect previous,Mask mask) {

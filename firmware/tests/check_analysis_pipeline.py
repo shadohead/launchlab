@@ -48,8 +48,6 @@ int main(){
   analysis.toggleReplay(3000000);micPageFresh=true;now+=1000;tickMicPage();assert(dirty);
   leaveMicPage();assert(controls.page==Controls::Page::Main && !analysis.number() && navigation==1);
   tickMicPage();assert(micListener.off() && !soundPlayer.muted);
-  controls.page=Controls::Page::MicRpm;tickMicPage();assert(micListener.on() && !micListener.analysisMode);
-  leaveMicPage();assert(controls.page==Controls::Page::Menu);tickMicPage();assert(micListener.off());
   controls.page=Controls::Page::Analysis;soundRequest.active=true;tickMicPage();controls.holdB();tickMicPage();assert(micListener.off());
   std::cout<<"PASS: production Analysis mic ownership, stop readiness, audio mute, B exit and power-off cleanup\n";
 }

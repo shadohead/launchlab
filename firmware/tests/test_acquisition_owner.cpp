@@ -175,5 +175,97 @@ int main() {
     drain();
   }
   std::puts("PASS: a forced shutdown stops through marks that never become a pull, and a pull after it is measured");
+  {
+    // ---- A result's burst times belong to its revision. A burst the
+    // detector loses (an ADC stall or overflow mid-pull, USB R, a forced
+    // stop) or a sensor fault publishes a new revision with no burst end:
+    // through 0.20.10 the event still carried the previous pull's end, and
+    // the Mic RPM page followed that old spin again (end before start).
+    optical(1200000);drain();
+    auto result=[](uint32_t after){Snapshot e,last{};while(owner.takeEvent(e))if(e.revision!=after)last=e;return last;};
+    auto fresh=[&](const char *what){
+      const uint32_t revision=owner.snapshot().revision;
+      turns(8000,12);optical(1200000);const Snapshot e=result(revision);
+      assert(e.revision!=revision && e.valid && e.burstStartHostUs && e.burstEndHostUs>e.burstStartHostUs);
+      (void)what;return e;
+    };
+    auto lost=[&](const char *what,const Snapshot &pull,const Snapshot &e){
+      if(e.burstEndHostUs)std::printf("%s left the end of the pull before it on its result: end %llu, that pull's end %llu\n",
+        what,(unsigned long long)e.burstEndHostUs,(unsigned long long)pull.burstEndHostUs);
+      assert(e.revision!=pull.revision && !e.valid && !e.burstEndHostUs);
+    };
+    // Lost mid-burst: an overflow's recovery (outside process()), USB R, a forced stop.
+    Snapshot pull=fresh("overflow");turns(8000,6);assert(owner.detector_.phase==D::Phase::Launch);
+    owner.overflows_++;owner.recover();owner.publish(true);lost("an overflow mid-pull",pull,result(pull.revision));
+    optical(1200000);drain();
+    pull=fresh("reset");turns(8000,6);assert(owner.detector_.phase==D::Phase::Launch);
+    command(Action::Reset);lost("USB R mid-pull",pull,result(pull.revision));
+    optical(1200000);drain();
+    pull=fresh("force");turns(8000,40);assert(owner.detector_.phase==D::Phase::Launch);
+    command(Action::ShutdownForce,owner.snapshot().launches);command(Action::CheckpointEnd);assert(owner.ready_);
+    lost("a forced stop mid-pull",pull,result(pull.revision));
+    optical(1200000);drain();
+    // A sensor fault (a second on the low rail) in Ready after a pull.
+    pull=fresh("fault");optical(1200000,0);assert(owner.detector_.signalFault);
+    lost("a sensor fault",pull,result(pull.revision));
+    optical(1200000);drain();
+    // A checkpoint keeps the result and so its times; the next pull has its own.
+    pull=fresh("checkpoint");command(Action::CheckpointBegin);command(Action::CheckpointEnd);optical(20000);
+    assert(owner.snapshot().revision==pull.revision && owner.snapshot().burstEndHostUs==pull.burstEndHostUs);
+    const Snapshot next=fresh("next");assert(next.burstStartHostUs>pull.burstEndHostUs);
+  }
+  std::puts("PASS: a lost burst or a sensor fault publishes no burst end; a completed pull and a checkpoint keep theirs");
+  {
+    // ---- Min RPM (0.21.0). The string fed back into the launcher spins the
+    // gear like a pull (owner captures, 2026-10-27: 3,515-3,991 rpm), and one
+    // optical channel cannot tell its direction. A result slower than the
+    // floor is measured as ever but never published: no event, no launch
+    // count, no curve, and the result before it stays on screen.
+    optical(1200000);drain();
+    owner.setLaunchFloor(4000);
+    turns(8000,12);optical(1200000);
+    const Snapshot shown=owner.snapshot();assert(shown.valid && std::fabs(shown.resultRpm-7500)<3 && shown.belowMin==0);
+    AnalogTachometer::Curve curve;assert(owner.curve(shown.revision,curve) && curve.count);
+    const uint16_t peak=curve.peak();
+    drain();
+    turns(20000,12);
+    // While it is measured the snapshot is live, as for any burst.
+    assert(owner.detector_.phase==D::Phase::Launch && !owner.snapshot().valid);
+    optical(1200000);
+    Snapshot s=owner.snapshot();
+    assert(owner.detector_.launches==shown.launches+1);  // the detector measured it
+    if(s.launches!=shown.launches)std::puts("a result below Min RPM was published");
+    assert(s.launches==shown.launches && s.revision==shown.revision && s.phase==D::Phase::Ready);
+    assert(s.valid && s.resultRpm==shown.resultRpm && s.ended==shown.ended && s.burstEndHostUs==shown.burstEndHostUs);
+    assert(s.belowMin==1 && std::fabs(s.belowMinRpm-3000)<3 && s.minRpm==4000);
+    assert(owner.curve(s.revision,curve) && curve.peak()==peak);
+    {Snapshot e;while(owner.takeEvent(e))assert(e.revision==shown.revision && e.launches==shown.launches && e.belowMin<=1);}
+    // The UI's requests carry the published count: a checkpoint still opens,
+    // and its restore keeps the earlier result showing.
+    command(Action::HistoryIdleCheckpointBegin,s.launches);assert(owner.suspended_ && owner.checkpoint_);
+    command(Action::CheckpointEnd);assert(owner.ready_);
+    s=owner.snapshot();assert(s.valid && s.resultRpm==shown.resultRpm && s.revision==shown.revision);
+    command(Action::IdlePause,s.launches);assert(!owner.ready_ && owner.suspended_);
+    command(Action::IdleResume);assert(owner.ready_);optical(1200000);
+    command(Action::ShutdownBegin,shown.launches+1);assert(owner.ready_ && !owner.suspended_);  // the detector's own count: refused
+    // A pull at the floor is published as the next launch, its own curve with it.
+    drain();turns(15000,12);optical(1200000);s=owner.snapshot();
+    assert(s.launches==shown.launches+1 && s.revision==shown.revision+1 && std::fabs(s.resultRpm-4000)<3 && s.belowMin==1);
+    assert(owner.curve(s.revision,curve) && curve.peak()==4000);
+    {Snapshot e,result{};while(owner.takeEvent(e))if(e.revision==s.revision)result=e;assert(result.valid && result.launches==s.launches);}
+    // A result that is not a pull (lost samples mid-burst) is published as ever.
+    turns(20000,6);assert(owner.detector_.phase==D::Phase::Launch);
+    owner.discontinuity(true);optical(1200000);s=owner.snapshot();
+    assert(!s.valid && s.revision==shown.revision+2 && s.launches==shown.launches+1);
+    // Floor 0 (String wear check measures retractions): every result again.
+    owner.setLaunchFloor(0);drain();turns(20000,12);optical(1200000);s=owner.snapshot();
+    assert(s.launches==shown.launches+2 && std::fabs(s.resultRpm-3000)<3 && s.belowMin==1 && s.minRpm==0);
+    // Hidden again, then the floor drops: the hidden result is not revived.
+    owner.setLaunchFloor(4000);turns(20000,12);optical(1200000);
+    owner.setLaunchFloor(1000);optical(100000);s=owner.snapshot();
+    assert(s.launches==shown.launches+2 && s.belowMin==2 && std::fabs(s.resultRpm-3000)<3);
+    owner.setLaunchFloor(0);drain();
+  }
+  std::puts("PASS: Min RPM keeps a slower result from being published, and the counts the UI sends match");
   return 0;
 }

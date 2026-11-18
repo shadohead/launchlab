@@ -338,6 +338,9 @@ def pull_during_power_log_save(rig, delays_ms=(-100, 0, 150, 280, 450)):
 
 
 SHAKE_ROW, SLEEP_ROW = 10, 0  # Controls::Setting::ShakeWake and Sleep (0.20.2)
+# Controls::Setting::MinRpm (0.21.0): its value is rpm / 500. The scenarios
+# assume 1,000 rpm, the detector's own floor (preflight); min_rpm checks 4,000.
+MIN_RPM_ROW, MIN_RPM_OFF, MIN_RPM_DEFAULT = 15, 2, 8
 
 
 def preflight(rig):
@@ -349,7 +352,9 @@ def preflight(rig):
     gate's first HIL all failed 54 wear_check checks on it). Bluetooth On, which
     the owner's unit may have from 0.20.9, is turned Off first, with the restart
     that applies it: the scenarios assume it Off and turn it on themselves.
-    Returns what it found, for run.json."""
+    Min RPM goes to 1,000 rpm, the detector's own floor (0.21.0): its 4,000 rpm
+    default would keep back the slower pulls many scenarios measure (min_rpm
+    checks the default). Returns what it found, for run.json."""
     d = rig.dev
     bluetooth = d.status().get('BLE_STATUS', {}).get('started')
     if bluetooth not in (None, '0'):
@@ -373,10 +378,18 @@ def preflight(rig):
         if line is None or line.f.get('error') != '0':
             raise RuntimeError(f'preflight: Mounting Top refused: {line.text if line else "no HIL_SET"}')
         d.hil('home')
+    min_rpm = status.get('RPM_STATUS', {}).get('min_rpm')
+    if min_rpm != '1000':
+        line = d.hil(f'set {MIN_RPM_ROW} {MIN_RPM_OFF}', expect='HIL_SET', timeout=8)
+        if line is None or line.f.get('error') != '0':
+            raise RuntimeError(f'preflight: Min RPM 1000 refused: {line.text if line else "no HIL_SET"}')
+        d.hil('home')
     after = status.get('NVS_STATUS', {}).get('used_entries')
     if reset is None or fill is None or fill.f.get('keys') != '0':
         raise RuntimeError(f'preflight: reset {reset.text if reset else None}, filler {fill.text if fill else None}')
     found = {'mounting_was': mounting, 'nvs_used_before': before, 'nvs_used_after_filler': after}
+    if min_rpm != '1000':
+        found['min_rpm_was'] = min_rpm
     if bluetooth not in (None, '0'):
         found['bluetooth_was'] = 'On'
     return found
@@ -485,6 +498,7 @@ MEASURE_LIMIT_S = 30  # OpticalSleepGuard::MEASURE_LIMIT_MS
 FORCE_AFTER = 2       # OpticalSleepGuard::FORCE_AFTER
 MIC_STOP_LIMIT_S = 30  # MicSession::STOP_LIMIT_MS (0.20.7)
 SLEEP_RETRY_S = 60    # autoPowerOff's retry after a deferred sleep
+SAVE_REFUSALS = 3     # ShutdownSaveGuard::LIMIT (after 0.20.10)
 # sleep_blockers waits for each sleep with every sleep limit divided by this
 # (!sleepscale, power_status.h sleepLimit()): seconds, not the real minutes.
 # standby keeps the real limits, so one sleep in every gate runs at them.
@@ -537,7 +551,7 @@ def sleep_blockers(rig):
        flickering into the sensor, a fan) holds the detector in Launch: after
        30 s it no longer counts as a pull being measured, and after two sleeps
        refused a minute apart the next one stops sampling anyway.
-    4. A Mic RPM stop that never ends (0.20.7). Sleep leaves the page and
+    4. A mic stop that never ends (0.20.7, Analysis since 0.21.0). Sleep leaves the page and
        waits for the mic, which holds the codec, to stop; with its task held
        before it takes the mic down (!micstall, as one stuck in a spin or in
        M5.Mic's end() would be), the sleep runs 30 s after the stop was asked,
@@ -548,10 +562,17 @@ def sleep_blockers(rig):
        it keeps moving (30 s and 2 minutes through 0.20.9). Each is counted;
        the third in a row sleeps for the side key alone (no IMU wake armed),
        and a sleep after use arms the shake wake again and clears the count.
+    6. A save no store takes. With the history log closed (`!logclose`, as
+       after a newer layout or a flash failure) NVS is the only store; with it
+       refusing the pull (!nvs fail) every sleep deferred, every minute, until
+       flat, through 0.20.10. Now the sleep is refused SAVE_REFUSALS - 1 times
+       a minute apart and then goes ahead unsaved (POWER_OFF_NOTICE
+       history_unsaved, POWER_OFF saved=0). The rig keeps the pull: NVS takes
+       it once it stops refusing, and a reboot opens the log again.
     Then a pull is measured as ever. Leaves Shake to wake On, Sleep after 1 min,
     no unused wakes counted and no dry run.
 
-    Cases 1, 3 and 5 wait for their sleeps with every sleep limit divided by
+    Cases 1, 3, 5 and 6 wait for their sleeps with every sleep limit divided by
     SLEEP_SCALE (`!sleepscale`): 30 s for the 5-minute movement limit, 3 s
     for the 30 s measured-pull limit and 6 s between refused sleeps, about a
     minute and a half in all instead of nine. Case 4 waits the real 30 s:
@@ -632,7 +653,7 @@ def sleep_blockers(rig):
         # 4. A mic stop that never ends. The HIL image has less internal heap than
         # production: the mic's floor drops by the same amount, as in mic_page.
         d.hil(f'micfloor {heap_floor(rig)}', expect='HIL_OK micfloor')
-        rig.check('the Mic RPM page opens', mic_open(rig) is not None)
+        rig.check('Analysis opens with the mic', mic_open(rig) is not None)
         d.hil('micstall 1', expect='HIL_OK micstall')
         asked = time.monotonic()
         lines, end = standby_dry_run(rig, MIC_STOP_LIMIT_S, request=True, timeout=30)
@@ -649,7 +670,7 @@ def sleep_blockers(rig):
                   off is not None and end is not None and notice is not None and after is not None and MIC_STOP_LIMIT_S - 1 <= after <= MIC_STOP_LIMIT_S + 5,
                   f'{after} s, {notice.text if notice else "no notice"}, {end.text if end else "no sleep"}')
         rig.check('stuck mic stop: the mic stops once its task goes on', mic_wait(rig, 'off', 5, start) is not None)
-        rig.check('stuck mic stop: the sleep left the Menu row, not the page', ui_state(rig).get('page') == MENU_PAGE, str(ui_state(rig)))
+        rig.check('stuck mic stop: the sleep left Analysis for Main', ui_state(rig).get('page') == MAIN_PAGE, str(ui_state(rig)))
         d.hil('sleepdry 1', expect='HIL_OK sleepdry')
         d.hil('sleepok 1', expect='HIL_OK sleepok')
         d.hil('home')
@@ -718,6 +739,31 @@ def sleep_blockers(rig):
                   slept is not None and slept.f.get('wake') == 'imu_motion' and dry is not None and dry.f.get('imu_wake_armed') == '1',
                   ' / '.join(l.text for l in (count, slept, dry) if l) or 'no sleep')
         rig.check('READY again after the unused wakes', rig.wait_ready(25) is not None)
+        # 6. The history log closed and NVS refusing the pull.
+        line = d.hil('logclose', expect='HIL_OK logclose')
+        rig.check('the history log is closed', line is not None and line.f.get('open') == '0', line.text if line else 'none')
+        r = rig.pull(signals.standard_pull(8000), signals.launch_motion(tilt_rate_dps=300, pull_g=4, seed=87))
+        rig.check_pull(r, tolerance=0.03)
+        d.hil('nvs fail 1000 history', expect='HIL_OK nvs')
+        with sleep_scale(rig) as scale:
+            wait = SLEEP_RETRY_S * (SAVE_REFUSALS - 1) / scale
+            lines, end = standby_dry_run(rig, wait, request=True, timeout=30)
+        d.hil('nvs clear', expect='HIL_OK nvs')
+        refused = [l for l in lines if l.text.startswith('POWER_OFF_DEFERRED history_save_failed')]
+        notice = next((l for l in lines if l.text.startswith('POWER_OFF_NOTICE history_unsaved')), None)
+        off = next((l for l in lines if l.text.startswith('POWER_OFF reason=inactivity')), None)
+        rig.note(f'log closed, NVS refusing: {[l.text for l in refused]} then {off.text if off else "no sleep"}')
+        rig.check(f'log closed, NVS refusing: the sleep is refused {SAVE_REFUSALS - 1} times, then goes ahead',
+                  len(refused) == SAVE_REFUSALS - 1 and off is not None and end is not None and notice is not None and
+                  all(l.index < notice.index for l in refused) and notice.index < off.index,
+                  [l.text for l in refused] + [notice.text if notice else 'no notice', off.text if off else 'no POWER_OFF'])
+        rig.check('log closed, NVS refusing: the sleep says the pull was not saved',
+                  off is not None and off.f.get('saved') == '0' and notice is not None and notice.f.get('refusals') == str(SAVE_REFUSALS),
+                  f"{off.text if off else 'no POWER_OFF'} | {notice.text if notice else 'no notice'}")
+        rig.check('log closed: NVS takes the pull once it stops refusing', drain_history(rig, 40))
+        reboot(rig)
+        line = d.hil('logstatus', expect='HIL_OK logstatus')
+        rig.check('the history log is open again after the reboot', line is not None and line.f.get('open') == '1', line.text if line else 'none')
         r = rig.pull(signals.standard_pull(9000), signals.launch_motion(tilt_rate_dps=300, pull_g=4, seed=86))
         rig.check_pull(r, tolerance=0.03)
     finally:
@@ -783,6 +829,132 @@ def usb_standby(rig, recheck_s=20):
     rig.check_pull(r, tolerance=0.03)
 
 
+WIPE_IDLE_S = 120  # WipeBlockedPower::IDLE_MS (after 0.20.10)
+
+
+def blocked_boot(rig, start, timeout=30):
+    """A boot into the blocked Wipe page, from `start`: its HIL_BOOT (or a reopened
+    port, if the reset left the link silent), tracked as the current boot, and the
+    page's state from `!wipemarker status`. Never idles the sources: a blocked
+    unit refuses every command that could write (hil.h Hil::blockedCommand)."""
+    d = rig.dev
+    if d.wait('HIL_BOOT', timeout, since=start) is None:
+        d.reopen(30)
+    status = rig.hil_boot()
+    rig.boot_id = status.get('boot_id')
+    line = d.hil('wipemarker status', expect='HIL_OK wipemarker')
+    return line.f if line else {}
+
+
+def no_writes(lines):
+    """Every NVS write a HIL image makes prints HIL_NVS (or HIL_FAULT nvs_...)."""
+    return [l.text for l in lines if l.text.startswith(('HIL_NVS ', 'HIL_FAULT nvs'))]
+
+
+def wipe_blocked(rig):
+    """A failed wipe, or a boot that finds a wipe marker it cannot resume, blocks
+    every save until restart (docs/FIRMWARE_WIPE_ALL.md). Through 0.20.10 that
+    page also ignored the side key and never slept, and the next boot blocked
+    again: a drain until flat. `!wipemarker invalid` writes a marker boot cannot
+    resume (nothing is erased) and the rig reboots into the blocked page.
+
+    1. The boot blocks: no normal load, and a command that could write is refused.
+    2. The side key (`!powerkey`, a click as pollPowerKey reads it; dry run):
+       POWER_OFF reason=power_key wipe_blocked=1 saved=0, and no NVS write.
+    3. No button (dry run, limits / SLEEP_SCALE): POWER_OFF reason=inactivity
+       WIPE_IDLE_S / scale after the last use, no NVS write.
+    4. A real power-off by the side key (`!usbstandby`: its timer re-check boots
+       instead of sleeping again, so the rig gets the unit back). The unit leaves
+       USB, comes back from that standby, and is blocked again.
+    Then `!wipemarker clear` removes the injected marker (it removes only one
+    boot cannot resume) and a reboot finds the history as it was. By name, not
+    in `all` until it has run and been timed on a rig.
+    """
+    settle(rig)
+    d = rig.dev
+    history = d.status().get('HISTORY_STATUS', {})
+    injected = False
+    try:
+        line = d.hil('wipemarker invalid', expect='HIL_OK wipemarker')
+        injected = line is not None and line.f.get('ok') == '1'
+        rig.check('an unresumable wipe marker is written', injected and line.f.get('state') == 'invalid', line.text if line else 'none')
+        # 1. The boot blocks.
+        start = d.mark()
+        d.hil('reboot', expect='HIL_REBOOT')
+        state = blocked_boot(rig, start)
+        rig.check('1. the boot blocks on the marker, with no normal load',
+                  state.get('blocked') == '1' and state.get('boot_recovery') == '1' and state.get('state') == 'invalid' and
+                  not d.since(start, 'BOOT '), str(state))
+        try:
+            d.hil('home', timeout=3)
+            refused = None
+        except DeviceError as e:
+            refused = str(e)
+        rig.check('1. a command outside the blocked set is refused', refused is not None and 'wipe_blocked' in refused, refused or 'it ran')
+        # 2. The side key, dry run.
+        d.hil('sleepdry 1', expect='HIL_OK sleepdry')
+        start = d.mark()
+        keyed = time.monotonic()
+        d.hil('powerkey', expect='HIL_OK powerkey')
+        end = d.wait(lambda l: l.text.startswith('POWER_OFF_DEFERRED reason='), 5, since=start)
+        lines = d.since(start)
+        off = next((l for l in lines if l.text.startswith('POWER_OFF reason=')), None)
+        rig.check('2. the side key powers the blocked page off, saving nothing',
+                  off is not None and off.f.get('reason') == 'power_key' and off.f.get('wipe_blocked') == '1' and off.f.get('saved') == '0' and
+                  end is not None and end.f.get('reason') == 'sleep_dry_run', f"{off.text if off else 'no POWER_OFF'} | {end.text if end else 'no end'}")
+        rig.check('2. no NVS write on the way', not no_writes(lines), no_writes(lines))
+        # 3. No button: the timeout.
+        with sleep_scale(rig) as scale:
+            d.hil('sleepok 1', expect='HIL_OK sleepok')
+            start = d.mark()
+            limit = WIPE_IDLE_S / scale
+            off = d.wait(lambda l: l.text.startswith('POWER_OFF reason='), limit + 10, since=start)
+            end = d.wait(lambda l: l.text.startswith('POWER_OFF_DEFERRED reason='), 5, since=start)
+            d.hil('sleepok 0', expect='HIL_OK sleepok')
+        lines = d.since(start)
+        after = (off.t if off else time.monotonic()) - keyed
+        rig.note(f'blocked page: the timeout ran {after:.1f} s after the last use (limit / {scale}: {limit:.0f} s)')
+        rig.check(f'3. with no button the blocked page powers off {limit:.0f} s after the last use, saving nothing',
+                  off is not None and off.f.get('reason') == 'inactivity' and off.f.get('wipe_blocked') == '1' and off.f.get('saved') == '0' and
+                  end is not None and 0.8 * limit <= after <= limit + 4, f"{after:.1f} s, {off.text if off else 'no POWER_OFF'}")
+        rig.check('3. no NVS write on the way', not no_writes(lines), no_writes(lines))
+        # 4. A real power-off by the side key, and the next boot.
+        d.hil('sleepdry 0', expect='HIL_OK sleepdry')
+        before = rig.boot_id
+        start = d.mark()
+        d.hil('usbstandby 20', expect='HIL_OK usbstandby')
+        off = d.wait(lambda l: l.text.startswith('POWER_OFF reason='), 10, since=start)
+        rig.check('4. the side key\'s real power-off runs from the blocked page, saving nothing',
+                  off is not None and off.f.get('reason') == 'power_key' and off.f.get('wipe_blocked') == '1' and off.f.get('saved') == '0',
+                  off.text if off else 'none')
+        gone = d.wait('HOST_DISCONNECT', 15, since=start)
+        rig.check('4. the unit left USB for its deep sleep', gone is not None, gone.text if gone else 'still on USB')
+        if d.wait(lambda l: l.text.startswith(('HOST_RECONNECT', 'HIL_BOOT')), 20 + 60, since=start) is None:
+            d.reopen(30)
+        state = blocked_boot(rig, start, timeout=5)
+        rig.check('4. it came back by itself after the re-check', rig.boot_id not in (None, before), f'boot_id {before} -> {rig.boot_id}')
+        rig.check('4. the next boot is blocked again', state.get('blocked') == '1' and state.get('boot_recovery') == '1', str(state))
+        line = d.hil('standbywake', expect='HIL_STANDBY_WAKE', timeout=5)
+        f = line.f if line else {}
+        rig.check('4. it booted from the side key\'s standby (timer, key only)',
+                  f.get('esp_cause') == '4' and f.get('in_standby') == '1' and f.get('key_only') == '1', line.text if line else 'none')
+        rig.check('4. no NVS write through the power-off and the next boot', not no_writes(d.since(start)), no_writes(d.since(start)))
+        rig.scenario['start_line'] = d.mark()
+    finally:
+        d.hil('sleepscale 1')
+        d.hil('sleepok 0')
+        d.hil('sleepdry 0')
+        if injected:
+            line = d.hil('wipemarker clear', expect='HIL_OK wipemarker')
+            rig.check('the injected marker is removed', line is not None and line.f.get('ok') == '1' and line.f.get('state') == 'clean',
+                      line.text if line else 'none')
+            reboot(rig)
+            after = d.status().get('HISTORY_STATUS', {})
+            rig.check('a normal boot again, the history as it was',
+                      after.get('records') == history.get('records') and after.get('generation') == history.get('generation'),
+                      f"records {history.get('records')} -> {after.get('records')}, generation {history.get('generation')} -> {after.get('generation')}")
+
+
 # --------------------------------------------------------------------------- 5
 IMU_FAULTS = [
     ('length read failures x5', 'fault lenfail 5', 'length_errors'),
@@ -819,7 +991,15 @@ def imu_faults(rig):
     time.sleep(2)
     d.hil('fault freeze 0')
     after = rig.wait_ready(15) or rig.counters()
-    rig.check('frozen sensor 2 s: gap reported', counter(after, 'MOTION_STATUS', 'gaps') > counter(before, 'MOTION_STATUS', 'gaps'))
+    # The gap is counted when frames come back, which can be after the status
+    # block that answers the unfreeze (0.21.0 smoke: gaps=11 and max_gap_us
+    # 2,079,063 printed 120 ms after a block that still said 10).
+    deadline = time.time() + 5
+    while counter(after, 'MOTION_STATUS', 'gaps') <= counter(before, 'MOTION_STATUS', 'gaps') and time.time() < deadline:
+        time.sleep(0.5)
+        after = rig.counters()
+    rig.check('frozen sensor 2 s: gap reported', counter(after, 'MOTION_STATUS', 'gaps') > counter(before, 'MOTION_STATUS', 'gaps'),
+              f"gaps {counter(before, 'MOTION_STATUS', 'gaps')} -> {counter(after, 'MOTION_STATUS', 'gaps')}, max_gap_us={after.get('MOTION_STATUS', {}).get('max_gap_us')}")
     rig.check('frozen sensor: fusion recovers', after.get('ORIENTATION_STATUS', {}).get('ready') == '1')
     # Long gate hold: the real FIFO model overflows (> ~1 s of frames).
     before = rig.counters()
@@ -1300,7 +1480,9 @@ def stray_bytes(rig, bursts=12, size=2048, seed=17):
     Bytes come as one write per burst (USB speed) with 100-300 ms pauses, like
     an upload gone wrong or a buggy updater. '!' is left out: HIL lines are a
     test-only parser. Asserts no power-off, sleep, setting, session, page or
-    export action, and that the device stays up and answers.
+    export action, and that the device stays up and answers. Then the rest of
+    a line a transfer refused, and what a host sends after stalling a transfer
+    past its timeout (stalled_transfers), run nothing.
     """
     settle(rig)
     d = rig.dev
@@ -1362,6 +1544,112 @@ def stray_bytes(rig, bursts=12, size=2048, seed=17):
     mark = d.mark()
     d.write('L\n')
     rig.check('a command after the refused lines runs', d.wait('THEME_LIST_END', 5, since=mark) is not None)
+    stalled_transfers(rig)
+
+
+# What the letters that run at once print: a backup, a restore, the power log
+# and the CPU power trace. `p` prints the status block, which the firmware
+# also prints by itself: status_command_ran tells the two apart.
+IMMEDIATE_OUTPUT = ('BACKUP_BEGIN', 'RESTORE_READY', 'POWER_LOG ', 'CPU_PM_TRACE')
+# The firmware prints its status block this often while a host is attached,
+# and never sooner after the last one; a `p` does not move that clock.
+STATUS_PERIOD_S = 2.0
+
+
+def status_command_ran(d, mark, written):
+    """Whether a `p` ran after `mark` (taken just before a write that returned
+    at monotonic time `written`). The periodic blocks are a period apart, so a command's
+    block lies less than half a period from the periodic one before or after
+    it: any block after `mark` closer than three quarters of a period to the
+    block before it means a command printed one. Waits until a period and a
+    quarter after the write, so the periodic block that follows is in."""
+    deadline = written + 1.25 * STATUS_PERIOD_S
+    while time.monotonic() < deadline:
+        time.sleep(min(0.05, max(deadline - time.monotonic(), 0)))
+    blocks = d.since(0, 'MOTION_CLIP')
+    return any(later.index >= mark and later.t - earlier.t < 0.75 * STATUS_PERIOD_S
+               for earlier, later in zip(blocks, blocks[1:]))
+# A 96-character base64 line with K, R, C, p and P in every 12 characters.
+STALLED_LINE = 'KRCpPQUJDRA0' * 8
+TRANSFER_TIMEOUT_S = 15
+
+
+def stalled_transfers(rig):
+    """A host stalls past a transfer's 15 s timeout, then sends the rest.
+
+    In 0.20.10 the timeout handed what the host sent next to the command
+    parser: in its next base64 line each K exported a full backup and each R
+    started a restore (a throttled background tab stalls this long). Each case
+    opens a transfer, sends a whole line (the stall falls between lines, as
+    when the site waits for each acknowledgement) or part of one, waits out
+    the timeout and sends what that host would: nothing, its next line, that
+    line in the site's 64-byte pieces 30 ms apart, several lines and "." at
+    once (a host that does not wait per line), or the rest of its line, here
+    a one-character "K". None may print a backup, restore, status, power log
+    or CPU trace, or open a transfer. Then the next request runs: `p`, `T` or
+    `L` as a line, the first thing after the timeout or after the resumed
+    lines, or after an unfinished line the rig's bare `p`.
+
+    The firmware prints the status block by itself every 2 s, so a status
+    block alone proves nothing either way (on its first rig run one fell in a
+    "runs nothing" window): status_command_ran tells a command's block from it.
+    """
+    d = rig.dev
+    opened = IMMEDIATE_OUTPUT + ('THEME_READY', 'MILESTONE_READY', 'FX_READY')
+    lines = (STALLED_LINE + '\n') * 2 + STALLED_LINE[:40] + '\n.\n'
+    cases = (('R', 'RESTORE', 'QUJDRA==\n', None, 'p\n'),
+             ('T\n', 'THEME', 'QUJD\n', None, 'T\n'),
+             ('U\n', 'MILESTONE', 'QUJD\n', None, 'L\n'),
+             ('R', 'RESTORE', 'QUJDRA==\n', 'line', 'L\n'),
+             ('R', 'RESTORE', 'QUJDRA==\n', 'paced', 'L\n'),
+             ('U\n', 'MILESTONE', 'QUJD\n', 'lines', 'L\n'),
+             ('T\n', 'THEME', 'QUJD', 'tail', 'L\n'),
+             ('U\n', 'MILESTONE', 'QUJD', None, 'p'))
+    for opener, tag, sent, after, then in cases:
+        name = f'stalled {tag} ({"inside a line" if not sent.endswith(chr(10)) else "between lines"}, then {after or "nothing"})'
+        time.sleep(0.05)
+        mark = d.mark()
+        d.write(opener)
+        if d.wait(f'{tag}_READY', 5, since=mark) is None:
+            rig.check(f'{name}: opens', False)
+            continue
+        d.write(sent)
+        mark = d.mark()
+        timeout = d.wait(f'{tag}_ERROR', TRANSFER_TIMEOUT_S + 5, since=mark)
+        rig.check(f'{name}: times out', timeout is not None and 'reason=timeout' in timeout.text,
+                  timeout.text if timeout else None)
+        time.sleep(1)
+        mark = d.mark()
+        if after == 'line':
+            d.write(STALLED_LINE + '\n')
+        elif after == 'paced':
+            d.write(STALLED_LINE[:64])
+            time.sleep(0.03)
+            d.write(STALLED_LINE[64:] + '\n')
+        elif after == 'lines':
+            d.write(lines)
+        elif after == 'tail':
+            d.write('K\n' + STALLED_LINE + '\n')
+        if after:
+            status = status_command_ran(d, mark, time.monotonic())
+            ran = [l.text for l in d.since(mark) if l.text.startswith(opened)] + ['a status block (p)'] * status
+            rig.check(f'{name}: what the host sent after the timeout runs nothing', not ran, str(ran[:3]))
+        if then == 'p':
+            block = d.status()
+            rig.check(f'{name}: then a bare p runs', 'MOTION_CLIP' in block, str(sorted(block)[:6]))
+            continue
+        time.sleep(0.05)
+        mark = d.mark()
+        d.write(then)
+        if then == 'p\n':
+            rig.check(f'{name}: then p runs', status_command_ran(d, mark, time.monotonic()))
+            continue
+        expect = {'T\n': 'THEME_READY', 'L\n': 'THEME_LIST_END'}[then]
+        rig.check(f'{name}: then {then.strip()} runs', d.wait(expect, 5, since=mark) is not None)
+        if then == 'T\n':
+            mark = d.mark()
+            d.write('.\n')  # close the empty request it opened
+            d.wait(lambda l: l.text.startswith(('THEME_OK', 'THEME_ERROR')), 5, since=mark)
 
 
 # ---- custom themes (USB L / T, theme_library.h)
@@ -1425,6 +1713,13 @@ def reboot(rig):
     start = d.mark()
     before = rig.boot_id
     d.hil('reboot', expect='HIL_REBOOT')
+    return restarted(rig, start, before)
+
+
+def restarted(rig, start, before):
+    """After a restart from line `start` (a `!reboot`, or a restore's own): wait for
+    the new boot, then track it as the current one; THEME_NOTICE lines since `start`."""
+    d = rig.dev
     boot = d.wait('HIL_BOOT', 5, since=start)
     if boot is None:
         # A reset can leave the USB link silent (2026-10-22): reopen the port and
@@ -2149,6 +2444,133 @@ def nvs_tight(rig, delays_ms=(-150, 0, 100, 250, 380)):
     rig.note(f"after: available_entries={nvs.get('available_entries')}")
 
 
+def nvs_erased(rig):
+    """Wipe all on 0.15-0.17 after a rollback erases NVS only: those firmwares
+    do not know the history log (0.18 on). Upgraded again before any pull, the
+    log's history, bests and power log must stay wiped: its records say NVS
+    held them (history_log.h). The log must still load when NVS refused the
+    copies (full), whether NVS held none of them or an older one, and when the
+    Arduino core erased NVS whole at boot (NO_FREE_PAGES or NEW_VERSION_FOUND):
+    lost, not wiped, told apart by NVS having no namespace at all.
+
+    `!oldwipe` clears the namespaces those firmwares' Wipe all clears, behind
+    the firmware's back, leaving the namespaces and the log; `!nvslost` erases
+    the NVS partition as the core does and restarts; `!mirror` writes the
+    NVS copies a sleep would and logs them again with what NVS holds (with
+    `refused`, NVS refuses each through the --wrap fault, as a full one does).
+    Takes a `K` backup first and restores it at the end (settings included);
+    the power log is not in a backup and starts over.
+    """
+    settle(rig)
+    d = rig.dev
+    saved = d.backup()
+    begin = next((l for l in saved.splitlines() if l.startswith('BACKUP_BEGIN')), '')
+    kept = int(number(Line(0, 0.0, begin).f.get('records'), -1)) if begin else -1
+
+    def logstatus():
+        line = d.hil('logstatus', expect='HIL_OK logstatus')
+        return line.f if line else {}
+
+    def picks():
+        return tuple((logstatus().get('from') or '').split(','))
+
+    def records():
+        return int(number(d.status().get('HISTORY_STATUS', {}).get('records'), -1))
+
+    def bests():
+        line = d.hil('bests', expect='HIL_OK bests')
+        return [float(number(line.f.get(k), -1)) for k in ('standard_three', 'standard_single', 'tcrt_three', 'tcrt_single')] if line else []
+
+    def power_boots():
+        start = d.mark()
+        d.write('P')
+        line = d.wait('POWER_LOG', 4, since=start)
+        return int(number(line.f.get('boots'), -1)) if line else -1
+
+    def mirror(refused=False):
+        line = d.hil('mirror refused' if refused else 'mirror', expect='HIL_OK mirror', timeout=8)
+        return line.f if line else {}
+
+    def pull(rpm, label, seed):
+        r = rig.pull(signals.standard_pull(rpm, label=label), signals.launch_motion(seed=seed))
+        rig.check_pull(r, tolerance=0.03)
+        drain_history(rig)
+
+    # History, bests and the power log in NVS and in the log, each logged after NVS held its copy.
+    d.hil('bests clear', expect='HIL_OK bests')
+    pull(7000, 'pull before the old wipe', 401)
+    m = mirror()
+    rig.check('NVS holds the three copies and the log says so',
+              all(m.get(k) == '1' for k in ('ok', 'history', 'bests', 'power', 'logged')) and
+              m.get('nvs_generation') == m.get('generation') not in (None, '0'), str(m))
+    before, boots = records(), power_boots()
+    rig.check('history and bests before the old wipe', before >= 1 and max(bests() or [0]) > 0, f'records={before}')
+
+    # Wipe all on the older firmware, then this one again, before any pull.
+    line = d.hil('oldwipe', expect='HIL_OK oldwipe')
+    rig.check('the history, bests and power log namespaces erased', line is not None and line.f.get('ok') == '1',
+              line.text if line else 'none')
+    reboot(rig)
+    p = picks()
+    rig.check('boot loads none of the wiped records', p == ('none', 'none', 'none'), str(p))
+    n = records()
+    rig.check('no history after the old wipe', n == 0, f'records={n} (were {before})')
+    b = bests()
+    rig.check('no bests after the old wipe', b == [0.0] * 4, str(b))
+    pb = power_boots()
+    rig.check('a fresh power log after the old wipe', pb == 1, f'boots={pb} (were {boots})')
+    # Boot logged the empty records over the wiped ones: the next boot loads those.
+    reboot(rig)
+    p, n = picks(), records()
+    rig.check('the next boot loads the empty records', p == ('log', 'log', 'log') and n == 0, f'{p} records={n}')
+
+    # NVS refuses the copies (full) and holds none: the log is the only copy and loads.
+    pull(7500, 'pull while NVS refuses its copy', 402)
+    m = mirror(refused=True)
+    rig.check('NVS refused the three copies, the log took them',
+              m.get('ok') == '1' and m.get('logged') == '1' and all(m.get(k) == '0' for k in ('history', 'bests', 'power', 'nvs_generation')), str(m))
+    reboot(rig)
+    p, n, b = picks(), records(), bests()
+    rig.check('the log loads when NVS refused every copy', p == ('log', 'log', 'log') and n == 1 and max(b or [0]) > 0, f'{p} records={n} bests={b}')
+
+    # NVS holds an older copy and refuses the next: still at the mirrored generation, the log loads.
+    m = mirror()
+    rig.check('NVS takes the copies', m.get('history') == '1' and m.get('nvs_generation') == m.get('generation'), str(m))
+    pull(8000, 'pull after NVS took its copy', 403)
+    m = mirror(refused=True)
+    rig.check('NVS refused the newer copy', m.get('logged') == '1' and m.get('history') == '0' and
+              m.get('nvs_generation') not in (None, '0', m.get('generation')), str(m))
+    reboot(rig)
+    p, n = picks(), records()
+    rig.check('the log loads over the older NVS copy', p[:1] == ('log',) and n == 2, f'{p} records={n}')
+
+    # The core erases NVS whole at boot (no free page after a power cut in a page move): lost, not
+    # wiped. The records said NVS held them; with no namespace left they load, that boot and after.
+    m = mirror()
+    rig.check('NVS holds the copies before the core erase', m.get('logged') == '1' and m.get('nvs_generation') == m.get('generation') != '0', str(m))
+    before, held, boots = records(), bests(), power_boots()
+    start, before_id = d.mark(), rig.boot_id
+    line = d.hil('nvslost', expect='HIL_OK nvslost')
+    rig.check('the NVS partition erased', line is not None and line.f.get('ok') == '1', line.text if line else 'none')
+    restarted(rig, start, before_id)
+    status = logstatus()
+    p, n, b, pb = tuple((status.get('from') or '').split(',')), records(), bests(), power_boots()
+    rig.check('boot after the core erase loads the log', status.get('nvs_lost') == '1' and p == ('log', 'log', 'log'), str(status))
+    rig.check('history, bests and the power log kept through the core erase', n == before and b == held and pb == boots + 1,
+              f'records={n}/{before} bests={b}/{held} boots={pb}/{boots}')
+    reboot(rig)
+    status, n, b = logstatus(), records(), bests()
+    rig.check('and the boot after that', status.get('nvs_lost') == '0' and status.get('from') == 'log,log,log' and n == before and b == held,
+              f'{status} records={n} bests={b}')
+
+    d.hil('nvs clear')
+    start, before_id = d.mark(), rig.boot_id
+    d.restore(saved)
+    restarted(rig, start, before_id)
+    n = records()
+    rig.check('the backup restored', n == kept, f'records={n} backup={kept}')
+
+
 def effect_frame_times(rig, rounds=1):
     """Each drawn effect previewed on the recap (USB E<id>): its slowest
     effect pass (PERF max_effect_us) within the 10 ms budget, and a
@@ -2476,6 +2898,191 @@ def loaded_store(rig):
               slots.get(kept[1], {}).get('name') == 'Kept two' and slots[kept[1]].get('references') == 'milestones', str({k: slots.get(k) for k in kept}))
     milestone_request(rig, milestones.request_line('reset'))
     fx_client.clear(d)
+
+
+def user_state(rig):
+    """What the unit shows of the records a restore replaces: the newest
+    history record (number, rpm), the record count and the personal bests."""
+    d = rig.dev
+    bests = d.hil('bests', expect='HIL_OK bests')
+    records = d.status().get('HISTORY_STATUS', {}).get('records')
+    return {'newest': d.newest_launch(), 'records': records,
+            'bests': tuple(bests.f.get(k) for k in ('standard_three', 'standard_single', 'tcrt_three', 'tcrt_single')) if bests else None}
+
+
+def restore_fault(d, start, fault):
+    """Whether an NVS fault hit a write of the restore itself: its HIL_FAULT line
+    after the restore's RESTORE_VALID. A save of the unit's own that runs while
+    the backup uploads (the boot's history copy, about 10 s after a restart)
+    takes an armed fault before RESTORE_VALID, and the restore then meets none."""
+    valid = next((l for l in d.since(start) if l.text.startswith('RESTORE_VALID')), None)
+    return valid is not None and any(l.text.startswith(fault) and l.index > valid.index for l in d.since(start))
+
+
+def restore_partial(rig):
+    """A USB restore is all or nothing as the unit shows it, and what it shows
+    afterwards is what it loads at the next boot (device_restore.h).
+
+    The unit's own backup A is taken; its bests cleared and three pulls make
+    it differ (B). Then A is restored:
+    1. the look record refused (`!nvs fail 1 cfg`): RESTORE_ERROR record=look
+       written=0 with no restart; the unit shows B, and after a restart
+       without a save (`!reboot`) it loads B;
+    2. the history record written without reading back, the history log
+       closed (`!logclose`, `!nvs unread 1 history`: NVS holds A's history
+       above the unit's own, the store still names the unit's): RESTORE_ERROR
+       record=history written=0 with no restart only because the unit's own
+       history went back over it; the unit shows B and loads B after
+       `!reboot`, which opens the log again;
+    3. the look refused again, then one pull and the sleep path's save (`S`,
+       dry run, which saves as the side key's power-off does), then `!reboot`:
+       the pull is kept;
+    4. the history NVS mirror refused (`!nvs fail 1 history`, a full NVS for
+       its 87-entry rewrite): with the history log open the restore succeeds
+       (RESTORE_NOTICE nvs_copy_failed history=1, RESTORE_OK) and the unit
+       restarts on A from the log (HISTORY_LOG_LOAD from=log);
+    5. two pulls (B again), then NVS filled (`!nvsfill`) to 60 free entries,
+       below the history rewrite: whatever the outcome, never a mix: restored
+       (A after the restart) or refused whole (B shown and loaded);
+    6. a plain restore of A puts the unit back as it was.
+    Ends with no filler, no NVS faults and no dry run, the history log open
+    and the unit's own data restored from A.
+    """
+    settle(rig)
+    d = rig.dev
+    rig.boot_id = rig.hil_boot().get('boot_id')  # "no restart" compares with it
+    d.hil('nvsfill 0', expect='HIL_OK nvsfill')
+    d.hil('nvs clear')
+    log = d.hil('logstatus', expect='HIL_OK logstatus')
+    log_open = log is not None and log.f.get('open') == '1'
+    rig.check('the history log is open', log_open, log.text if log else 'none')
+    own = d.backup()
+    a = user_state(rig)
+    rig.note(f'A: {a}')
+    try:
+        d.hil('bests clear', expect='HIL_OK bests')
+        for i, rpm in enumerate((14100, 14300, 14500)):
+            r = rig.pull(signals.standard_pull(rpm, label=f'B pull {i + 1}'), signals.launch_motion(seed=90 + i))
+            rig.check_pull(r, tolerance=0.03)
+        drain_history(rig)
+        b = user_state(rig)
+        rig.check('B differs from A (newest record and bests)', b['newest'] != a['newest'] and b['bests'] != a['bests'], f'A {a} B {b}')
+
+        def same_boot():
+            return rig.hil_boot().get('boot_id') == rig.boot_id
+
+        # 1. A refused record: nothing restored, before and after a restart.
+        d.hil('nvs fail 1 cfg', expect='HIL_OK nvs')
+        reply = d.restore(own, refused_ok=True)
+        d.hil('nvs clear')
+        rig.check('look refused: RESTORE_ERROR record=look written=0', reply.text.startswith('RESTORE_ERROR') and
+                  reply.f.get('record') == 'look' and reply.f.get('written') == '0', reply.text)
+        rig.check('look refused: no restart', same_boot())
+        rig.check('look refused: the unit shows B', user_state(rig) == b, str(user_state(rig)))
+        reboot(rig)
+        rig.check('look refused: after a restart it loads B', user_state(rig) == b, str(user_state(rig)))
+
+        # 2. A history write that lands without reading back, the log closed:
+        # rolled back only by writing the unit's own history over it.
+        d.hil('logclose', expect='HIL_OK logclose')
+        rig.check('history unread: no save of the unit\'s own is pending when the fault is armed', drain_history(rig, 40))
+        d.hil('nvs unread 1 history', expect='HIL_OK nvs')
+        start = d.mark()
+        reply = d.restore(own, refused_ok=True)
+        unread = restore_fault(d, start, 'HIL_FAULT nvs_unread')
+        d.hil('nvs clear')
+        rig.check('history unread: the readback of the restored history failed', unread)
+        rig.check('history unread: RESTORE_ERROR record=history written=0', reply.text.startswith('RESTORE_ERROR') and
+                  reply.f.get('record') == 'history' and reply.f.get('written') == '0', reply.text)
+        rig.check('history unread: no restart', same_boot())
+        rig.check('history unread: the unit shows B', user_state(rig) == b, str(user_state(rig)))
+        reboot(rig)
+        rig.check('history unread: after a restart it loads B', user_state(rig) == b, str(user_state(rig)))
+        log = d.hil('logstatus', expect='HIL_OK logstatus')
+        rig.check('history unread: the restart opened the history log again', log is not None and log.f.get('open') == '1', log.text if log else 'none')
+
+        # 3. One pull after the failed restore, saved by the sleep path's flush.
+        d.hil('nvs fail 1 cfg', expect='HIL_OK nvs')
+        reply = d.restore(own, refused_ok=True)
+        d.hil('nvs clear')
+        rig.check('one pull after: the restore refused, written=0', reply.text.startswith('RESTORE_ERROR') and reply.f.get('written') == '0', reply.text)
+        r = rig.pull(signals.standard_pull(14700, label='pull after the failed restore'), signals.launch_motion(seed=95))
+        rig.check_pull(r, tolerance=0.03)
+        shown = user_state(rig)
+        d.hil('sleepdry 1', expect='HIL_OK sleepdry')
+        d.hil('sleepok 1', expect='HIL_OK sleepok')
+        lines, end = standby_dry_run(rig, 0, request=True)
+        d.hil('sleepdry 0', expect='HIL_OK sleepdry')
+        d.hil('sleepok 0', expect='HIL_OK sleepok')
+        off = next((l for l in lines if l.text.startswith('POWER_OFF ')), None)
+        rig.check('one pull after: the sleep path saved', end is not None and off is not None and ' saved=1' in off.text,
+                  off.text if off else (end.text if end else 'no POWER_OFF_DEFERRED'))
+        reboot(rig)
+        b = user_state(rig)
+        rig.check('one pull after: the next boot keeps the pull and B', b == shown and b['newest'] is not None and
+                  abs(b['newest'][1] - 14700) <= 14700 * 0.03, f'shown {shown} loaded {b}')
+
+        # 4. The history mirror refused, the log open: restored through the log.
+        rig.check('history mirror refused: no save of the unit\'s own is pending when the fault is armed', drain_history(rig, 40))
+        d.hil('nvs fail 1 history', expect='HIL_OK nvs')
+        start = d.mark()
+        reply = d.restore(own, refused_ok=True)
+        refused = restore_fault(d, start, 'HIL_FAULT nvs_fail')
+        notice = next((l for l in d.since(start) if l.text.startswith('RESTORE_NOTICE nvs_copy_failed')), None)
+        rig.check('history mirror refused: the restore\'s own NVS history write was refused', refused)
+        if log_open:
+            rig.check('history mirror refused: RESTORE_OK', reply.text.startswith('RESTORE_OK'), reply.text)
+            rig.check('history mirror refused: RESTORE_NOTICE nvs_copy_failed history=1', notice is not None and notice.f.get('history') == '1',
+                      notice.text if notice else 'none')
+        if reply.text.startswith('RESTORE_OK') or 'restarting=1' in reply.text:
+            cut_boot(rig, start)
+        load = next((l for l in d.since(start) if l.text.startswith('HISTORY_LOG_LOAD ')), None)
+        if log_open:
+            rig.check('history mirror refused: the next boot loads A', user_state(rig) == a, str(user_state(rig)))
+            # Boot lines before the port reopened can be lost: a missing line is noted, a wrong one fails.
+            rig.check('history mirror refused: HISTORY_LOG_LOAD from=log', load is None or load.f.get('from') == 'log', load.text if load else 'none')
+            if load is None:
+                rig.note('history mirror refused: HISTORY_LOG_LOAD not seen after the restart')
+
+        # 5. NVS below the history rewrite: restored or refused whole, never a mix.
+        for i, rpm in enumerate((14900, 15100)):
+            r = rig.pull(signals.standard_pull(rpm, label=f'B2 pull {i + 1}'), signals.launch_motion(seed=97 + i))
+            rig.check_pull(r, tolerance=0.03)
+        drain_history(rig)
+        b = user_state(rig)
+        want, free = 0, int(number(d.status().get('NVS_STATUS', {}).get('available_entries'), -1))
+        for attempt in range(4):
+            if free <= 64 or want + free - 60 <= 0:
+                break
+            want += free - 60
+            d.hil(f'nvsfill {want}', expect='HIL_OK nvsfill')
+            free = int(number(d.status().get('NVS_STATUS', {}).get('available_entries'), -1))
+        rig.note(f'nvsfill {want}: available_entries={free}')
+        rig.check('NVS below a history rewrite (87 entries)', 0 <= free < 87, str(free))
+        start = d.mark()
+        reply = d.restore(own, refused_ok=True)
+        rig.note(f'full NVS restore: {reply.text}')
+        if reply.text.startswith('RESTORE_OK'):
+            cut_boot(rig, start)
+            rig.check('full NVS: restored, the next boot loads A', user_state(rig) == a, str(user_state(rig)))
+        else:
+            rig.check('full NVS: refused whole (written=0), no restart', reply.f.get('written') == '0' and same_boot(), reply.text)
+            rig.check('full NVS: refused, the unit shows B', user_state(rig) == b, str(user_state(rig)))
+            reboot(rig)
+            rig.check('full NVS: refused, after a restart it loads B', user_state(rig) == b, str(user_state(rig)))
+        d.hil('nvsfill 0', expect='HIL_OK nvsfill')
+    finally:
+        d.hil('nvs clear')
+        d.hil('nvsfill 0', expect='HIL_OK nvsfill')
+        d.hil('sleepdry 0', expect='HIL_OK sleepdry')
+        d.hil('sleepok 0', expect='HIL_OK sleepok')
+        # 6. The unit's own data back.
+        start = d.mark()
+        reply = d.restore(own, refused_ok=True)
+        rig.check('A restored: RESTORE_OK', reply.text.startswith('RESTORE_OK'), reply.text)
+        if reply.text.startswith('RESTORE_OK'):
+            cut_boot(rig, start)
+    rig.check('A restored: the unit shows A', user_state(rig) == a, str(user_state(rig)))
 
 
 # run_hil.py --sensor: 'fitted', 'absent' or None (not declared).
@@ -2885,7 +3492,7 @@ def effect_bench(rig, fixed=False):
 
 
 # ---------------------------------------------------------------- wear check
-WEAR_PAGE, MENU_PAGE = '10', '1'  # Controls::Page::WearCheck, Menu
+WEAR_PAGE, MENU_PAGE, MAIN_PAGE = '10', '1', '0'  # Controls::Page::WearCheck, Menu, Main
 # Accelerometer at rest (board axes, Top frame): level; ripcord (+Y) toward the
 # floor (2/3 Pull Down); ripcord toward the ceiling (3/3 Pull Up); 30 degrees off level.
 WEAR_LEVEL, WEAR_DOWN, WEAR_UP, WEAR_OFF = (0.0, 0.0, 1.0), (0.0, -1.0, 0.0), (0.0, 1.0, 0.0), (0.5, 0.0, 0.866)
@@ -2908,13 +3515,14 @@ def key(rig, letter, wait=0.4):
 
 # The Menu top to bottom (Controls::MenuRow, 0.20.9's order): B from Main opens it on
 # row 0, and each B after that goes one row down.
-MENU_ROWS = ['History', 'New session', 'Tournament', 'String wear check', 'Mic RPM', 'Device', 'Bluetooth', 'Settings', 'Back']
+MENU_ROWS = ['History', 'New session', 'Tournament', 'Battles', 'String wear check', 'Analysis', 'Device', 'Bluetooth', 'Settings', 'Back']
 SETTINGS_MENU_ROW, BATTERY_MENU_ROW, WEAR_MENU_ROW = MENU_ROWS.index('Settings'), MENU_ROWS.index('Device'), MENU_ROWS.index('String wear check')
 
 ABOUT_PAGE, SETTINGS_PAGE, ABOUT_ROW = '12', '5', '12'  # Controls::Page::About, Page::Settings, Setting::About
 # The Settings rows top to bottom (Controls::ORDER, then Back as SETTING_COUNT):
-# Battery icon after Mounting, then Wipe all and About.
-SETTINGS_ORDER = ['0', '10', '1', '2', '4', '3', '5', '6', '7', '8', '9', '13', '11', '12', '15']
+# Min RPM (15, 0.21.0) after RPM method; Brightness opens the appearance page;
+# Mounting, Flip display, Battery icon, Wipe all and About on the last.
+SETTINGS_ORDER = ['0', '10', '1', '15', '4', '2', '5', '6', '7', '8', '9', '3', '13', '11', '12', '16']
 
 
 def settings_walk(rig, target):
@@ -3039,7 +3647,7 @@ def expected_fill_pixels(status):
 def battery_icon(rig):
     """Battery icon (0.20.8): the charge in the top right corner of the Menu
     and Settings pages, on by default. The Menu's corner holds the outline and
-    a fill as wide as the unit's reading, with a bolt through it while the unit
+    a fill as wide as the unit's reading (and since 0.21.0 the percentage left of it), with a bolt through it while the unit
     charges; Main has it only while charging, and the Battery page never. Settings by the buttons: the row after Mounting
     edits it, B previews Off in the corner, hold B cancels, A applies and
     saves; Off survives a reboot, and On brings it back."""
@@ -3066,7 +3674,8 @@ def battery_icon(rig):
         c = corner(rig, 'battery_icon_menu')
         u = status.get('UI_STATUS', {})
         want = expected_fill(status)
-        rig.check('the Menu draws the corner battery: outline and terminal', u.get('page') == MENU_PAGE and c['outline'] and not c['beside'], f'{c} {u}')
+        # The Menu (0.21.0) also prints the percentage just left of it; Settings and Main do not.
+        rig.check('the Menu draws the corner battery: outline and terminal, its percentage beside it', u.get('page') == MENU_PAGE and c['outline'] and c['beside'], f'{c} {u}')
         rig.check('the fill is as wide as the reading', want > 0 and c['fill'] == expected_fill_pixels(status) and u.get('corner_fill') == str(want),
                   f"{c} corner_fill={u.get('corner_fill')} want={want} {status.get('POWER_STATUS', {}).get('battery_pct')}%")
         rig.check('the bolt shows exactly while the unit charges', c['bolt'] == charging(status) and u.get('corner_bolt') == ('1' if charging(status) else '0'),
@@ -3426,9 +4035,127 @@ def wear_check_sidecar(rig):
 
 
 
-MIC_PAGE = '11'  # Controls::Page::MicRpm
+def flushed_off(rig, start, recheck_s):
+    """After `!flushpull`: the off it asked for, the unit's USB-retained standby
+    and its return by the timer re-check. (POWER_OFF line or None, the lines
+    from `start` to it.)"""
+    d = rig.dev
+    off = d.wait(lambda l: l.text.startswith(('POWER_OFF reason=power_key', 'POWER_KEY_OFF', 'POWER_KEY_IGNORED')), 30, since=start)
+    lines = d.since(start)
+    if off is not None:
+        lines = [l for l in lines if l.index <= off.index]
+    rig.check('the side key power-off path ran and saved', off is not None and off.text.startswith('POWER_OFF reason=power_key') and
+              ' saved=1' in off.text, off.text if off else 'none')
+    if off is not None:
+        d.wait('HOST_DISCONNECT', 15, since=off.index)
+        if d.wait(lambda l: l.text.startswith(('HOST_RECONNECT', 'HIL_BOOT')), recheck_s + 60, since=off.index) is None:
+            d.reopen(30)
+    before = rig.boot_id
+    status = rig.hil_boot()
+    rig.check('it came back by itself after the re-check', status.get('boot_id') not in (None, before), f"boot_id {before} -> {status.get('boot_id')}")
+    rig.idle_sources()
+    rig.boot_id = status.get('boot_id')
+    rig.scenario['start_line'] = d.mark()
+    time.sleep(1.5)
+    settle(rig)
+    return off, lines
+
+
+def shutdown_pull(rig, recheck_s=20):
+    """A pull whose result the side key's shutdown flush drains: the
+    burst ended between the loop's drain and the off. Through 0.20.10 the flush
+    had its own copy of the loop's handling: it saved a Wear check retraction
+    as a practice pull (a best, a motion capture, a start mark) and printed no
+    LAUNCH_RESULT or HISTORY_ADDED. Both now go through routeEvent.
+    `!flushpull <s>` leaves the next result for the flush and asks the off as
+    soon as the detector counts the pull (HIL_FLUSH_PULL); the USB-retained
+    standby re-checks after s seconds and boots. By name, not in `all`: the
+    unit leaves USB twice for about 20 s (as usb_standby).
+
+    1. Wear check, a retraction drained by the flush: LAUNCH_RESULT and its
+       WEAR_CHECK_PULL (accepted) after HIL_FLUSH_PULL, no HISTORY_ADDED,
+       MOTION_RESULT or CELEBRATION; history and bests unchanged.
+    2. Main, a pull drained by the flush: LAUNCH_RESULT and HISTORY_ADDED after
+       HIL_FLUSH_PULL, its motion captured, no celebration (CELEBRATION
+       celebrate=0: the unit is powering off), saved: one more record."""
+    d = rig.dev
+    settle(rig)
+    # With no bests, a retraction that leaked into them would be a new best.
+    mark = d.mark()
+    d.hil('bests clear')
+    d.wait('HISTORY_SAVE', 20, since=mark)
+    time.sleep(1)
+    before = d.status().get('HISTORY_STATUS', {})
+    bests = d.hil('bests', expect='HIL_OK bests').f
+    rig.check('Wear check opens from the Menu', open_wear_check(rig))
+    hold_still(rig, WEAR_LEVEL, 0)
+
+    # 1. Wear check. Armed at LET GO, after the pull out's result went through the loop.
+    optical = signals.wear_pull(3200, held_ms=3000)
+    rig.wait_ready(15, fusion=False)
+    signals.program_optical(d, optical)
+    d.hil('imu const')
+    start = d.mark()
+    d.hil('pull 60', expect='HIL_PULL')
+    let_go = d.wait(lambda l: l.text.startswith('WEAR_CHECK_STEP') and l.f.get('step') == 'let_go', optical.duration_ms / 1000 + 2, since=start)
+    rig.check('Wear check: the pull out went through the loop to LET GO', let_go is not None)
+    armed = d.hil(f'flushpull {recheck_s}', expect='HIL_OK flushpull')
+    off, lines = flushed_off(rig, start, recheck_s)
+    held = next((l for l in lines if l.text.startswith('HIL_FLUSH_PULL')), None)
+    after_held = [l for l in lines if held and l.index > held.index]
+    launch = next((l for l in after_held if l.text.startswith('LAUNCH_RESULT')), None)
+    wear = [l for l in lines if l.text.startswith('WEAR_CHECK_PULL')]
+    rig.check('Wear check: the off was asked once the retraction was counted', armed is not None and held is not None, held.text if held else 'no HIL_FLUSH_PULL')
+    rig.check('Wear check: the flush printed the retraction\'s LAUNCH_RESULT', launch is not None and launch.f.get('valid') == '1' and
+              abs(number(launch.f.get('peak_rpm'), 0) - optical.expected_rpm) <= 0.03 * optical.expected_rpm, launch.text if launch else 'none')
+    rig.check('Wear check: the drained retraction went to Wear check (extension, then accepted after HIL_FLUSH_PULL)',
+              [l.f.get('outcome') for l in wear] == ['extension', 'accepted'] and held is not None and wear[-1].index > held.index and
+              abs(number(wear[-1].f.get('rpm'), 0) - optical.expected_rpm) <= 0.03 * optical.expected_rpm, ' | '.join(l.text for l in wear) or 'none')
+    rig.check('Wear check: no practice pull, motion capture or celebration from the drained retraction',
+              not any(l.text.startswith(('HISTORY_ADDED', 'MOTION_RESULT', 'CELEBRATION', 'LAUNCH_METRICS')) for l in lines))
+    rig.check('Wear check: POWER_OFF saved the records there were', off is not None and off.f.get('records') == before.get('records'),
+              f"{before.get('records')} -> {off.f.get('records') if off else None}")
+    after = d.status().get('HISTORY_STATUS', {})
+    bests_after = d.hil('bests', expect='HIL_OK bests').f
+    rig.check('Wear check: history unchanged after the reboot', after.get('records') == before.get('records'),
+              f"records {before.get('records')} -> {after.get('records')}")
+    rig.check('Wear check: personal bests unchanged after the reboot', bests_after.get('revision') == bests.get('revision'),
+              f"revision {bests.get('revision')} -> {bests_after.get('revision')}")
+
+    # 2. Main (the boot's page).
+    d.hil('home')
+    rig.check('Main after the boot', ui_state(rig).get('page') == '0', str(ui_state(rig)))
+    rig.wait_ready(15)
+    optical = signals.standard_pull(7000)
+    signals.program_optical(d, optical)
+    signals.program_imu(d, signals.launch_motion(seed=93))
+    armed = d.hil(f'flushpull {recheck_s}', expect='HIL_OK flushpull')
+    start = d.mark()
+    d.hil('pull 60', expect='HIL_PULL')
+    off, lines = flushed_off(rig, start, recheck_s)
+    held = next((l for l in lines if l.text.startswith('HIL_FLUSH_PULL')), None)
+    after_held = [l for l in lines if held and l.index > held.index]
+    def first(tag):
+        return next((l for l in after_held if l.text.startswith(tag)), None)
+    launch, added, celebration, motion = first('LAUNCH_RESULT'), first('HISTORY_ADDED'), first('CELEBRATION'), first('MOTION_RESULT')
+    rig.check('Main: the off was asked once the pull was counted', armed is not None and held is not None, held.text if held else 'no HIL_FLUSH_PULL')
+    rig.check('Main: the flush printed LAUNCH_RESULT and HISTORY_ADDED', launch is not None and added is not None and
+              abs(number(added.f.get('rpm'), 0) - optical.expected_rpm) <= 0.03 * optical.expected_rpm,
+              ' | '.join(l.text for l in (launch, added) if l) or 'none')
+    rig.check('Main: a pull drained at power-off celebrates nothing', celebration is not None and celebration.f.get('celebrate') == '0',
+              celebration.text if celebration else 'no CELEBRATION')
+    rig.check('Main: its motion was captured before the off', motion is not None, motion.text if motion else 'no MOTION_RESULT')
+    want = str(min(int(before.get('records', '0')) + 1, HISTORY_RECORDS))  # a full history keeps its size
+    rig.check('Main: POWER_OFF saved the drained pull', off is not None and off.f.get('records') == want,
+              f"{before.get('records')} -> {off.f.get('records') if off else None}")
+    after = d.status().get('HISTORY_STATUS', {})
+    rig.check('Main: the drained pull survives the reboot', after.get('records') == want, f"records {before.get('records')} -> {after.get('records')}")
+    drain_history(rig)
+
+
+MIC_PAGE = '11'  # Controls::Page::Analysis (0.21.0; Mic RPM's value through 0.20.11)
 MIC_WARMUP_S = 1.0  # MicListener::WARMUP_MS: the ES8311 gives zeros until then
-MIC_ROW = MENU_ROWS.index('Mic RPM')
+MIC_ROW = MENU_ROWS.index('Analysis')
 
 
 def mic_wait(rig, state, timeout, since):
@@ -3460,6 +4187,15 @@ def mic_tone_pull(rig, rpm, tone):
 
 def mic_spin(rig, launch, timeout, since):
     return rig.dev.wait(lambda l: l.text.startswith('MIC_SPIN ') and l.f.get('launch') == launch, timeout, since=since)
+
+
+def analysis_stop(rig, after_s):
+    """Tap B `after_s` seconds from now, as a player does when the Bey stops.
+    Analysis (0.21.0) follows a spin until it is stopped, a newer launch takes
+    over or its time limit; the Mic RPM page's follow ended on silence, and
+    MIC_SPIN comes when the follow ends."""
+    time.sleep(after_s)
+    key(rig, 'h', 0.2)
 
 
 def gaps_beyond_saves(lines, before=0):
@@ -3525,7 +4261,8 @@ def mic_counters(block):
 
 
 def mic_page(rig):
-    """The Mic RPM page on a device: off until it opens, the mic up and down
+    """Analysis's mic on a device (the Mic RPM page's through 0.20.11, which
+    Analysis replaced in 0.21.0): off until the page opens, the mic up and down
     without holding the IMU bus, the heap floor kept, the speaker given back by
     every way out, and a reading's real cost at 80 MHz with the page open.
 
@@ -3570,10 +4307,12 @@ def mic_page(rig):
     rig.note(f"mic on: dma_free={heap.get('dma_free')} (was {heap_off}) psram_free={heap.get('psram_free')} start_ms={mic.get('start_ms')} gate_max_us={mic.get('gate_max_us')}")
 
     # The bench runs by itself on the first open.
-    deadline = time.time() + 20
+    # It runs at the idle priority: with Analysis's page drawing and the status
+    # polled every second it can wait (0.21.0 smoke: none within 20 s).
+    deadline = time.time() + 60
     block = on
     while time.time() < deadline and number(block.get('MIC_BENCH', {}).get('runs'), 0) < 1:
-        time.sleep(1)
+        time.sleep(3)
         block = d.status()
     bench = block.get('MIC_BENCH', {})
     rig.check('the bench ran on the first open', number(bench.get('runs'), 0) >= 1, str(bench))
@@ -3601,7 +4340,8 @@ def mic_page(rig):
     start = d.mark()
     r = mic_tone_pull(rig, 7500, (118, 1, 30, 0.5))
     rig.check('a pull on the page is measured', r.valid and abs(r.rpm - 7500) <= 7500 * 0.03, r.summary())
-    spin = mic_spin(rig, r.launch.get('launches'), 50, start)
+    analysis_stop(rig, 31)
+    spin = mic_spin(rig, r.launch.get('launches'), 10, start)
     rig.check('MIC_SPIN reports the spin', spin is not None)
     rig.screenshot('mic_spin')
     block = d.status()
@@ -3637,7 +4377,8 @@ def mic_page(rig):
     # Two sound cycles a turn.
     start = d.mark()
     r = mic_tone_pull(rig, 7500, (236, 2, 4, 0.5))
-    spin = mic_spin(rig, r.launch.get('launches') if r.launch else '', 20, start)
+    analysis_stop(rig, 5)
+    spin = mic_spin(rig, r.launch.get('launches') if r.launch else '', 10, start)
     rig.check('a tone at twice the turn rate reads as two cycles a turn', spin is not None and spin.f.get('cycles') == '2', spin.text if spin else 'none')
 
     # A new pull takes over from the spin being heard, on the same mic.
@@ -3647,7 +4388,8 @@ def mic_page(rig):
     second = mic_tone_pull(rig, 6000, (94, 1, 3, 0.5))
     spin = mic_spin(rig, first.launch.get('launches') if first.launch else '', 5, start)
     rig.check('a new pull ends the last spin at once', spin is not None, str(first.launch))
-    spin = mic_spin(rig, second.launch.get('launches') if second.launch else '', 20, start)
+    analysis_stop(rig, 4)
+    spin = mic_spin(rig, second.launch.get('launches') if second.launch else '', 10, start)
     rig.check('the new pull is followed from its own prior', spin is not None and abs(number(spin.f.get('first_hz'), 0) - 94) <= 3, spin.text if spin else 'none')
 
     # The owner's a8ee2234 session: pulls 3-6 were never analyzed (frames=0,
@@ -3665,16 +4407,19 @@ def mic_page(rig):
     for rpm, hz in ((7000, 110), (6500, 102), (6200, 97)):
         pulls.append(mic_tone_pull(rig, rpm, (hz, 1, 20, 0.5)))
         time.sleep(4)
+    analysis_stop(rig, 17)  # the last one's tone has ended
     for i, r in enumerate(pulls):
         heard(f'back-to-back pull {i + 1}', mic_spin(rig, r.launch.get('launches') if r.launch else '', 40, start))
 
     # After a spin followed to its end, the next pull is still heard.
     start = d.mark()
     r = mic_tone_pull(rig, 7500, (118, 1, 20, 0.5))
-    mic_spin(rig, r.launch.get('launches') if r.launch else '', 45, start)
+    analysis_stop(rig, 21)
+    mic_spin(rig, r.launch.get('launches') if r.launch else '', 10, start)
     start = d.mark()
     r = mic_tone_pull(rig, 6500, (102, 1, 6, 0.5))
-    heard('a pull after a long follow', mic_spin(rig, r.launch.get('launches') if r.launch else '', 25, start))
+    analysis_stop(rig, 7)
+    heard('a pull after a long follow', mic_spin(rig, r.launch.get('launches') if r.launch else '', 10, start))
 
     # A result that reaches the task 9 s late: the ring has lost the release,
     # and the spin is heard from its oldest sample on the spin's own clock.
@@ -3682,7 +4427,8 @@ def mic_page(rig):
     d.hil('miclag 9000', expect='HIL_OK')
     start = d.mark()
     r = mic_tone_pull(rig, 7500, (118, 1, 25, 0.5))
-    spin = mic_spin(rig, r.launch.get('launches') if r.launch else '', 40, start)
+    analysis_stop(rig, 26)
+    spin = mic_spin(rig, r.launch.get('launches') if r.launch else '', 15, start)
     d.hil('miclag 0', expect='HIL_OK')
     heard('a release the ring has lost', spin, fresh=False)
     after = d.status().get('MIC_STATUS', {})
@@ -3692,12 +4438,13 @@ def mic_page(rig):
     rig.check('a late start is counted as one', number(after.get('late_starts'), 0) == number(before.get('late_starts'), 0) + 1, f'{before} -> {after}')
 
     # Out and back in, then a pull.
-    key(rig, 'a', 0.1)
+    key(rig, 'b', 0.1)
     mic_open(rig)
     time.sleep(1.2)
     start = d.mark()
     r = mic_tone_pull(rig, 6800, (106, 1, 6, 0.5))
-    heard('a pull after reopening the page', mic_spin(rig, r.launch.get('launches') if r.launch else '', 25, start))
+    analysis_stop(rig, 7)
+    heard('a pull after reopening the page', mic_spin(rig, r.launch.get('launches') if r.launch else '', 10, start))
     mic = d.status().get('MIC_STATUS', {})
     rig.check('no spin dropped mid-way', mic.get('overruns') == '0', str(mic))
     rig.check('the stop in between was quick', 0 < number(mic.get('stop_max_ms'), 0) < 500, str(mic))
@@ -3714,10 +4461,10 @@ def mic_page(rig):
         rig.check(f'{label}: the heap comes back', now >= heap_off - heap_slack, f'{now} vs {heap_off}')
         rig.check(f'{label}: the task stopped within 500 ms', 0 < int(number(block.get('MIC_STATUS', {}).get('stop_ms'), 0)) < 500, str(block.get('MIC_STATUS')))
         rig.check(f'{label}: the task left no stack short', int(number(block.get('MIC_STATUS', {}).get('task_stack_free'), 0)) >= 256, str(block.get('MIC_STATUS')))
-    gone('tap A', lambda: key(rig, 'a', 0.1))
-    rig.check('tap A returns to the Menu', ui_state(rig).get('page') == MENU_PAGE, str(ui_state(rig)))
-    mic_open(rig)
     gone('hold B', lambda: key(rig, 'b', 0.1))
+    rig.check('hold B returns to Main', ui_state(rig).get('page') == MAIN_PAGE, str(ui_state(rig)))
+    mic_open(rig)
+    gone('home', lambda: d.hil('home'))
 
     # The speaker works again, on the same ES8311.
     sound = d.status().get('SOUND_STATUS', {})
@@ -3758,7 +4505,7 @@ def mic_page(rig):
         time.sleep(0.12)
     time.sleep(1.5)
     block = d.status()
-    rig.check('quick toggles land off, on the Menu', block.get('MIC_STATUS', {}).get('state') == 'off' and block.get('UI_STATUS', {}).get('page') == MENU_PAGE, str(block.get('MIC_STATUS')))
+    rig.check('quick toggles land off, on Main', block.get('MIC_STATUS', {}).get('state') == 'off' and block.get('UI_STATUS', {}).get('page') == MAIN_PAGE, str(block.get('MIC_STATUS')))
     rig.check('quick toggles break no capture chain', block.get('MIC_STATUS', {}).get('record_misses') == '0', str(block.get('MIC_STATUS')))
 
     # Sleep never meets a running mic: the page closes first.
@@ -3771,7 +4518,7 @@ def mic_page(rig):
     rig.check('the inactivity sleep stops the mic before it powers off', bool(off and power and off[0] < power[0] and end is not None), ' / '.join(l.text for l in lines[:6]))
     stopped = d.status().get('MIC_STATUS', {})
     rig.check('a stop just after a start is as quick', 0 < int(number(stopped.get('stop_ms'), 0)) < 500, str(stopped))
-    rig.check('sleep leaves the Menu row, never the page', ui_state(rig).get('page') == MENU_PAGE, str(ui_state(rig)))
+    rig.check('sleep leaves Analysis for Main, never the page', ui_state(rig).get('page') == MAIN_PAGE, str(ui_state(rig)))
     d.hil('sleepdry 0')
     d.hil('sleepok 0')
 
@@ -3802,6 +4549,84 @@ def mic_page(rig):
     d.hil('set 8 0', expect='HIL_SET', timeout=6)
 
 
+def min_rpm(rig):
+    """Min RPM (0.21.0) at its 4,000 rpm default. One optical channel cannot
+    tell a pull from the string fed back into the launcher (owner captures,
+    2026-10-27: 3,515-3,991 rpm), so a result slower than the floor is
+    measured but never published.
+
+    1. A slow pull out, the string held, then let go: a 3,600 rpm retraction
+       (signals.retraction). LAUNCH_BELOW_MIN, no LAUNCH_RESULT or
+       HISTORY_ADDED; the launch count and the result shown stay.
+    2. A 6,000 rpm pull: measured and recorded as the next launch.
+    3. A 3,800 rpm pull is kept back the same way; RPM_STATUS counts both.
+    4. String wear check measures retractions: its page takes every result.
+    5. At 1,000 rpm (preflight's) the same retraction is measured again.
+    Leaves Min RPM at 1,000 rpm."""
+    settle(rig)
+    d = rig.dev
+    try:
+        line = d.hil(f'set {MIN_RPM_ROW} {MIN_RPM_DEFAULT}', expect='HIL_SET', timeout=8)
+        rig.check('Min RPM 4000 applies', line is not None and line.f.get('error') == '0', line.text if line else 'none')
+        d.hil('home')
+        settle(rig, 1.5)
+        before = d.status().get('RPM_STATUS', {})
+        rig.check('RPM_STATUS reports Min RPM 4000', before.get('min_rpm') == '4000', str(before))
+        hidden = int(before.get('below_min', '0'))
+
+        def kept_back(optical, motion, count):
+            start = d.mark()
+            r = rig.pull(optical, motion, expect_launch=False)
+            line = d.wait('LAUNCH_BELOW_MIN', 2.0, since=start)
+            rig.check(f'{optical.label}: kept back (LAUNCH_BELOW_MIN)', line is not None and line.f.get('min_rpm') == '4000' and
+                      line.f.get('count') == str(count), line.text if line else 'none')
+            if line is not None:
+                rpm = number(line.f.get('rpm'), 0)
+                rig.check(f'{optical.label}: measured at its own speed', abs(rpm - optical.expected_rpm) / optical.expected_rpm <= 0.05,
+                          f'{rpm:.0f} vs {optical.expected_rpm:.0f}')
+            rig.check(f'{optical.label}: no result and no record', r.launch is None and not d.since(start, 'HISTORY_ADDED'),
+                      str(r.launch))
+            return r
+
+        # 1. The string fed back in after a hold.
+        kept_back(signals.retraction(3600, extend_rpm=600, label='3600 rpm retraction after a hold'), None, hidden + 1)
+        time.sleep(1.5)
+        after = d.status().get('RPM_STATUS', {})
+        rig.check('the launch count and the result shown stay', after.get('launches') == before.get('launches') and
+                  after.get('peak_rpm') == before.get('peak_rpm') and after.get('valid') == before.get('valid'), f'{before} -> {after}')
+        # 2. A pull above the floor: the next launch, recorded.
+        r = rig.pull(signals.standard_pull(6000, label='6000 rpm pull'), signals.launch_motion(seed=83))
+        rig.check_pull(r, tolerance=0.03)
+        rig.check('it is the next launch', r.launch is not None and int(r.launch.get('launches', 0)) == int(before.get('launches', 0)) + 1,
+                  str(r.launch))
+        time.sleep(1.5)
+        # 3. A pull slower than the floor goes the same way.
+        kept_back(signals.standard_pull(3800, label='3800 rpm pull'), signals.launch_motion(seed=84), hidden + 2)
+        time.sleep(1.5)
+        status = d.status().get('RPM_STATUS', {})
+        rig.check('RPM_STATUS counts both', status.get('below_min') == str(hidden + 2) and status.get('peak_rpm', '0')[:2] == '60', str(status))
+        # 4. String wear check takes every result.
+        key(rig, 'h')
+        for _ in range(WEAR_MENU_ROW):
+            key(rig, 'h', 0.3)
+        key(rig, 'a')
+        page = ui_state(rig).get('page')
+        status = d.status().get('RPM_STATUS', {})
+        rig.check('String wear check sets no floor', page == WEAR_PAGE and status.get('min_rpm') == '0', f'page={page} {status}')
+        d.hil('home')
+        time.sleep(0.5)
+        rig.check('leaving it restores Min RPM', d.status().get('RPM_STATUS', {}).get('min_rpm') == '4000')
+    finally:
+        line = d.hil(f'set {MIN_RPM_ROW} {MIN_RPM_OFF}', expect='HIL_SET', timeout=8)
+        d.hil('home')
+    rig.check('Min RPM back at 1000', line is not None and line.f.get('error') == '0', line.text if line else 'none')
+    # 5. The same retraction at 1,000 rpm: measured, as through 0.20.11.
+    settle(rig, 1.5)
+    r = rig.pull(signals.retraction(3600, extend_rpm=600, label='3600 rpm retraction at Min RPM 1000'), None)
+    rig.check('at 1000 the retraction is measured', r.valid and abs(r.rpm - 3600) / 3600 <= 0.05, r.summary() if r.launch else 'no result')
+    drain_history(rig)
+
+
 SCENARIOS = {
     'rearm': rearm,
     'imu_timeline': imu_timeline,
@@ -3817,6 +4642,7 @@ SCENARIOS = {
     'standby': standby,
     'sleep_blockers': sleep_blockers,
     'usb_standby': usb_standby,
+    'wipe_blocked': wipe_blocked,
     'imu_faults': imu_faults,
     'imu_faults_pull': imu_faults_during_pull,
     'imu_backlog': imu_backlog,
@@ -3824,8 +4650,11 @@ SCENARIOS = {
     'about_page': about_page,
     'bluetooth_off': bluetooth_off,
     'ble_tap': ble_scenarios.ble_tap,
+    'battle': ble_scenarios.battle,
+    'battle_air': ble_scenarios.battle_air,
     'bluetooth_storage': ble_scenarios.bluetooth_storage,
     'battery_icon': battery_icon,
+    'min_rpm': min_rpm,
     'corpus': corpus_replay,
     'soak': soak,
     'soak_themes': lambda rig, minutes=10: soak(rig, minutes, switch_themes=True),
@@ -3833,11 +4662,13 @@ SCENARIOS = {
     'themes': custom_themes,
     'milestones': rpm_milestones,
     'nvs_tight': nvs_tight,
+    'nvs_erased': nvs_erased,
     'effect_set': effect_set,
     'request_burst': request_burst,
     'effect_times': effect_frame_times,
     'loaded_effects': loaded_effects,
     'loaded_store': loaded_store,
+    'restore_partial': restore_partial,
     'effect_times_low': effect_frame_times_low,
     'effect_stages': effect_stage_times,
     'effect_bench': effect_bench,
@@ -3846,6 +4677,7 @@ SCENARIOS = {
     'sound_sync': sound_sync,
     'songs': songs,
     'wear_check': wear_check,
+    'shutdown_pull': shutdown_pull,
     'mic_page': mic_page,
     # One round previews every drawn effect for its whole length (about 6 s each with the readout).
     'soak_effects': lambda rig, minutes=10: effect_frame_times(rig, rounds=max(1, int(minutes * 60 // (6.2 * len(EFFECTS))))),

@@ -25,8 +25,10 @@ public:
     if(present && !found){damaged_=true;ready_=replaceUnreadable;saved_=value.generation();return false;}
     saved_=value.generation();return true;
   }
+  // A record older than the saved one would lose to it at the next boot: refused.
   bool save(const Value &value){
     if(!ready_)return false;if(!pending(value))return true;
+    if(int32_t(value.generation()-saved_)<0)return false;
     const unsigned next=slot_^1u;
     if(!write(next,value))return false;
     slot_=next;saved_=value.generation();damaged_=false;return true;
@@ -40,7 +42,7 @@ public:
   // as the newest record: the change without its loaded effects.
   bool saveWithOlderView(const Value &value,const Value &older){
     if(!ready_)return false;if(!pending(value))return true;
-    if(older.generation()!=value.generation()-1)return false;
+    if(older.generation()!=value.generation()-1 || int32_t(value.generation()-saved_)<0)return false;
     const unsigned view=slot_^1u,record=view^1u;
     if(!write(view,older))return false;
     slot_=view;saved_=older.generation();damaged_=false;
@@ -65,12 +67,18 @@ public:
   bool pending(const Value &v)const{return v.generation()!=saved_;}
   // The generation the store holds now (saved or loaded).
   uint32_t savedGeneration()const{return saved_;}
+  // A write NVS took did not read back: that slot may hold a record newer
+  // than savedGeneration(), which the next boot would load. The next save
+  // goes to the same slot and settles it.
+  bool unverified()const{return unverified_!=0;}
 private:
   bool write(unsigned slot,const Value &value){
     typename Value::Image image{},readback{};value.encode(image);
-    if(prefs_.putBytes(keys_[slot],image.data(),image.size())!=image.size() ||
-       prefs_.getBytes(keys_[slot],readback.data(),readback.size())!=readback.size() || image!=readback)return false;
-    Value decoded;return decoded.decode(readback.data(),readback.size());
+    if(prefs_.putBytes(keys_[slot],image.data(),image.size())!=image.size())return false;
+    unverified_|=1u<<slot;
+    if(prefs_.getBytes(keys_[slot],readback.data(),readback.size())!=readback.size() || image!=readback)return false;
+    Value decoded;if(!decoded.decode(readback.data(),readback.size()))return false;
+    unverified_&=~(1u<<slot);return true;
   }
-  Preferences prefs_;const char *keys_[2]={};uint32_t saved_=0;unsigned slot_=0;bool ready_=false,damaged_=false,present_=false;
+  Preferences prefs_;const char *keys_[2]={};uint32_t saved_=0;unsigned slot_=0,unverified_=0;bool ready_=false,damaged_=false,present_=false;
 };

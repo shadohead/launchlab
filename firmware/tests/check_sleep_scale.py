@@ -40,6 +40,8 @@ SCALED = sorted([
     ('power_status.h', 'MOTION_LIMIT_MS'),
     ('power_status.h', 'MEASURE_LIMIT_MS'),
     ('power_status.h', 'LIMIT_MS'),  # HeldButtonUse
+    ('power_status.h', 'IDLE_MS'),  # WipeBlockedPower: the blocked Wipe page's timeout
+    ('power_status.h', 'RETRY_MS'),  # WipeBlockedPower: its retry after a refused power-off
     ('LaunchLabMini.ino', '60000'),  # the retry after a deferred sleep
 ])
 CALL = re.compile(r'\bsleepLimit\(((?:[^()]|\([^()]*\))*)\)')

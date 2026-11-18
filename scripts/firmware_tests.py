@@ -46,8 +46,13 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 TESTS = 'firmware/tests'
-# Everything the suite and the firmware build read. Build outputs are ignored.
-FINGERPRINT_PATHS = ['firmware', 'scripts/test-firmware.sh', 'scripts/firmware_tests.py', 'scripts/host_cc_cache.py']
+# Everything the suite and the firmware build read. Build outputs are ignored. A pass is reused
+# for an unchanged fingerprint, so a file a suite reads must be here; firmware/tests/test_ci_checkout.py
+# checks that, and that the host suite workflow's path filters cover the same files.
+FINGERPRINT_PATHS = ['firmware', 'scripts/test-firmware.sh', 'scripts/firmware_tests.py', 'scripts/host_cc_cache.py',
+                     'scripts/check-release-gate.py', 'scripts/firmware-channel.py', 'scripts/firmware_proof.py',
+                     'scripts/sync_public_firmware.py', 'docs/FIRMWARE_HAND_TEST_CHECKLIST.md',
+                     '.github/workflows/firmware-host-suite.yml', '.github/workflows/firmware-device-build.yml']
 SUITE_TIMEOUT_S = 900
 TREE_CHANGED = 3  # exit status: the result does not belong to one tree
 
@@ -59,7 +64,7 @@ VQF_SUITES = '''
 decay_models decay_record stopped_estimate analysis_rpm_filter analysis_mode analysis_ui
 relative_pitch audio_metadata audio_metadata_store settings_save
 accel_range bmi270_fifo i2c_bus_recovery appearance nvs_budget best_effect_sound
-device_backup device_wipe wipe_confirmation sticks3 sticks3_level sticks3_power
+device_backup device_restore device_wipe wipe_confirmation sticks3 sticks3_level sticks3_power
 motion_activity sensor_idle launch_feedback launch_motion motion_replay
 motion_store practice_history practice_store orientation_estimator
 mount_orientation mount_orientation_setting analog_tachometer swing_reset
@@ -68,12 +73,13 @@ rpm_estimator_setting sensor_profile_setting display_flip wake_ui_state controls
 controls_ui power_diagnostics weak_slowdown power_signal_recovery store_presence
 practice_views history_idle_checkpoint usb_awake usb_tx hil_resync
 usb_command_guard pm1_idle power_key palette milestones physical_effects classic_effects
-elemental_effects effect_set effect_set_compat milestone_rollback flash_log
+elemental_effects effect_set effect_set_compat milestone_rollback flash_log history_log_compat
 eva_effects slayer_effects ninja_effects nier_effects sorcery_effects
 aura_effects alchemy_effects phantom_effects armory_effects grimoire_effects ripsaw_effects corsair_effects reaper_effects
 fx_effects fx_sound fx_music music_stream fx_fuzz fx_share effect_store loaded_compat loaded_effects fx_transfer
 shake_wake wear_check rpm_curve power_lab frame_rows adc_clock mic_rpm mic_view mic_session
 dark_display ble_security ble_battle_pass ble_motion bluetooth_setting radio_calibration
+battle_beacon rival_book battle_session battle_ui
 '''.split()
 
 # Libraries a VQF suite links besides the filter: share codes are zlib streams.
@@ -89,17 +95,18 @@ imu_startup mount_pipeline wipe_pipeline controls_pipeline best_sound_pipeline
 pm1_idle power_key_pipeline idle_power_pipeline sensor_idle_pipeline save_paths
 cpu_power_pipeline hil_isolation mic_isolation usb_flush hil_rig_upload usb_command_pipeline
 ui_render hil_themes hil_milestones hil_commands usb_config wear_pipeline usb_standby_pipeline keep_awake status_feeds
-codec_handover sleep_scale hil_since_boot main_layout
+codec_handover sleep_scale hil_since_boot main_layout listing_pipeline restore_pipeline hil_power_bounds hil_stalled_transfers
 analysis_pipeline analysis_lifecycle analysis_worker analysis_result_persistence calibration_export analysis_release
 '''.split()
 
 # Python unit tests: the private-corpus runner's synthetic contracts (no
 # private data), the mic capture tool, the release gate, its orchestration plan and its evidence keys, the since-boot check, the host suite's
-# compile cache, the build gate, the build's static RAM check, the HIL settings walk, the public
+# compile cache, the build gate, the build's static RAM check and its wrapped-function check, the HIL settings walk, the public
 # repo's include layout, the CI checkout's frozen releases, the rig's status read, the HIL preflight, the mic stop wait,
-# the mic page's IMU gaps, nvs_tight's history fill, the contributor proof and the public sync.
+# the mic page's IMU gaps, nvs_tight's history fill, restore_partial's checks, nvs_erased against a firmware model, the host's USB wedge recovery, the contributor proof and the public sync.
 PYTHON_TESTS = ('captured_replay_runner mic_capture release_gate release_gate_plan gate_evidence hil_since_boot firmware_channels host_cc_cache build_gate '
-                'static_ram hil_overhead hil_settings_walk public_layout ci_checkout hil_status_read hil_preflight hil_mic_stop_wait hil_mic_gaps hil_history_fill '
+                'static_ram link_wraps hil_overhead hil_settings_walk public_layout ci_checkout hil_status_read hil_preflight hil_mic_stop_wait hil_mic_gaps hil_history_fill hil_restore_partial hil_nvs_erased '
+                'hil_usb_recovery '
                 'firmware_proof sync_public_firmware').split()
 
 # Replay checks on firmware/evidence: (check script, replay source or None).

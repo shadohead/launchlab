@@ -316,7 +316,10 @@ int main() {
     MilestoneStore store;Config fresh;assert(!store.begin(fresh));
     c.revision+=2;assert(store.save(c));
     Config reread;MilestoneStore again;assert(again.begin(reread) && reread.same(c) && reread.revision==c.revision);
+    // A table older than the saved one would lose to it at the next boot: refused.
+    assert(store.savedGeneration()==c.revision);
+    Config older=c;older.revision-=1;assert(!store.save(older) && store.savedGeneration()==c.revision);
     h=Appearance::LoadedHooks();
   }
-  std::cout<<"PASS: milestone defaults, table rules with failing rows, effect pools and picks across 128 bits, v2 and v1 import and compatibility, shown-RPM thresholds, one-animation rule, record round trip and damage, damaged-record fallback, NVS budget, USB requests, shared web vectors, loaded slots and their 0.18 view\n";
+  std::cout<<"PASS: older-table save refused; milestone defaults, table rules with failing rows, effect pools and picks across 128 bits, v2 and v1 import and compatibility, shown-RPM thresholds, one-animation rule, record round trip and damage, damaged-record fallback, NVS budget, USB requests, shared web vectors, loaded slots and their 0.18 view\n";
 }

@@ -27,13 +27,26 @@ public:
     LaunchMotion::encode(reference,nextGeneration,image_);
     const uint32_t hash=LaunchMotion::checksum(image_.data(),image_.size());
     if(prefs_.putBytes(key,image_.data(),image_.size())!=image_.size())return false;
+    unverified_=true;
     auto restored=std::unique_ptr<LaunchMotion::Trace>(new(std::nothrow) LaunchMotion::Trace);
     uint32_t gen=0;
     if(!restored || prefs_.getBytes(key,image_.data(),image_.size())!=image_.size() ||
        LaunchMotion::checksum(image_.data(),image_.size())!=hash || !LaunchMotion::decode(image_,*restored,gen) || gen!=nextGeneration)return false;
-    generation_=gen;slot_=next;return true;
+    generation_=gen;slot_=next;unverified_=false;return true;
   }
+  // Removes both slots (a restore putting back "no reference"); nothing else calls it.
+  bool clear() {
+    if(!ready_)return false;
+    for(const char *key:{"ref0","ref1"})if(prefs_.isKey(key) && (!prefs_.remove(key) || prefs_.isKey(key)))return false;
+    generation_=0;slot_=0;unverified_=false;return true;
+  }
+  // A write NVS took did not read back: the slot it went to may hold a
+  // reference newer than generation(), which the next boot would load. The
+  // next save goes to the same slot and settles it; so does clear().
+  bool unverified()const{return unverified_;}
   bool ready()const{return ready_;}
+  // The generation of the newest record (0 with none); each save advances it.
+  uint32_t generation()const{return generation_;}
 private:
-  Preferences prefs_;LaunchMotion::Image image_{};uint32_t generation_=0;unsigned slot_=0;bool ready_=false;
+  Preferences prefs_;LaunchMotion::Image image_{};uint32_t generation_=0;unsigned slot_=0;bool ready_=false,unverified_=false;
 };

@@ -11,7 +11,10 @@ read-flash of the 1.9 MB image. The image header is kept as built
 
 --readback also reads the region back with read-flash and compares it with the
 file byte for byte: the release gate does that for the production image it
-leaves on a unit, which is the owner's own.
+leaves on every rig it flashed.
+
+Like every tool that touches a unit it refuses the owner's units and a port it
+cannot identify (port_guard.py; --owner-ok MAC, --unknown-unit-ok).
 
   python3 firmware/tools/hil/flash.py --esptool ESPTOOL --port /dev/cu.usbmodemNNN [--readback] IMAGE
 """
@@ -25,7 +28,9 @@ import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import port_guard  # noqa: E402
 from port_guard import require_free  # noqa: E402
+import usb_reenumerate  # noqa: E402
 
 APP_OFFSET = '0x10000'
 WRITTEN = 'Hash of data verified.'
@@ -36,11 +41,26 @@ class FlashError(RuntimeError):
     pass
 
 
-def esptool(tool, port, *args, run=subprocess.run):
+NO_DATA = 'No serial data received'
+
+
+def esptool(tool, port, *args, run=subprocess.run, reenumerate=usb_reenumerate.reenumerate):
+    """One esptool call. A unit that gives esptool no serial data at all has the
+    USB restart wedge (usb_reenumerate.py): its port is re-enumerated from the
+    host, as a cable replug would, and the call is made once more."""
+    command = [tool, '--chip', 'esp32s3', '--port', port, '--after', 'watchdog_reset', *args]
     require_free(port)
-    out = run([tool, '--chip', 'esp32s3', '--port', port, '--after', 'watchdog_reset', *args],
-              capture_output=True, text=True)
-    return out.returncode, (out.stdout + out.stderr).replace('\r', '\n')
+    out = run(command, capture_output=True, text=True)
+    text = (out.stdout + out.stderr).replace('\r', '\n')
+    if out.returncode and NO_DATA in text:
+        try:
+            location = reenumerate(port=port)
+        except usb_reenumerate.Unavailable as e:
+            return out.returncode, text + f'\nUSB re-enumeration not possible: {e}\n'
+        require_free(port)
+        out = run(command, capture_output=True, text=True)
+        text = f'no serial data: re-enumerated the device at USB location {location} and tried again\n' + (out.stdout + out.stderr).replace('\r', '\n')
+    return out.returncode, text
 
 
 def install(tool, port, image, offset=APP_OFFSET, run=subprocess.run, settle=6.0, readback=False):
@@ -89,7 +109,9 @@ def main(argv=None):
     p.add_argument('--offset', default=APP_OFFSET)
     p.add_argument('--readback', action='store_true', help='also read the region back and compare every byte')
     p.add_argument('image', type=Path)
+    port_guard.add_arguments(p)
     a = p.parse_args(argv)
+    port_guard.apply(a, a.port)
     try:
         print(json.dumps(install(a.esptool, a.port, a.image, a.offset, readback=a.readback), indent=1))
     except FlashError as e:

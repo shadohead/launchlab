@@ -19,6 +19,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from hil_device import Device, number  # noqa: E402
+import port_guard  # noqa: E402
 from rig import Rig  # noqa: E402
 import scenarios  # noqa: E402
 import signals  # noqa: E402
@@ -34,7 +35,9 @@ def main():
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--levels', default='125,115,108,102,98,95,92,89')
     p.add_argument('--saves', type=int, default=5)
+    port_guard.add_arguments(p)
     a = p.parse_args()
+    port_guard.apply(a, a.port)
     a.out.mkdir(parents=True, exist_ok=True)
     dev = Device(a.port, a.out / 'serial.log')
     time.sleep(3)

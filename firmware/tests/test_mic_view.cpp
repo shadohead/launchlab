@@ -216,25 +216,27 @@ static void a_spin_the_ring_has_partly_lost_is_heard_in_time() {
   // It ends 8 s after the tone does, as any spin.
   assert(t.ended() && t.lastSeconds()>=28 && t.elapsed()<=39);
 }
+// Analysis (0.21.0) has the Mic RPM page's Menu row and page value: the mic
+// runs while it is open.
 static void the_page_opens_from_the_menu_and_every_way_back_leaves_it() {
   using namespace Controls;
-  assert(MENU_COUNT==9);
-  State s;s.page=Page::Menu;s.menu=MIC_ROW;
-  s.tapA();assert(s.page==Page::MicRpm);
+  assert(MENU_COUNT==10 && uint8_t(Page::Analysis)==11);
+  State s;s.page=Page::Menu;s.menu=ANALYSIS_ROW;
+  s.tapA();assert(s.page==Page::Analysis);
   assert(!s.autoRecap());  // a pull stays on the view, without a recap
-  s.tapB();assert(s.page==Page::MicRpm);
-  s.tapA();assert(s.page==Page::Menu);
-  s.page=Page::MicRpm;s.holdB();assert(s.page==Page::Menu);
-  s.page=Page::MicRpm;assert(s.holdA()==Effect::None && s.page==Page::MicRpm);
+  assert(s.tapB()==Effect::AnalysisStop && s.page==Page::Analysis);
+  assert(s.tapA()==Effect::AnalysisReplay && s.page==Page::Analysis);
+  s.holdB();assert(s.page==Page::Main);
+  s.page=Page::Analysis;assert(s.holdA()==Effect::None && s.page==Page::Analysis);
   s.page=Page::Menu;s.menu=BACK_ROW;s.tapA();assert(s.page==Page::Main);  // Back is still last
 }
-// The mic never starts on wake: the view comes back as its Menu row.
+// The mic never starts on wake: Analysis comes back as Main.
 static void waking_returns_to_the_menu_row() {
   using namespace Controls;
-  State s;s.page=Page::MicRpm;s.menu=2;
+  State s;s.page=Page::Analysis;s.menu=2;
   State out;uint8_t view=0;
   assert(decodeWake(encodeWake(s,0),out,view));
-  assert(out.page==Page::Menu && out.menu==MIC_ROW);
+  assert(out.page==Page::Main && out.menu==2);
 }
 static void its_usb_letters_are_guarded() {
   for(const char c:{'m','A','Y'})assert(UsbCommandGuard::guarded(c) && !UsbCommandGuard::immediate(c));

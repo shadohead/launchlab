@@ -44,22 +44,28 @@ public:
   // when `replaceUnreadable` (a restore).
   bool save(const Themes::Library &library,bool replaceUnreadable=false) {
     if(status_==Status::Unavailable || (status_==Status::Unreadable && !replaceUnreadable))return false;
-    if(status_!=Status::Unreadable && !pending(library))return true;
+    if(status_!=Status::Unreadable && !pending(library) && !unverified_)return true;
     Themes::Library::Image image{},readback{};library.encode(image);
     Themes::Library decoded;
-    if(prefs_.putBytes(KEY,image.data(),image.size())!=image.size() ||
-       prefs_.getBytes(KEY,readback.data(),readback.size())!=readback.size() || image!=readback ||
+    if(prefs_.putBytes(KEY,image.data(),image.size())!=image.size())return false;
+    unverified_=true;
+    if(prefs_.getBytes(KEY,readback.data(),readback.size())!=readback.size() || image!=readback ||
        !decoded.decode(readback.data(),readback.size()))return false;
-    saved_=library;status_=Status::Loaded;return true;
+    saved_=library;status_=Status::Loaded;unverified_=false;return true;
   }
   // Removes the record, readable or not.
   bool clear() {
     if(status_==Status::Unavailable)return false;
     if(prefs_.isKey(KEY) && (!prefs_.remove(KEY) || prefs_.isKey(KEY)))return false;
-    saved_=Themes::Library{};status_=Status::Empty;return true;
+    saved_=Themes::Library{};status_=Status::Empty;unverified_=false;return true;
   }
+  // A write NVS took did not read back: the record may no longer be the one
+  // this store last saved or loaded. The next save writes it again (even an
+  // unchanged library) and settles it; so does clear().
+  bool unverified()const{return unverified_;}
 private:
   Preferences prefs_;
   Themes::Library saved_;
   Status status_=Status::Unavailable;
+  bool unverified_=false;
 };

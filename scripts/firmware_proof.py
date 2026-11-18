@@ -198,6 +198,8 @@ def hil(args):
                          'run `bash scripts/build-firmware.sh --hil` (it writes build-info.json)')
     sys.path.insert(0, str(REPO / 'firmware/tools/hil'))
     import contributor_hil
+    import port_guard
+    port_guard.allow(args.owner_ok, args.unknown_unit_ok)
     out = Path(args.run_dir or Path.home() / 'launchlab-hil' / datetime.datetime.now().strftime('%Y%m%d-%H%M%S'))
     try:
         section = contributor_hil.run(port=args.port, backup=args.backup, out=out, build_dir=args.build_dir,
@@ -372,6 +374,10 @@ def main():
     p.add_argument('--run-dir', type=Path, help='where logs and backups go (default ~/launchlab-hil/<time>)')
     p.add_argument('--sensor', choices=('fitted', 'absent'), help='whether an optical sensor is fitted')
     p.add_argument('--out', type=Path, default=PROOF)
+    p.add_argument('--owner-ok', action='append', default=[], metavar='MAC',
+                   help='open this unit although the HIL tools protect it (port_guard.py)')
+    p.add_argument('--unknown-unit-ok', action='store_true',
+                   help='open a port whose USB serial cannot be read (port_guard.py)')
     p.add_argument('scenario', nargs='*', help="run_hil.py scenarios (default: all, about an hour)")
     p = sub.add_parser('show', help='print the proof block to paste')
     p.add_argument('--out', type=Path, default=PROOF)

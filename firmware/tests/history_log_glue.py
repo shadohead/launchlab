@@ -10,7 +10,9 @@ from pathlib import Path
 
 TESTS = Path(__file__).resolve().parent
 
-HELPERS = ('historyUnsaved', 'bestsUnsaved', 'logHistory', 'logBests')
+HELPERS = ('historyUnsaved', 'bestsUnsaved', 'logHistory', 'logBests', 'rivalsUnsaved', 'logRivals')
+# The battle records' two helpers: real in every harness, the log open or closed.
+RIVAL_HELPERS = ('rivalsUnsaved', 'logRivals')
 
 
 def function(source, name):
@@ -28,7 +30,8 @@ def glue(source, functions=HELPERS):
     head = (f'#include "{TESTS.parent / "LaunchLabMini/history_log.h"}"\n#include "{TESTS / "fakes/nor_flash.h"}"\n'
             'using SpiffsFlash=NorFlash;\n'
             'static SpiffsFlash spiffsFlash;static HistoryLog::Store<SpiffsFlash> historyLog;\n'
-            'static uint32_t loggedHistory=0,loggedBests=0;\nstatic uint32_t powerMirror=0;\n')
+            'static uint32_t loggedHistory=0,loggedBests=0;\nstatic uint32_t powerMirror=0;\n'
+            'static Battle::Book rivals;static uint32_t loggedRivals=0;\n')
     return head + '\n'.join(function(source, name) for name in functions) + '\n'
 
 
@@ -36,7 +39,7 @@ def closed(source):
     """For harnesses with their own simplified stores and Snapshot: the
     globals and the sketch's behaviour with the log closed (NVS pending, the
     log never written), as before 0.18."""
-    return glue(source, ()) + ('static bool historyUnsaved(){return practiceStore.pending(practice);}\n'
+    return glue(source, RIVAL_HELPERS) + ('static bool historyUnsaved(){return practiceStore.pending(practice);}\n'
                                'static bool bestsUnsaved(){return bestStore.pending(personalBests);}\n'
                                'static bool logHistory(){return false;}\nstatic bool logBests(){return false;}\n'
                                'template<class S> static void tickHistoryLog(uint32_t,const S &){}\n')

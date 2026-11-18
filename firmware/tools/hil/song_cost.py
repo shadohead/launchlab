@@ -27,6 +27,7 @@ import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from hil_device import Device, number  # noqa: E402
+import port_guard  # noqa: E402
 import fx_client  # noqa: E402
 
 KINDS = {
@@ -166,7 +167,9 @@ def main():
     p.add_argument('--port', required=True)
     p.add_argument('--out', type=pathlib.Path, required=True)
     p.add_argument('names', nargs='*', help='songs to measure (default all): ' + ', '.join(songs()))
+    port_guard.add_arguments(p)
     a = p.parse_args()
+    port_guard.apply(a, a.port)
     a.out.mkdir(parents=True, exist_ok=True)
     chosen = {k: v for k, v in songs().items() if not a.names or k in a.names}
     d = Device(a.port, log_path=a.out / 'serial.log')

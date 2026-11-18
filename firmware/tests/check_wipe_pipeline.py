@@ -61,6 +61,11 @@ static AnalysisMode::Session analysis;
 #include "launch_motion.h"
 #include "ble_link_fake.h"
 static bool bluetoothOn=false;static bool bluetoothAtBoot=false;
+// No battle card is up in these checks: every press is the page's (check_controls_pipeline has the cards).
+static bool battlesOn=true;static uint8_t battleMatchTo=4;
+namespace Battle {enum class Button:uint8_t {A,B,HoldB};static constexpr uint8_t MATCH_SHORT=4,MATCH_LONG=7;}
+namespace BattleFeed {static bool cardShown(){return false;}static bool press(Battle::Button){return false;}
+template<class S>static void tick(uint32_t,const S &){}}
 #include "Button_Class.hpp"
 #define M5UNIFIED_IMPLEMENTATION
 #include "Button_Class.inl"
@@ -97,8 +102,8 @@ struct {void restart(){++restarts;}}ESP;
 struct M5Fake {
   m5::Button_Class BtnA,BtnB;bool rawA=false,rawB=false;unsigned updates=0;
   void update(){++updates;BtnA.setRawState(millis(),rawA);BtnB.setRawState(millis(),rawB);}
-  struct {unsigned rotation=0,brightness=0;void setRotation(unsigned n){rotation=n;}void setBrightness(unsigned n){brightness=n;}
-    unsigned getBrightness()const{return brightness;}void setTextSize(unsigned){} }Display;
+  struct {unsigned rotation=0,brightness=0;bool asleep=false;void setRotation(unsigned n){rotation=n;}void setBrightness(unsigned n){brightness=n;}
+    unsigned getBrightness()const{return brightness;}void setTextSize(unsigned){}void sleep(){asleep=true;}void wakeup(){asleep=false;} }Display;
   struct {void setExtOutput(bool){normal();}}Power;
 }M5;
 struct IdleFake {template<class F>bool run(F fn){return fn();}};
@@ -136,7 +141,7 @@ static bool motionPending=false,dirty=false,diagnostics=false,historyPage=false,
 static bool extPower=false,stress=false,restorePreview=false,settingsSaveError=false,displayFlipped=false;
 static bool celebrationSound=false,soundPreview=false,lastFault=false,effectWasMoving=false;
 static uint8_t brightnessPercent=Brightness::DEFAULT_PERCENT;
-static uint32_t lastDraw=0,lastStatus=0,lastRevision=0,newSessionAt=0,tournamentHintUntil=0,uiStalls=0,historyOffset=0;
+static uint32_t lastDraw=0,lastStatus=0,lastRevision=0,lastBelowMin=0,newSessionAt=0,tournamentHintUntil=0,uiStalls=0,historyOffset=0;
 static AnalogTachometer::Phase lastPhase=AnalogTachometer::Phase::Ready;
 namespace PracticeUI {enum class View:uint8_t{Recent,Best,Trend,Battery,Settings};}
 static PracticeUI::View historyView=PracticeUI::View::Recent;
@@ -150,7 +155,7 @@ static Appearance::Config appearance;static Appearance::Celebration bestEffect,e
 static InactivityTimer inactivity;static OpticalSleepGuard opticalGuard;static HeldButtonUse heldButtons;static StickS3Level level;static StickS3Level::Reading drawnLevel;
 static UsbHostAwake usbAwake;
 struct {uint32_t magic=123;}sleepReceipt;
-struct Sound {unsigned stops=0;void stop(){++stops;}}soundPlayer;
+struct Sound {unsigned stops=0,shutdowns=0;void stop(){++stops;}void shutdown(){++shutdowns;}}soundPlayer;
 static struct {bool active=false;}soundRequest;
 @CELEBRATION_HOLD@
 struct LaunchFeedback {enum class Replay {Twice,Loop};};
@@ -172,6 +177,7 @@ struct Snapshot {
   bool opticalIdle=true;
   uint32_t launches=7,revision=1,revolutions=3;bool valid=true,signalFault=false;
   float resultRpm=6000,amplitude=1000,startNoise=3,contrast=1000,noise=3;uint64_t detectorUs=1000000;uint32_t strongTurns=0;
+  float minRpm=0,belowMinRpm=0;uint32_t belowMin=0;
   bool ready=true,suspended=false;
   uint8_t pin=1;const char *endName()const{return "gap";}const char *stateName()const{return "Ready";}
 };
@@ -209,7 +215,21 @@ namespace MotionReplay {static bool playbackNeedsFrame(const LaunchMotion::Trace
 static bool visibleDisplayFlipped(){return false;}
 struct Prefs {unsigned writes=0;size_t putUChar(const char *,uint8_t){++writes;normal();return 1;}
   bool putBool(const char *,bool){++writes;normal();return true;}}prefs;
-struct {bool arm(){normal();return true;}bool restore(){normal();return true;}}shakeWake;
+// The blocked wipe page's power-off (wipeBlockedPowerOff): PM1 powers off from
+// sleep(); this fake returns, as when PM1 refuses, so the loop goes on.
+static UsbStandby usbStandby{};static uint64_t standbyRecheckUs(){return 900000000;}
+struct HWCDC {inline static bool plugged=false;static bool isPlugged(){return plugged;}};
+struct {void invalidate(){}}frameRows;static uint8_t backlightValue(){return 255;}
+struct {
+  unsigned sleeps=0;
+  bool arm(){normal();return true;}bool restore(){normal();return true;}
+  bool sleep(uint64_t recheckUs) {
+    // Dark, silent, the side key's own standby (no IMU armed), nothing written.
+    assert(recheckUs==900000000 && !M5.Display.brightness && M5.Display.asleep && soundPlayer.shutdowns);
+    assert(usbStandby.magic==UsbStandby::MAGIC && usbStandby.keyOnly && wipeBlocked);
+    ++sleeps;return false;
+  }
+}shakeWake;
 static unsigned restoreFailureNotes=0;static void noteMotionRestoreFailure(){++restoreFailureNotes;}
 static void status(){++statusReads;}
 static void draw(const Snapshot &){++draws;}
@@ -233,18 +253,24 @@ static void exportScreen(){normal();}static void exportSignal(){normal();}
 static Appearance::Effect celebrationEffect(){return Appearance::Effect::Flames;}
 static void previewBestEffect(Appearance::Effect){normal();}
 static unsigned motionPreps=0,startMarkNotes=0;
-static void prepareMotion(const Snapshot &){++motionPreps;normal();}static void logLaunchMetrics(const Snapshot &){normal();}static void noteStartMark(const Snapshot&){++startMarkNotes;}static void saveStartMarks(){}
+static unsigned celebrations=0;static void prepareMotion(const Snapshot &,bool celebrate=true){++motionPreps;celebrations+=celebrate;normal();}static void logLaunchMetrics(const Snapshot &){normal();}static void noteStartMark(const Snapshot&){++startMarkNotes;}static void saveStartMarks(){}
 static void finishMotion(){normal();}static void retryMotion(uint32_t,const Snapshot &){normal();}
 static void saveHistory(uint32_t,const Snapshot &){normal();}
+// The battle records are saved from RAM like history: never after an erase attempt.
+static void saveRivals(uint32_t,const Snapshot &){normal();}
 // Settings saves and the orphaned-checkpoint release must never run after an
 // erase attempt: one would write old RAM, the other resume the held checkpoint.
 static void saveSettings(uint32_t,const Snapshot &){normal();}static void restartForBluetooth(uint32_t,const Snapshot &){}static void releaseOrphanCheckpoint(uint32_t,const Snapshot &){normal();}
-struct SettingsSave {static constexpr uint16_t Bonds=4096,Bluetooth=2048;enum Item:uint32_t {Pin=128,ExtPower=256,AnalysisResult=65536};void mark(uint32_t){normal();}bool pending()const{return false;}}settingsSave;
+struct SettingsSave {static constexpr uint32_t Bonds=4096,Bluetooth=2048,Battles=32768;enum Item:uint32_t {Pin=128,ExtPower=256,AnalysisResult=65536};void mark(uint32_t){normal();}bool pending()const{return false;}}settingsSave;
 static void pollBattery(uint32_t,const Snapshot &){normal();}static void tickPowerLog(uint32_t,const Snapshot &){normal();}static void tickHistoryLog(uint32_t,const Snapshot &){normal();}
 static void pollUsbAwake(uint32_t,const Snapshot &){normal();}static void tickSound(const Snapshot &){normal();}
 // Side-key power-off has its own production harness; its wipe guard is tested there.
 static bool powerKeyRequested=false;static uint32_t powerKeyRequestedAt=0;
-static void pollPowerKey(uint32_t){}static void powerKeyOff(uint32_t,const Snapshot &){}
+// The loop polls the key (a latched click becomes powerKeyRequested, as in
+// pollPowerKey); powerKeyOff itself, and its wipe guard, are tested there.
+static unsigned keyPolls=0;static bool clickPending=false;
+static void pollPowerKey(uint32_t now){++keyPolls;if(clickPending){clickPending=false;powerKeyRequested=true;powerKeyRequestedAt=now;}}
+static void powerKeyOff(uint32_t,const Snapshot &){}
 static void beginWipe();static void cancelWipe();
 namespace DeviceWipe {
 // Host replacement of the platform adapter only. The transaction core above
@@ -283,12 +309,14 @@ static void reset() {
   wipeFailed=wipeBlocked=wipeComplete=wipeCheckpointHeld=wipeBootRecovery=wipeRestartRequested=false;
   motionPending=dirty=diagnostics=historyPage=demo=motionDemo=tournamentMode=false;
   extPower=stress=restorePreview=settingsSaveError=displayFlipped=celebrationSound=soundPreview=lastFault=effectWasMoving=false;
-  lastDraw=lastStatus=lastRevision=newSessionAt=tournamentHintUntil=uiStalls=historyOffset=0;
-  acquisition={};practice={};motionPreps=startMarkNotes=0;M5={};imuAcquisition.available=true;Serial={};restoreRx={};soundPlayer={};soundRequest={};
+  lastDraw=lastStatus=lastRevision=lastBelowMin=newSessionAt=tournamentHintUntil=uiStalls=historyOffset=0;
+  acquisition={};practice={};motionPreps=startMarkNotes=celebrations=0;M5={};imuAcquisition.available=true;Serial={};restoreRx={};soundPlayer={};soundRequest={};
   M5.BtnA.setHoldThresh(1000);M5.BtnB.setHoldThresh(1000);
   launchFeedback={};inactivity={};level={};usbAwake={};appearance={};bestEffect={};editorEffect={};sleepReceipt.magic=123;
   prefs={};Store::seed();
-}
+  keyPolls=0;clickPending=powerKeyRequested=false;powerKeyRequestedAt=0;HWCDC::plugged=false;
+  shakeWake.sleeps=0;usbStandby={};
+@RESET_POWER@}
 static void stepAt(uint32_t now,bool a=false,bool b=false,bool fresh=true) {
   clockMs=now;M5.rawA=a;M5.rawB=b;imuAcquisition.available=fresh;loop();
 }
@@ -467,6 +495,54 @@ static void bootRecovery() {
   Store::failClear=0;tapA();arm();const auto retry=startHold();holdUntil(retry,3000);
   assert(wipeComplete && !acquisition.begins && !acquisition.resumes);step();assert(restarts==1);
 }
+// A failed erase, or a boot marker that cannot be resumed, blocks every save
+// until restart. Through 0.20.10 that page also ignored the side key and never
+// slept, a drain until flat (PM1's double click aside). Its power-off writes
+// nothing, so the guarantee stands; the next boot blocks again.
+static void blockedPowerOff() {
+  for(unsigned kind=0;kind<2;++kind) {
+    reset();
+    if(kind==0) {
+      open();arm();Store::failClear=3;const auto start=startHold();holdUntil(start,3000);
+      assert(wipeBlocked && wipeFailed && !wipeComplete && acquisition.suspended);
+    } else {
+      Store::marker=DeviceWipe::State::Invalid;Store::boot=true;actualBootBoundary();Store::boot=false;
+      assert(wipeBlocked && wipeBootRecovery && !normalLoads);
+    }
+    const auto writes=normalWrites,clears=Store::clears,intents=Store::intents,removals=Store::removals;
+    auto nothingWritten=[&]{
+      assert(normalWrites==writes && Store::clears==clears && Store::intents==intents && Store::removals==removals);
+      assert(wipeBlocked && controls.page==Page::Wipe && !restarts && !acquisition.resumes && !normalLoads);
+    };
+    // The side key: read on the blocked page, and it powers off.
+    step();const auto polls=keyPolls;clickPending=true;step();
+    if(!shakeWake.sleeps)std::cout<<"the blocked wipe page ignored the side key\n";
+    assert(keyPolls>polls && shakeWake.sleeps==1 && !powerKeyRequested);
+    nothingWritten();
+    // PM1 refused (the fake returns): the screen is back on the same page.
+    assert(!M5.Display.asleep && M5.Display.brightness);
+    // No button for IDLE_MS: it powers off by itself, writing nothing.
+    using P=WipeBlockedPower;
+    inactivity.touch(clockMs);const uint32_t used=clockMs;
+    while(clockMs-used<P::IDLE_MS-20)step();
+    assert(shakeWake.sleeps==1);
+    stepAt(used+P::IDLE_MS);
+    if(shakeWake.sleeps!=2)std::cout<<"the blocked wipe page never slept\n";
+    assert(shakeWake.sleeps==2);
+    nothingWritten();
+    // A refused power-off is retried a minute later, not every pass.
+    for(unsigned i=0;i<100;++i)step();
+    assert(shakeWake.sleeps==2);
+    stepAt(used+P::IDLE_MS+P::RETRY_MS);assert(shakeWake.sleeps==3);
+    // A computer attached keeps it on (USB power), the side key still powers off.
+    HWCDC::plugged=true;inactivity.touch(clockMs);const uint32_t host=clockMs;
+    while(clockMs-host<600000)stepAt(clockMs+1000);
+    assert(shakeWake.sleeps==3);
+    clickPending=true;step();assert(shakeWake.sleeps==4);
+    HWCDC::plugged=false;stepAt(clockMs+P::RETRY_MS);assert(shakeWake.sleeps==5);
+    nothingWritten();
+  }
+}
 static void standbyGuard() {
   reset();open();const auto writes=normalWrites;
   inactivity.touch(millis()-inactivity.timeout());autoPowerOff(millis(),acquisition.snapshot());
@@ -476,9 +552,9 @@ static void standbyGuard() {
 }
 int main() {
   physicalAndUsb();pendingUsbPrefix();interruptedHold();busyDoesNotWrite();unseenWarningsDuringLaunch();
-  partialFailureBlocksOldRam();bootRecovery();standbyGuard();
+  partialFailureBlocksOldRam();bootRecovery();standbyGuard();blockedPowerOff();
   std::cout<<"PASS: actual wipe sketch/loop/USB flow; physical3s, fresh observations, release restart, "
-              "busy/late-owner gates, partial-failure old-RAM write exclusion, boot recovery and standby guards\n";
+              "busy/late-owner gates, partial-failure old-RAM write exclusion, boot recovery, standby guards and the blocked page's power-off\n";
 }
 '''
 
@@ -490,7 +566,7 @@ def run(tests, args=(), source=SOURCE):
     source = source.read_text()
     setup = function(source, "setup", static=False)
     boundary = "if(!recoverWipe())return;"
-    recovery = setup.index(boundary)
+    recovery = setup.index("if(!recoverWipe())")
     for load in ('prefs.begin(', 'powerPrefs.begin(', 'practiceStore.begin(',
                  'appearanceStore.begin(', 'bestStore.begin(', 'motionStore.begin(',
                  'startMotion()', 'acquisition.begin('):
@@ -503,6 +579,14 @@ def run(tests, args=(), source=SOURCE):
     for name, result in (("wearDetectorReady", "bool"), ("observeWearMount", "void"), ("noteWearTap", "void"), ("logWearPull", "void")):
         if f"static {result} {name}(" in source:
             bodies += "\n" + function(source, name, result=result)
+    power = "static void wipeBlockedPowerOff(" in source
+    if power:
+        bodies += "\nstatic WipeBlockedPower wipePower;\n" + function(source, "wipeBlockedPowerOff")
+    else:
+        bodies += "\nstatic void wipeBlockedPowerOff(uint32_t){}\n"
+    # The launch event handler loop() and the shutdown flush share.
+    if "static bool routeEvent(" in source:
+        bodies += "\n" + function(source, "routeEvent", result="bool")
     hold = re.search(r"static constexpr uint32_t CELEBRATION_HOLD_MS=\d+;", source)
     bodies += "\n" + function(source, "recoverWipe", result="bool")
     bodies += "\n" + function(source, "runUsbCommand") + "\n" + function(source, "pollCommands")
@@ -522,7 +606,8 @@ def run(tests, args=(), source=SOURCE):
     with tempfile.TemporaryDirectory(prefix="launchlab-wipe-pipeline-") as temp:
         build = Path(temp)
         cpp = build / "test.cpp"
-        cpp.write_text(PREFIX.replace('@CELEBRATION_HOLD@', hold[0] if hold else '') + bodies + COMMON + tests)
+        common = COMMON.replace('@RESET_POWER@', '  wipePower={};\n' if power else '')
+        cpp.write_text(PREFIX.replace('@CELEBRATION_HOLD@', hold[0] if hold else '') + bodies + common + tests)
         executable = build / "test"
         subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17", "-O1", "-g",
                         "-fsanitize=address,undefined", "-fno-omit-frame-pointer",

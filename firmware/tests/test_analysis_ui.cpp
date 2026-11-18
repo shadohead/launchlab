@@ -208,7 +208,7 @@ int main(){
   assert(marked.rejectedRpm(1)==0 && marked.rejectedRpm(2)==12000 && marked.peakRpm()==5900);
   AnalysisMode::Session markedSession;markedSession.begin(12,true,6000,1000000);
   lgfx::LGFXBase markedGraph;AnalysisUI::draw(markedGraph,markedSession,2000000,&marked,MicView::Mic::On,motion,false,false,colors,curve);assert(markedGraph.grayDots==1 && markedGraph.drew("Finish") && markedGraph.drew("~") && !markedGraph.drew("-:--"));
-  lgfx::LGFXBase normalGraph;MicView::draw(normalGraph,&marked,MicView::Mic::On,colors);assert(normalGraph.grayDots==0);
+  lgfx::LGFXBase normalGraph;MicView::plot(normalGraph,marked,colors);assert(normalGraph.grayDots==0);  // rejected readings only on Analysis
   lgfx::LGFXBase fallback;
   AnalysisUI::draw(fallback,markedSession,31000000,&marked,MicView::Mic::On,motion,false,false,colors,curve,"READY",true,nullptr,nullptr,nullptr,nullptr,false,38.f);
   assert(fallback.drew("~0:38") && fallback.drew("48s"));
@@ -405,6 +405,6 @@ int main(){
   marked.freeze();bad.index=3;marked.add(bad);assert(marked.count()==3);
   marked.begin(13,7000);assert(marked.count()==0 && marked.rejectedPeakRpm()==0);
   accepted.launch=13;accepted.index=2;marked.add(accepted);assert(marked.rejectedRpm(2)==0);
-  lgfx::LGFXBase g;MicView::draw(g,&trace,MicView::Mic::On,colors);
-  std::cout<<"PASS: Analysis and existing microphone view text/plot bounds\n";
+  lgfx::LGFXBase g;MicView::plot(g,trace,colors);
+  std::cout<<"PASS: Analysis and the microphone plot's text/plot bounds\n";
 }

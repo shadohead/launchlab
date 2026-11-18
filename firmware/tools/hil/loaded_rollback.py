@@ -34,6 +34,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from hil_device import Device, DeviceError  # noqa: E402
+import port_guard  # noqa: E402
 import fx_client  # noqa: E402
 import milestones  # noqa: E402
 from upgrade_check import IMAGES, Rig, flash, plain_status  # noqa: E402
@@ -67,7 +68,9 @@ def main():
     p.add_argument('--hil-image', type=Path, required=True)
     p.add_argument('--esptool', default='esptool')
     p.add_argument('--rollback', nargs=2, action='append', default=[], metavar=('VERSION', 'FROZEN'))
+    port_guard.add_arguments(p)
     a = p.parse_args()
+    port_guard.apply(a, a.port)
     a.out.mkdir(parents=True, exist_ok=True)
     log = a.out / 'serial.log'
     checks = []

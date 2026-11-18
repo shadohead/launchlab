@@ -32,7 +32,7 @@ static bool same(const DeviceBackup::Contents &a,const DeviceBackup::Contents &b
   if(a.hasMotion!=b.hasMotion || (a.hasMotion && (a.motion.number!=b.motion.number || a.motion.rpm!=b.motion.rpm || a.motion.count!=b.motion.count)))return false;
   const auto &s=a.settings,&t=b.settings;
   return s.sleepMinutes==t.sleepMinutes && s.brightness==t.brightness && s.rpmMethod==t.rpmMethod && s.sensorProfile==t.sensorProfile && s.flipped==t.flipped && s.mount==t.mount &&
-    s.shakeWake==t.shakeWake && s.batteryIcon==t.batteryIcon;
+    s.shakeWake==t.shakeWake && s.batteryIcon==t.batteryIcon && s.minRpmSteps==t.minRpmSteps;
 }
 static Palette::Custom custom(const char *name,uint16_t accent) {
   Palette::Custom t;std::strncpy(t.name,name,Palette::Custom::MAX_NAME);
@@ -289,6 +289,29 @@ int main() {
     Buffer encoded;const auto length=encode(trial,"0.20.8-sticks3-test",encoded);
     Contents restored;assert(decode(encoded.data(),length,restored) && same(trial,restored));
   }
+  // Min RPM (0.21.0): a ninth settings byte only when it is not the 4,000 rpm
+  // default, so a default backup is byte for byte as before (older firmware
+  // restores it) and every other step travels through it.
+  {
+    Buffer plain;const auto plainLength=encode(original,"0.21.0-sticks3-test",plain);
+    for(uint8_t steps=MinRpm::MIN_STEPS;steps<=MinRpm::MAX_STEPS;++steps) {
+      auto trial=original;trial.settings.minRpmSteps=steps;
+      Buffer encoded;const auto length=encode(trial,"0.21.0-sticks3-test",encoded);
+      assert(length==plainLength+(steps==MinRpm::DEFAULT_STEPS?0:1));
+      if(steps==MinRpm::DEFAULT_STEPS)assert(std::equal(plain.begin(),plain.begin()+plainLength,encoded.begin()));
+      Contents restored;restored.settings.minRpmSteps=3;assert(decode(encoded.data(),length,restored) && same(trial,restored));
+    }
+    // A backup without the byte restores the default, whatever the unit had.
+    Contents restored;restored.settings.minRpmSteps=12;
+    assert(decode(plain.data(),plainLength,restored) && restored.settings.minRpmSteps==MinRpm::DEFAULT_STEPS);
+    // A ninth byte out of range is refused before anything is taken.
+    auto trial=original;trial.settings.minRpmSteps=12;Buffer encoded;const auto length=encode(trial,"0.21.0-sticks3-test",encoded);
+    const size_t body=length-4-MIN_RPM_SETTINGS_BYTES;assert(encoded[body+8]==12);
+    for(uint8_t bad:{0,1,21,255}) {
+      Buffer broken=encoded;broken[body+8]=bad;put32(broken.data()+length-4,checksum(broken.data(),length-4));
+      auto retained=decoded;assert(!decode(broken.data(),length,decoded) && same(decoded,retained));
+    }
+  }
   // The original reserved bytes are zero, so every legacy backup loads Top,
   // Shake to wake On and Battery icon On regardless of the destination's
   // previous choice. Sidecar uses only byte 5, Shake to wake Off only byte 6
@@ -315,6 +338,18 @@ int main() {
   std::string all;for(const auto &line:lines)all+=line;
   std::vector<std::string> odd;for(size_t i=0;i<all.size();i+=37)odd.push_back(all.substr(i,37));
   assert(transfer(rx,odd,now)==Receiver::Event::Complete && rx.take(back.data(),back.size(),written) && written==n);
+
+  // base64Text: the whole text in one string, for a `data=` field (the `M`
+  // list once kept only the last of a record's lines), or nothing when it does not fit.
+  for(size_t len:{size_t(0),size_t(1),size_t(2),size_t(3),size_t(71),size_t(72),size_t(73),size_t(232),n}) {
+    std::string joined;base64Lines(buffer.data(),len,96,[&](const char *line){joined+=line;});
+    std::vector<char> text((len+2)/3*4+1,'x');
+    assert(base64Text(buffer.data(),len,text.data(),text.size()) && joined==text.data() && std::strlen(text.data())==(len+2)/3*4);
+    std::array<uint8_t,MAX_BYTES> raw{};size_t got=0;
+    assert(base64Decode(text.data(),joined.size(),raw.data(),raw.size(),got) && got==len && std::equal(raw.begin(),raw.begin()+len,buffer.begin()));
+    assert(!base64Text(buffer.data(),len,text.data(),text.size()-1) && !text[0]);
+  }
+  {char none[1]={'x'};assert(!base64Text(buffer.data(),3,none,sizeof(none)) && !none[0] && base64Text(buffer.data(),0,none,sizeof(none)));}
 
   // No motion yet (a fresh device) is still a complete backup.
   auto fresh=original;fresh.hasMotion=false;
@@ -362,6 +397,17 @@ int main() {
   for(unsigned i=0;i<=TEXT_BYTES && event!=Receiver::Event::Error;++i)event=rx.feed('A',1);
   assert(event==Receiver::Event::Error && std::string(rx.error())=="too_large");
   rx.start(100);assert(!rx.timedOut(100+Receiver::IDLE_MS-1) && rx.timedOut(100+Receiver::IDLE_MS));
+  // midLine(): whether a transfer that ends now leaves part of a line to come (usb_command_guard.h).
+  {
+    char buffer[16];DeviceBackup::BufferReceiver buf;
+    for(int b=0;b<2;++b) {
+      auto check=[&](auto &r,auto start){
+        start();assert(!r.midLine());r.feed('Q',1);assert(r.midLine());r.feed('\r',2);assert(r.midLine());
+        r.feed('\n',3);assert(!r.midLine());r.feed('.',4);assert(r.midLine());r.cancel();assert(r.midLine());
+      };
+      if(b)check(buf,[&]{buf.start(buffer,sizeof(buffer),0);});else check(rx,[&]{rx.start(0);});
+    }
+  }
   rx.start(0);assert(rx.feed('Q',1)==Receiver::Event::None && rx.feed('\n',2)==Receiver::Event::Chunk && rx.received()==1);
   assert(rx.feed('.',3)==Receiver::Event::None && rx.feed('\n',4)==Receiver::Event::Complete && !rx.take(back.data(),back.size(),written));
 
@@ -440,5 +486,5 @@ int main() {
     put32(p.data()+4,LOADED_FORMAT);put32(p.data()+k-4,checksum(p.data(),k-4));Contents z;assert(!decode(p.data(),k,z));
   }
 
-  std::cout<<"PASS: device backup round trip, base64 line transfer at any split, fresh device without motion, all-or-nothing validation, format 7 with loaded effects, receiver bounds, and restored records outrank newer saved generations\n";
+  std::cout<<"PASS: device backup round trip, base64 line transfer at any split, fresh device without motion, all-or-nothing validation, format 7 with loaded effects, whole base64 text for data= fields, receiver bounds, and restored records outrank newer saved generations\n";
 }

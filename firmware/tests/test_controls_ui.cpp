@@ -60,13 +60,13 @@ int main() {
   using namespace Controls;unsigned renders=0;
   for(unsigned row=0;row<MENU_COUNT;++row){lgfx::LGFXBase g;ControlsUI::list(g,"Menu",ControlsUI::MENU,MENU_COUNT,row,MENU_GROUPS);assert(g.footers==1);++renders;}
   for(unsigned row=0;row<4;++row){lgfx::LGFXBase g;ControlsUI::list(g,"History",ControlsUI::HISTORY,4,row);assert(g.footers==1);++renders;}
-  uint8_t values[]={10,0,100,1,0,0,0,2,2,0,1,0,0,1,1};
+  uint8_t values[]={10,0,100,1,0,0,0,2,2,0,1,0,0,1,1,MinRpm::DEFAULT_STEPS};
   static_assert(sizeof(values)==SETTING_COUNT,"a value for every row");
   for(unsigned row=0;row<=SETTING_COUNT;++row){lgfx::LGFXBase g;State state;state.setting=row;ControlsUI::settings(g,state,values);assert(g.footers==1);++renders;}
   // Lowest and highest draft for each setting. A named array keeps the values
   // alive for the loop; a conditional initializer_list would dangle.
   const unsigned extremes[][2]={{1,10},{0,1},{10,100},{0,1},{0,1},{0,Appearance::THEMES-1},{0,Appearance::EFFECTS-1},{0,2},{0,2},{0,1},{0,1},
-    {0,0},{0,0},{0,1},{0,1}};  // Wipe all and About have no editor
+    {0,0},{0,0},{0,1},{0,1},{MinRpm::MIN_STEPS,MinRpm::MAX_STEPS}};  // Wipe all and About have no editor
   static_assert(sizeof(extremes)/sizeof(extremes[0])==SETTING_COUNT,"one range per setting");
   for(unsigned row=0;row<SETTING_COUNT;++row)if(editable(row))for(unsigned value:extremes[row]) {
     lgfx::LGFXBase g;State state;state.setting=row;state.draft=value;

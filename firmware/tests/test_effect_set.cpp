@@ -72,6 +72,19 @@ int main() {
     for(Effect want:expected){assert(s.tapB()==Controls::Effect::Preview);assert(s.draft==uint8_t(want));}
     // A fresh state offers the default set.
     Controls::State fresh;assert(fresh.offeredEffects==DEFAULT_MASK);
+    // BLE Get options (choices): the current choice first, then each other
+    // choice once. A saved effect outside the set is never reached again by
+    // next(), which once kept the listing walking forever.
+    auto listed=[](Effect from,Mask m){std::vector<Effect> v;choices(from,m,[&](Effect e){v.push_back(e);});return v;};
+    assert((listed(Effect::Tidal,mine)==std::vector<Effect>{Effect::Tidal,Effect::Crimson,Effect::Ravage,Effect::Off,Effect::Random,Effect::Slash}));
+    assert((listed(Effect::Slash,mine)==std::vector<Effect>{Effect::Slash,Effect::Crimson,Effect::Ravage,Effect::Off,Effect::Random}));
+    assert((listed(Effect::Off,flag(Effect::Bloom))==std::vector<Effect>{Effect::Off,Effect::Random,Effect::Bloom}));
+    for(Mask m:{DEFAULT_MASK,ALL,mine,flag(Effect::Bloom),~Mask()})for(unsigned v=0;v<256;++v) {
+      const auto got=listed(Effect(v),m);Mask seen;
+      assert(!got.empty() && got.size()<=Mask::BITS+1 && got[0]==Effect(v));
+      for(Effect e:got){assert(e==Effect(v) || !seen.has(e));seen|=flag(e);}
+      for(unsigned e=0;e<Mask::BITS;++e)assert(seen.has(e)==(offers(m,Effect(e)) || e==unsigned(Effect::Off) || e==unsigned(Effect::Random) || e==v));
+    }
   }
   // Random: only offered effects, never the previous pick while another is
   // offered; one offered effect always plays.
@@ -220,6 +233,6 @@ int main() {
       std::cerr<<"firmware/tests/fixtures/effect_set_vectors.json is stale: regenerate it with milestone_fixture.cpp effect-set\n";return 1;
     }
   }
-  std::cout<<"PASS: effect set masks and default, the Best effect cycle (through Controls) and Random's pool, record round trip and damage, "
+  std::cout<<"PASS: effect set masks and default, the Best effect cycle (through Controls) and its bounded BLE option list and Random's pool, record round trip and damage, "
              "damaged-record fallback beside the other ll-appearance records, Wipe all, NVS budget, set_effects requests refused by the milestone decoder, shared web vectors\n";
 }

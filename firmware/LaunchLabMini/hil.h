@@ -11,6 +11,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <nvs.h>
+#include "esp_partition.h"
 #include <esp_cpu.h>
 #include <esp_heap_caps.h>
 #include "esp_freertos_hooks.h"
@@ -20,6 +21,7 @@
 #include "hil_imu.h"
 #include "usb_tx.h"
 #include "hil_resync.h"
+#include "link_wraps.h"
 
 namespace Hil {
 // The sketch's RX queue is the production one (USB_RX_BUFFER_BYTES): HIL never resizes it.
@@ -34,6 +36,15 @@ template<size_t N> char *scratch(){static char *p=static_cast<char *>(heap_caps_
 // After any failed upload, input is swallowed until "!sync" or 1 s of quiet.
 inline HilResync resync;
 inline bool usbIdle=false; // Let the sensor-idle pause run while USB is attached.
+// After an erase attempt nothing may write (docs/FIRMWARE_WIPE_ALL.md): a
+// blocked unit runs only the commands that read, steer the blocked page's
+// power-off or remove an unresumable marker (wipe_blocked).
+inline constexpr const char *BLOCKED_COMMANDS[]={"hil","sync","sleepok","sleepdry","sleepscale","powerkey","usbstandby",
+  "standbywake","reboot","wipemarker"};
+inline bool blockedCommand(const char *cmd) {
+  for(const char *allowed:BLOCKED_COMMANDS)if(!strcmp(cmd,allowed))return true;
+  return false;
+}
 inline std::atomic<uint32_t> gateHolds{0},gateHeldMs{0},gateActive{0};
 
 // ---- Reply accounting. The USB TX path drops output it cannot drain within
@@ -87,10 +98,13 @@ inline void tasks() {
   Hil::reply("HIL_TASKS count=%u total_us=%lu now_us=%lld\n",unsigned(count),(unsigned long)total,(long long)esp_timer_get_time());
 }
 
-// ---- NVS write faults (linker --wrap of the Preferences setters).
+// ---- NVS write faults (linker --wrap of the Preferences setters), and
+// writes that land without reading back (--wrap of nvs_get_blob). The wrappers
+// themselves are in src/link_wraps/link_wraps.cpp.
 struct NvsFaults {
-  uint32_t fail=0,slow=0,slowMs=0,writes=0,failed=0,slowed=0;
-  char failKey[16]={},slowKey[16]={};
+  uint32_t fail=0,slow=0,slowMs=0,writes=0,failed=0,slowed=0,unread=0;
+  char failKey[16]={},slowKey[16]={},unreadKey[16]={},blindKey[16]={};
+  bool blind=false;  // the next read of blindKey fails
   // A pull armed to start from inside the next matching write: the loop task
   // that would read a USB !pull is itself busy saving.
   bool armed=false;int32_t armDelayMs=0;char armKey[16]={};
@@ -116,6 +130,17 @@ inline bool nvsWrite(const char *key,size_t bytes) {
   }
   Hil::reply("HIL_NVS key=%s bytes=%u\n",key?key:"",unsigned(bytes));
   return false;
+}
+// A blob write NVS took: `!nvs unread` makes the next read of its key fail.
+inline void nvsWroteBlob(const char *key) {
+  if(!nvs.unread || !key || !keyMatches(nvs.unreadKey,key))return;
+  --nvs.unread;nvs.blind=true;snprintf(nvs.blindKey,sizeof(nvs.blindKey),"%s",key);
+}
+// Returns true when this blob read must fail: the first read of a key after
+// a write `!nvs unread` chose (the store's readback of what it just wrote).
+inline bool nvsRead(const char *key) {
+  if(!nvs.blind || !key || strcmp(nvs.blindKey,key))return false;
+  nvs.blind=false;Hil::reply("HIL_FAULT nvs_unread key=%s\n",key);return true;
 }
 
 inline const char *resetName(esp_reset_reason_t r) {
@@ -178,20 +203,10 @@ inline void status() {
 }
 }
 
-extern "C" {
-esp_err_t __real_nvs_set_blob(nvs_handle_t handle,const char *key,const void *value,size_t length);
-esp_err_t __real_nvs_set_u8(nvs_handle_t handle,const char *key,uint8_t value);
-esp_err_t __real_nvs_set_u32(nvs_handle_t handle,const char *key,uint32_t value);
-esp_err_t __wrap_nvs_set_blob(nvs_handle_t handle,const char *key,const void *value,size_t length) {
-  return Hil::nvsWrite(key,length)?ESP_ERR_NVS_NOT_ENOUGH_SPACE:__real_nvs_set_blob(handle,key,value,length);
-}
-esp_err_t __wrap_nvs_set_u8(nvs_handle_t handle,const char *key,uint8_t value) {
-  return Hil::nvsWrite(key,1)?ESP_ERR_NVS_NOT_ENOUGH_SPACE:__real_nvs_set_u8(handle,key,value);
-}
-esp_err_t __wrap_nvs_set_u32(nvs_handle_t handle,const char *key,uint32_t value) {
-  return Hil::nvsWrite(key,4)?ESP_ERR_NVS_NOT_ENOUGH_SPACE:__real_nvs_set_u32(handle,key,value);
-}
-}
+// What the NVS wrappers ask (src/link_wraps/link_wraps.cpp: they are outside the sketch's object file).
+bool LinkWraps::hilNvsWriteFails(const char *key,std::size_t bytes){return Hil::nvsWrite(key,bytes);}
+void LinkWraps::hilNvsWroteBlob(const char *key){Hil::nvsWroteBlob(key);}
+bool LinkWraps::hilNvsReadFails(const char *key){return Hil::nvsRead(key);}
 
 #include "hil_sound_bench.h"
 
@@ -269,13 +284,14 @@ LOOP_HELPER static void hilCommand(char *line) {
   if(!cmd){Hil::replyLine("HIL_ERR empty");return;}
   auto arg=[&]()->const char *{return strtok_r(nullptr," ",&save);};
   auto num=[&](double fallback)->double{const char *t=arg();return t?strtod(t,nullptr):fallback;};
+  if(wipeBlocked && !Hil::blockedCommand(cmd)){Hil::reply("HIL_ERR wipe_blocked %s\n",cmd);return;}
   if(!strcmp(cmd,"hil")){Hil::status();return;}
   // Resynchronization point after a failed upload (also a no-op when idle).
   if(!strcmp(cmd,"sync")){Hil::reply("HIL_SYNC reason=idle discarded=0\n");return;}
   if(!strcmp(cmd,"reset")) {
     Hil::pullStartUs=0;optical().setMode(Hil::Optical::Mode::Pass);imu().setMode(Hil::Imu::Mode::Pass);
-    imu().faults.clear();Hil::nvs.fail=Hil::nvs.slow=0;Hil::nvs.armed=false;Hil::usbIdle=false;Hil::allowSleep=false;Hil::sleepDry=false;Hil::micStall=false;
-    Hil::sleepScale=1;
+    imu().faults.clear();Hil::nvs.fail=Hil::nvs.slow=Hil::nvs.unread=0;Hil::nvs.blind=false;Hil::nvs.armed=false;Hil::usbIdle=false;Hil::allowSleep=false;Hil::sleepDry=false;Hil::micStall=false;
+    Hil::sleepScale=1;hilFlushPull={};
     Hil::replyLine("HIL_OK reset");return;
   }
   if(!strcmp(cmd,"opt")) {
@@ -376,7 +392,12 @@ LOOP_HELPER static void hilCommand(char *line) {
   }
   if(!strcmp(cmd,"nvs")) {
     const char *what=arg();
-    if(what && !strcmp(what,"clear")){Hil::nvs.fail=Hil::nvs.slow=0;Hil::replyLine("HIL_OK nvs clear");return;}
+    if(what && !strcmp(what,"clear")){Hil::nvs.fail=Hil::nvs.slow=Hil::nvs.unread=0;Hil::nvs.blind=false;Hil::replyLine("HIL_OK nvs clear");return;}
+    if(what && !strcmp(what,"unread")) {
+      // The next n matching blob writes land, and the read that follows each fails.
+      Hil::nvs.unread=uint32_t(num(1));const char *key=arg();snprintf(Hil::nvs.unreadKey,sizeof(Hil::nvs.unreadKey),"%s",key?key:"");
+      Hil::reply("HIL_OK nvs unread=%lu key=%s\n",(unsigned long)Hil::nvs.unread,Hil::nvs.unreadKey);return;
+    }
     if(what && !strcmp(what,"fail")) {
       Hil::nvs.fail=uint32_t(num(1));const char *key=arg();snprintf(Hil::nvs.failKey,sizeof(Hil::nvs.failKey),"%s",key?key:"");
       Hil::reply("HIL_OK nvs fail=%lu key=%s\n",(unsigned long)Hil::nvs.fail,Hil::nvs.failKey);return;
@@ -582,7 +603,44 @@ LOOP_HELPER static void hilCommand(char *line) {
     hilStandbyRecheckS=uint32_t(seconds);powerKeyRequested=true;powerKeyRequestedAt=millis();
     Hil::reply("HIL_OK usbstandby %ld\n",seconds);return;
   }
+  if(!strcmp(cmd,"flushpull")) {
+    // The next pull's result waits for the side key's shutdown flush, as for
+    // a pull that ends between the loop's drain and the off; the off is asked
+    // as soon as the detector counts the pull, and its USB standby re-checks
+    // after <s> seconds and boots (shutdown_pull).
+    const long seconds=long(num(0));
+    if(seconds<5 || seconds>600){Hil::replyLine("HIL_ERR flushpull seconds 5-600");return;}
+    hilStandbyRecheckS=uint32_t(seconds);hilFlushPull={true,false,acquisition.snapshot().launches};
+    Hil::reply("HIL_OK flushpull %ld launches=%lu\n",seconds,(unsigned long)hilFlushPull.launches);return;
+  }
   if(!strcmp(cmd,"standbywake")){Hil::reply("HIL_STANDBY_WAKE %s\n",standbyWakeText);return;}
+  if(!strcmp(cmd,"powerkey")) {
+    // A side-key click as pollPowerKey reads it from PM1: the rig cannot press it.
+    powerKeyRequested=true;powerKeyRequestedAt=millis();inactivity.touch(millis());
+    Hil::reply("HIL_OK powerkey wipe_blocked=%d\n",wipeBlocked);return;
+  }
+  if(!strcmp(cmd,"wipemarker")) {
+    // !wipemarker invalid: a wipe marker boot cannot resume (the wrong length),
+    // inside an ADC checkpoint; the next boot blocks (wipe_blocked). !wipemarker
+    // clear removes such a marker and nothing else: a valid one stays until its
+    // wipe completes, or the next boot would load a half-wiped store.
+    const char *what=arg();DeviceWipe::NvsStore store;bool ok=false;
+    const auto before=DeviceWipe::inspect(store);
+    if(what && !strcmp(what,"invalid") && !wipeBlocked && before==DeviceWipe::State::Clean) {
+      const auto s=acquisition.snapshot();
+      if(acquisition.request(Action::IdleCheckpointBegin,s.launches)) {
+        Preferences marker;const uint8_t bytes[]={'L','L','W','P',9};
+        ok=marker.begin(DeviceWipe::INTENT_SPACE,false) && marker.putBytes(DeviceWipe::INTENT_KEY,bytes,sizeof(bytes))==sizeof(bytes);
+        marker.end();acquisition.request(Action::CheckpointEnd);
+      }
+    } else if(what && !strcmp(what,"clear"))ok=before==DeviceWipe::State::Clean || (before==DeviceWipe::State::Invalid && store.clearIntent());
+    else ok=!what || !strcmp(what,"status");
+    const auto state=DeviceWipe::inspect(store);
+    Hil::reply("HIL_OK wipemarker ok=%d state=%s blocked=%d boot_recovery=%d failed=%d\n",ok,
+      state==DeviceWipe::State::Clean?"clean":state==DeviceWipe::State::Pending?"pending":state==DeviceWipe::State::Invalid?"invalid":"error",
+      wipeBlocked,wipeBootRecovery,wipeFailed);
+    return;
+  }
   if(!strcmp(cmd,"powerlog")) {
     // The next loop pass runs the real 5-minute power-log checkpoint.
     powerRecord(PowerDiagnostics::Sample);lastPowerSaveTry=millis()-300000;
@@ -655,13 +713,74 @@ LOOP_HELPER static void hilCommand(char *line) {
     const uint32_t ms=std::min(2000u,unsigned(num(300)));
     Hil::adcSilentUntil=esp_timer_get_time()+int64_t(ms)*1000;Hil::reply("HIL_OK adcstall ok=1 ms=%lu\n",(unsigned long)ms);return;
   }
+  if(!strcmp(cmd,"logclose")) {
+    // The history log closed until the next boot, as after a newer layout or
+    // a flash failure: NVS is then the only store (sleep_blockers case 6).
+    historyLog.close();Hil::reply("HIL_OK logclose open=%d\n",historyLog.isOpen());return;
+  }
   if(!strcmp(cmd,"logstatus")) {
     // The history log: open, sectors ready, erase counts, newest records.
     uint32_t low=0,high=0;
     if(historyLog.isOpen()){low=~0u;for(unsigned i=0;i<historyLog.log().sectors();++i){low=std::min(low,historyLog.log().eraseCount(i));high=std::max(high,historyLog.log().eraseCount(i));}}
     const auto h=historyLog.log().newest(HistoryLog::History),b=historyLog.log().newest(HistoryLog::Bests),pw=historyLog.log().newest(HistoryLog::Power);
-    Hil::reply("HIL_OK logstatus open=%d ready=%u erases_min=%u erases_max=%u history=%d bests=%d power=%d logged=%lu generation=%lu\n",historyLog.isOpen(),
-      historyLog.isOpen()?historyLog.log().readyCount():0u,unsigned(low),unsigned(high),h.found,b.found,pw.found,(unsigned long)loggedHistory,(unsigned long)practice.generation());
+    Hil::reply("HIL_OK logstatus open=%d ready=%u erases_min=%u erases_max=%u history=%d bests=%d power=%d logged=%lu generation=%lu nvs_lost=%d from=%s,%s,%s\n",historyLog.isOpen(),
+      historyLog.isOpen()?historyLog.log().readyCount():0u,unsigned(low),unsigned(high),h.found,b.found,pw.found,(unsigned long)loggedHistory,(unsigned long)practice.generation(),bootFrom.nvsLost,
+      HistoryLog::name(bootFrom.history),HistoryLog::name(bootFrom.bests),HistoryLog::name(bootFrom.power));
+    return;
+  }
+  if(!strcmp(cmd,"mirror")) {
+    // !mirror [refused]: the NVS copy a sleep writes (history, bests, the
+    // power log), then each logged again with what NVS holds, as the next
+    // automatic saves would. `refused`: NVS refuses each copy as a full one
+    // does (the --wrap fault, ESP_ERR_NVS_NOT_ENOUGH_SPACE), so NVS keeps
+    // what it held and the log's records say so.
+    const char *what=arg();const bool refused=what && !strcmp(what,"refused");
+    const auto s=acquisition.snapshot();bool ok=false,history=false,best=false,power=false,logged=false;
+    if(historyLog.isOpen() && acquisition.request(Action::IdleCheckpointBegin,s.launches)) {
+      ok=true;const auto faults=Hil::nvs;
+      if(refused){Hil::nvs.fail=~0u;Hil::nvs.failKey[0]=0;}
+      history=practiceStore.save(practice);best=bestStore.save(personalBests);
+      powerLog.checksum=PowerDiagnostics::hash(powerLog);power=savePowerLog();
+      if(refused){Hil::nvs.fail=faults.fail;std::memcpy(Hil::nvs.failKey,faults.failKey,sizeof(faults.failKey));}
+      logged=historyLog.saveHistory(practice,practiceStore.savedGeneration()) && historyLog.saveBests(personalBests,bestStore.savedGeneration()) &&
+        historyLog.savePower(powerLog,powerMirror);
+      if(logged){loggedHistory=practice.generation();loggedBests=personalBests.generation();}
+      acquisition.request(Action::CheckpointEnd);
+    }
+    Hil::reply("HIL_OK mirror ok=%d refused=%d history=%d bests=%d power=%d logged=%d generation=%lu nvs_generation=%lu bests_revision=%lu nvs_bests_revision=%lu\n",
+      ok,refused,history,best,power,logged,(unsigned long)practice.generation(),(unsigned long)practiceStore.savedGeneration(),
+      (unsigned long)personalBests.revision,(unsigned long)bestStore.savedGeneration());
+    return;
+  }
+  if(!strcmp(cmd,"oldwipe")) {
+    // !oldwipe: what Wipe all on 0.15-0.17 leaves after a rollback: every
+    // namespace it owns cleared (nvs_erase_all, as DeviceWipe does: the keys
+    // go, the namespaces stay), the history log untouched (those firmwares do
+    // not know it). Settings go too: restore a backup after. Behind this
+    // firmware's back: RAM keeps its copies and the stores their generations,
+    // so !reboot next, before anything saves.
+    const auto s=acquisition.snapshot();bool ok=false;
+    if(acquisition.request(Action::IdleCheckpointBegin,s.launches)) {
+      ok=true;
+      for(const char *space:DeviceWipe::NAMESPACES){Preferences store;ok=store.begin(space,false) && store.clear() && ok;store.end();}
+      acquisition.request(Action::CheckpointEnd);
+    }
+    Hil::reply("HIL_OK oldwipe ok=%d\n",ok);return;
+  }
+  if(!strcmp(cmd,"nvslost")) {
+    // !nvslost: what the Arduino core does at boot after nvs_flash_init()
+    // reports NO_FREE_PAGES or NEW_VERSION_FOUND (initArduino): the whole NVS
+    // partition erased, namespaces and all; the history log kept. Restarts at
+    // once, so nothing writes NVS in between. Settings go too: restore a
+    // backup after.
+    const auto s=acquisition.snapshot();bool ok=false;
+    if(acquisition.request(Action::IdleCheckpointBegin,s.launches)) {
+      const esp_partition_t *nvs=esp_partition_find_first(ESP_PARTITION_TYPE_DATA,ESP_PARTITION_SUBTYPE_DATA_NVS,nullptr);
+      ok=nvs && esp_partition_erase_range(nvs,0,nvs->size)==ESP_OK;
+      if(!ok)acquisition.request(Action::CheckpointEnd);
+    }
+    Hil::reply("HIL_OK nvslost ok=%d\n",ok);
+    if(ok){Hil::replyLine("HIL_REBOOT");UsbTx::drain(200);delay(100);ESP.restart();}
     return;
   }
   if(!strcmp(cmd,"nvsfill")) {
@@ -742,6 +861,19 @@ LOOP_HELPER static void hilCommand(char *line) {
     else if(!BleLink::tapCommand(bytes,n)){Hil::replyLine("HIL_ERR ble busy");return;}
     Hil::reply("HIL_OK %s %u\n",cmd,unsigned(n));return;
   }
+  // Battles (battle_radio.h): `battlerx` is a frame as if another stick had
+  // been heard telling it, at minus `strength` dBm (50 when left out), so the
+  // rig's host can be the rival; what this stick tells is on the BATTLE_TELL
+  // lines. `battleclear` ends any battle and forgets every rival.
+  if(!strcmp(cmd,"battlerx")) {
+    const char *text=arg();uint8_t bytes[Battle::MAX_FRAME];size_t n=0;
+    for(;text && text[0] && text[1] && n<sizeof(bytes);text+=2){char pair[3]={text[0],text[1],0};bytes[n++]=uint8_t(strtoul(pair,nullptr,16));}
+    const int strength=int(num(50));
+    if(n<6){Hil::replyLine("HIL_ERR battle frame");return;}
+    BattleRadio::push(bytes,n,-strength,millis());
+    Hil::reply("HIL_OK battlerx %u\n",unsigned(n));return;
+  }
+  if(!strcmp(cmd,"battleclear")){battle.stop();rivals.clear();Hil::replyLine("HIL_OK battleclear");return;}
   if(!strcmp(cmd,"home")) {
     if(controls.page==Controls::Page::Edit)cancelSettingEdit();
     controls.page=Controls::Page::Main;syncNavigation();

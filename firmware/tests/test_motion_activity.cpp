@@ -1,6 +1,7 @@
 #include "motion_activity.h"
 #include "power_status.h"
 #include <cassert>
+#include <cstring>
 #include <iostream>
 #include <limits>
 
@@ -152,5 +153,40 @@ int main() {
       if(timer.due(now) && !P::holds(true,timer.sinceUse(now)))slept=now;
     assert(slept==P::LIMIT_MS);
   }
-  std::cout<<"Motion activity: vibration, adjustment, translation, stale/invalid data rolling sleep windows, the movement limit, the optical sleep guard, held buttons and a connected phone passed\n";
+  // A save no store takes (power_status.h ShutdownSaveGuard): the history
+  // log closed and NVS refusing deferred every power-off through 0.20.10.
+  // The LIMIT-th refusal in a row goes ahead; a power-off that saves clears it.
+  {
+    ShutdownSaveGuard guard;
+    assert(ShutdownSaveGuard::LIMIT==3 && !guard.refusals());
+    assert(!guard.refused() && guard.refusals()==1 && !guard.refused() && guard.refusals()==2);
+    if(!guard.refused())std::cout<<"a refused save held the power-off back forever\n";
+    assert(guard.refusals()==ShutdownSaveGuard::LIMIT);
+    // Still refusing (the unit stayed on): every later power-off goes ahead, the count capped.
+    for(unsigned i=0;i<300;++i)assert(guard.refused() && guard.refusals()==ShutdownSaveGuard::LIMIT);
+    guard.clear();assert(!guard.refusals() && !guard.refused());
+  }
+  // The blocked Wipe page (power_status.h WipeBlockedPower): through 0.20.10
+  // it ignored the side key and never slept. The key always powers off; no
+  // button for IDLE_MS does too, unless a computer is attached; a refused
+  // power-off is retried RETRY_MS later, not on every 5 ms pass.
+  {
+    using P=WipeBlockedPower;using Off=P::Off;
+    assert(P::IDLE_MS==120000 && P::RETRY_MS==60000);
+    P power;
+    assert(power.decide(1000,true,0,false)==Off::Key && power.decide(1000,true,0,true)==Off::Key);
+    assert(power.decide(1000,false,0,false)==Off::Stay && power.decide(1000,false,P::IDLE_MS-1,false)==Off::Stay);
+    if(power.decide(1000,false,P::IDLE_MS,false)!=Off::Idle)std::cout<<"the blocked wipe page never slept\n";
+    assert(power.decide(1000,false,P::IDLE_MS,false)==Off::Idle && power.decide(1000,false,UINT32_MAX,false)==Off::Idle);
+    assert(power.decide(1000,false,UINT32_MAX,true)==Off::Stay);  // USB power
+    power.tried(5000);
+    assert(power.decide(5000+P::RETRY_MS-1,false,UINT32_MAX,false)==Off::Stay);
+    assert(power.decide(5000+P::RETRY_MS-1,true,0,false)==Off::Key);  // the key is never held back
+    assert(power.decide(5000+P::RETRY_MS,false,UINT32_MAX,false)==Off::Idle);
+    // Across the millisecond counter's wrap.
+    power.tried(UINT32_MAX-1000);
+    assert(power.decide(1000,false,UINT32_MAX,false)==Off::Stay && power.decide(P::RETRY_MS,false,UINT32_MAX,false)==Off::Idle);
+    assert(!std::strcmp(P::name(Off::Key),"power_key") && !std::strcmp(P::name(Off::Idle),"inactivity") && !std::strcmp(P::name(Off::Stay),"none"));
+  }
+  std::cout<<"Motion activity: vibration, adjustment, translation, stale/invalid data rolling sleep windows, the movement limit, the optical sleep guard, held buttons, a connected phone, the refused-save bound and the blocked wipe page's power-off passed\n";
 }

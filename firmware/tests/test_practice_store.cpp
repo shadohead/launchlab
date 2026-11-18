@@ -39,5 +39,20 @@ int main() {
   assert(!reclaim.removeOrphan() && Preferences::data==withoutOrphan);
   PracticeHistory after;PracticeStore again;assert(again.begin(after) && after.size()==3 && after.generation()==kept.generation());
   PracticeStore closed;assert(!closed.hasOrphan() && !closed.removeOrphan());
-  std::cout<<"PASS: alternating snapshots, exact save/readback, reboot selection, damaged newest fallback, failed write/read retention and no destructive corruption recovery; orphaned calibration blob removed alone\n";
+  // A restore superseded the device's history (generation 21 over 20) and
+  // then failed, leaving the device on its own generation 20. Saving that
+  // over the other slot would lose to the restored record at the next boot,
+  // so the store refuses it; superseding from the saved generation saves.
+  {
+    Preferences::data.clear();
+    auto pulls=[](unsigned n,float rpm){PracticeHistory h;for(unsigned i=0;i<n;++i)h.accept(i+1,true,rpm+i,1000*(i+1));return h;};
+    PracticeStore store;PracticeHistory ram;assert(store.begin(ram));
+    ram=pulls(20,8000);assert(store.save(ram) && store.savedGeneration()==20);
+    PracticeHistory restored=pulls(5,12000);restored.supersede(ram.generation());assert(store.save(restored));
+    assert(store.pending(ram) && !store.save(ram) && store.savedGeneration()==21);
+    PracticeHistory loaded;PracticeStore boot;assert(boot.begin(loaded) && loaded.generation()==21 && loaded.size()==5);
+    ram.supersede(store.savedGeneration());assert(store.save(ram));
+    PracticeStore again;assert(again.begin(loaded) && loaded.generation()==22 && loaded.size()==20);
+  }
+  std::cout<<"PASS: older-generation save refused; alternating snapshots, exact save/readback, reboot selection, damaged newest fallback, failed write/read retention and no destructive corruption recovery; orphaned calibration blob removed alone\n";
 }

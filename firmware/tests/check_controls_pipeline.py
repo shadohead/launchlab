@@ -29,7 +29,7 @@ static bool calibrationCapturePending=false;
 static bool captureStoppedCalibration(){return true;}
 static bool interruptAnalysis(uint64_t now){analysis.interrupt(now);return captureStoppedCalibration();}
 struct AnalysisMicFake {void freezeTrace(){}};static AnalysisMicFake micListener;
-static uint64_t esp_timer_get_time(){return 1000000;}
+static uint32_t clockMs=10000;static int64_t esp_timer_get_time(){return int64_t(clockMs)*1000;}
 #include "appearance_store.h"
 #include "milestone_store.h"
 #include "theme_library.h"
@@ -40,8 +40,11 @@ static uint64_t esp_timer_get_time(){return 1000000;}
 #include "display_flip_setting.h"
 #include "bluetooth_setting.h"
 #include "ble_link_fake.h"
+#include "battles_setting.h"
+#include "battle_radio_fake.h"
 #include "shake_wake_setting.h"
 #include "battery_icon_setting.h"
+#include "min_rpm_setting.h"
 #include "display_orientation.h"
 #include "sensor_profile_setting.h"
 #include "start_mark_reference.h"
@@ -65,10 +68,15 @@ prefix+=r'''
 static Appearance::Config appearance;static Appearance::Bests personalBests;static Themes::Library themeLibrary;
 static AppearanceStore<Appearance::Bests> bestStore;static AppearanceStore<Appearance::Config> appearanceStore;static Appearance::Celebration bestEffect;
 static Milestones::Config milestones;static MilestoneStore milestoneStore;
-static uint32_t clockMs=10000;static uint32_t millis(){return clockMs;}
+static uint32_t millis(){return clockMs;}
 static unsigned soundPreviews=0,effectPreviews=0;static void previewSound(){++soundPreviews;}static void previewEffect(){++effectPreviews;}
 using Controls::Page;
 static Controls::State controls;
+// Battles: the real session and record, the sketch's own BattleFeed below.
+#define LOOP_HELPER
+static bool battlesOn=BattlesSetting::DEFAULT_ON;static uint8_t battleMatchTo=Battle::MATCH_SHORT;static unsigned matchCheers=0;static void matchWonSound(){++matchCheers;}
+static Battle::Book rivals;static Battle::Session battle;static uint32_t loggedRivals=0;
+static uint32_t esp_random(){return 0x5a5a;}
 static Controls::Gesture gestureA,gestureB;
 static WipeConfirmation wipeConfirmation;
 static bool wipeFailed=false,wipeBlocked=false;
@@ -81,6 +89,7 @@ static bool tournamentMode=false,historyPage=false,dirty=false,diagnostics=false
   batteryIcon=BatteryIconSetting::DEFAULT_ON,bluetoothOn=BluetoothSetting::DEFAULT_ON;static bool bluetoothAtBoot=false;
 static uint32_t passConfirmed=0;static constexpr const char *PASS_CONFIRMED_KEY="bp_confirmed";
 static uint8_t brightnessPercent=Brightness::DEFAULT_PERCENT;
+static uint8_t minRpmSteps=MinRpm::DEFAULT_STEPS;
 static uint32_t historyOffset=0,newSessionAt=0,tournamentHintUntil=0;
 enum class TournamentView:uint8_t{RecordingOnly,Rpm};
 static TournamentView tournamentView=TournamentView::RecordingOnly;
@@ -113,6 +122,7 @@ static constexpr unsigned BRIGHT=Brightness::DEFAULT_PERCENT;
 static constexpr unsigned light(unsigned percent){return (percent*255+50)/100;}
 struct Snapshot{AnalogTachometer::Phase phase=AnalogTachometer::Phase::Ready;uint32_t launches=0;
   bool ready=true,suspended=false,opticalIdle=true,signalFault=false;uint8_t pin=1;
+  uint64_t burstStartHostUs=0;float resultRpm=0;
   RpmEstimator::Mode estimator=RpmEstimator::DEFAULT_MODE;StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;};
 enum class Action{IdleCheckpointBegin,CheckpointEnd,Estimator,SensorProfile};
 // Refuses Begin exactly when the production owner would. refuseNext models a
@@ -167,7 +177,8 @@ prefix+='\n'+source[visible_start:source.index('}',visible_start)+1]+'\n'
 tests=r'''
 static void reset(){
   controls={};appearance={};appearanceStore={};bestEffect={};tournamentMode=historyPage=dirty=diagnostics=demo=motionDemo=motionPending=settingsSaveError=restorePreview=displayFlipped=false;shakeToWake=ShakeWakeSetting::DEFAULT_ON;
-  batteryIcon=BatteryIconSetting::DEFAULT_ON;bluetoothOn=BluetoothSetting::DEFAULT_ON;
+  batteryIcon=BatteryIconSetting::DEFAULT_ON;bluetoothOn=BluetoothSetting::DEFAULT_ON;bluetoothAtBoot=false;minRpmSteps=MinRpm::DEFAULT_STEPS;
+  battlesOn=BattlesSetting::DEFAULT_ON;battleMatchTo=Battle::MATCH_SHORT;matchCheers=0;rivals={};battle={};battle.begin(0x11110001);BattleRadio::reset();
   gestureA={};gestureB={};wipeConfirmation={};wipeFailed=wipeBlocked=false;
   historyOffset=newSessionAt=tournamentHintUntil=0;historyView=PracticeUI::View::Recent;tournamentView=TournamentView::RecordingOnly;
   practice={};demoPractice={};latestMotion={};launchFeedback={};inactivity={};brightnessPercent=BRIGHT;rpmEstimator=RpmEstimator::DEFAULT_MODE;sensorProfile=StickS3SensorProfile::DEFAULT_MODE;
@@ -253,6 +264,18 @@ static void bootDefaults() {
    assert(!batteryIcon && Preferences::data==before && !prefs.writes && Serial.last.empty());}
   freshStore();assert(prefs.putUChar(BatteryIconSetting::KEY,7)==1);{const auto before=Preferences::data;batteryIcon=false;boot();
    assert(batteryIcon && Preferences::data==before && !prefs.writes && Serial.last=="BATTERY_ICON_SETTING_NOTICE invalid_saved_value_retained_using_on");}
+  // Min RPM (0.21.0): 4,000 rpm with no saved choice; a saved step count is
+  // kept; one out of range reads as the default, is kept, and says so.
+  freshStore();minRpmSteps=2;boot();assert(minRpmSteps==MinRpm::DEFAULT_STEPS && Preferences::data.empty() && !prefs.writes);
+  for(uint8_t steps:{MinRpm::MIN_STEPS,uint8_t(11),MinRpm::MAX_STEPS}) {
+    freshStore();assert(prefs.putUChar(MinRpmSetting::KEY,steps)==1);const auto before=Preferences::data;minRpmSteps=MinRpm::DEFAULT_STEPS;boot();
+    assert(minRpmSteps==steps && Preferences::data==before && !prefs.writes && Serial.last.empty());
+  }
+  for(uint8_t bad:{0,1,21,255}) {
+    freshStore();assert(prefs.putUChar(MinRpmSetting::KEY,bad)==1);const auto before=Preferences::data;minRpmSteps=3;boot();
+    assert(minRpmSteps==MinRpm::DEFAULT_STEPS && Preferences::data==before && !prefs.writes &&
+      Serial.last=="MIN_RPM_SETTING_NOTICE invalid_saved_value_retained_using_%u\n");
+  }
   // Bluetooth: Off with no saved choice; a saved On is kept; an invalid record
   // reads as Off, is kept, and says so.
   freshStore();bluetoothOn=true;boot();assert(!bluetoothOn && Preferences::data.empty() && !prefs.writes);
@@ -317,7 +340,121 @@ static void bootCelebrateDefault() {
   directWrites=false;milestones={};milestoneStore={};
 }
 static void edit(unsigned row){controls.page=Page::Settings;controls.setting=row;syncNavigation();buttonA();assert(controls.page==Page::Edit);}
+// A frame from the rival, as the radio hands it to the loop.
+static const uint32_t RIVAL=0x22220002;
+static void hear(const Battle::LaunchFrame &f){uint8_t bytes[Battle::LAUNCH_BYTES];f.encode(bytes);BattleRadio::push(bytes,sizeof(bytes),-43,millis());}
+static void pass(uint32_t ms=20){clockMs+=ms;BattleFeed::tick(millis(),acquisition.snapshot());}
+// A pull on this stick and one on the rival's, begun together: both name each other.
+static Battle::LaunchFrame battleStarts(uint16_t rpm=6420,uint16_t theirs=5980) {
+  Snapshot pull;pull.resultRpm=rpm;pull.burstStartHostUs=uint64_t(clockMs-600)*1000;
+  BattleFeed::launched(pull);assert(battle.detecting());
+  Battle::LaunchFrame f;f.id=RIVAL;f.tag=0x2002;f.rpm=theirs;
+  // Until every stick that pulled together can have been heard, nobody is named.
+  for(unsigned i=0;i<20;++i){f.age=uint16_t(60+i*10);hear(f);pass(100);}
+  assert(battle.detecting() && !battle.frame(millis(),rivals).peer);
+  for(unsigned i=0;i<12 && !battle.frame(millis(),rivals).peer;++i){f.age=uint16_t(f.age+10);hear(f);pass(100);}
+  assert(battle.frame(millis(),rivals).peer==RIVAL && !battle.inBattle());
+  f.peer=battle.id();f.peerTag=battle.tag();f.age=uint16_t(f.age+10);hear(f);pass(100);
+  assert(battle.inBattle() && battle.rivalId()==RIVAL);
+  return f;
+}
+static void battles() {
+  // Battles ride on the radio: with Bluetooth off at boot a pull tells nothing.
+  reset();Snapshot pull;pull.resultRpm=6000;pull.burstStartHostUs=uint64_t(clockMs-500)*1000;
+  BattleRadio::radio=false;BattleFeed::launched(pull);pass();
+  assert(!battle.active() && !BattleRadio::allowed && !BattleFeed::cardShown());
+  // Nor in tournament mode, which hides this stick's launches, nor with Auto battles off.
+  reset();tournamentMode=true;BattleFeed::launched(pull);pass();assert(!battle.active() && !BattleRadio::allowed);
+  reset();battlesOn=false;BattleFeed::launched(pull);pass();assert(!battle.active() && !BattleRadio::allowed);
+  // A battle: nobody presses anything, and the card is on the main screen.
+  reset();
+  auto frame=battleStarts();
+  assert(BattleRadio::allowed && BattleFeed::cardShown() && battle.view()==Battle::Session::View::Versus && dirty);
+  assert(controls.rivals==1 && rivals.find(RIVAL)->myRpm==6420 && rivals.find(RIVAL)->theirRpm==5980 && rivals.find(RIVAL)->duelWins==1);
+  // The radio is not asked to listen through a pull being measured.
+  acquisition.state.phase=AnalogTachometer::Phase::Launch;pass();assert(BattleRadio::measuring);
+  acquisition.state.phase=AnalogTachometer::Phase::Ready;pass();assert(!BattleRadio::measuring);
+  // Hold A does not enter tournament mode over the card, and B does not open the Menu.
+  holdA();assert(controls.page==Page::Main && !tournamentMode);
+  buttonB();assert(controls.page==Page::Main && battle.view()==Battle::Session::View::Pick && battle.pickOutcome()==Battle::Outcome::Lost);
+  holdB();assert(controls.page==Page::Main && battle.view()==Battle::Session::View::Versus);
+  // A, B, A: won by an Over finish. The record has it and the card shows it.
+  buttonA();buttonB();assert(battle.pickFinish()==Battle::Finish::Over && !rivals.find(RIVAL)->claim.rev);
+  buttonA();
+  assert(battle.view()==Battle::Session::View::Result && rivals.find(RIVAL)->wins==1 && rivals.find(RIVAL)->pointsFor==2 && !battle.synced());
+  assert(Serial.last.find("BATTLE_RESULT")==0);
+  // The rival's stick shows it back: both agree.
+  frame.claim=rivals.find(RIVAL)->claim.mirrored();hear(frame);pass();
+  assert(battle.synced() && Serial.last.find("BATTLE_SYNCED")==0);
+  // A puts the card away; the next A is the main screen's own (the recap).
+  buttonA();assert(battle.view()==Battle::Session::View::None && !BattleFeed::cardShown() && !launchFeedback.shown());
+  buttonA();assert(launchFeedback.shown());
+  buttonA();assert(!launchFeedback.shown());
+  // The rival corrects it to a Spin finish: the card comes back by itself.
+  frame.claim.set(Battle::Outcome::Lost,Battle::Finish::Spin);hear(frame);pass();
+  assert(BattleFeed::cardShown() && battle.view()==Battle::Session::View::Result && rivals.find(RIVAL)->pointsFor==1 && rivals.find(RIVAL)->claim.rev==2);
+  // The card is the main screen's: a recap or another page has the buttons.
+  toggleFeedback();assert(launchFeedback.shown() && !BattleFeed::cardShown());
+  toggleFeedback();assert(BattleFeed::cardShown());
+  buttonB();assert(battle.view()==Battle::Session::View::Versus);  // Change
+  holdB();assert(battle.view()==Battle::Session::View::None);       // nothing to change after all
+  buttonB();assert(controls.page==Page::Menu && !BattleFeed::cardShown());
+  // Entering tournament mode ends the battle: its launches are hidden from here on.
+  reset();battleStarts();holdB();assert(battle.inBattle() && !BattleFeed::cardShown());
+  holdA();assert(tournamentMode);pass();assert(!battle.active() && !BattleRadio::allowed);
+  // So does a wipe, before anything is erased.
+  reset();battleStarts();wipeBlocked=true;pass();assert(!battle.active() && !BattleRadio::allowed);
+  // A battle that wins the match plays the celebration sound, once: a
+  // correction away and back again plays nothing more, and neither does a loss.
+  reset();
+  {
+    auto won=battleStarts();
+    auto *r=const_cast<Battle::Rival *>(rivals.find(RIVAL));r->matchMe=r->preMe=3;
+    buttonA();buttonA();assert(rivals.find(RIVAL)->matchEnded() && rivals.find(RIVAL)->finalMe()==4 && matchCheers==1);
+    won.claim.set(Battle::Outcome::Won,Battle::Finish::Spin);won.claim.rev=2;hear(won);pass();
+    assert(rivals.find(RIVAL)->claim.outcome==Battle::Outcome::Lost && matchCheers==1);
+    won.claim.set(Battle::Outcome::Lost,Battle::Finish::Spin);hear(won);pass();
+    assert(rivals.find(RIVAL)->claim.outcome==Battle::Outcome::Won && rivals.find(RIVAL)->matchEnded() && matchCheers==1);
+  }
+
+  // Menu, Battles. With Bluetooth off, the first row leads to turning it on.
+  reset();controls.bluetoothOn=bluetoothOn=false;
+  controls.page=Page::Menu;controls.menu=Controls::BATTLES_ROW;syncNavigation();buttonA();
+  assert(controls.page==Page::Battles && historyPage && controls.battleRow==0);
+  buttonA();assert(controls.page==Page::EnableBluetooth && battlesOn && !settingsSave.pending());
+  // With it on, A turns Auto battles off, and the choice is saved like a setting.
+  reset();controls.bluetoothOn=bluetoothOn=true;battleStarts();
+  controls.page=Page::Battles;controls.battleRow=0;syncNavigation();
+  buttonA();assert(!battlesOn && settingsSave.pending()==SettingsSave::Battles && controls.page==Page::Battles);
+  retry(0);assert(!settingsSave.pending() && stored(BattlesSetting::KEY)==0);
+  pass();assert(!battle.active() && !controls.battlesOn);  // and it ends the battle that was open
+  buttonA();retry(1000);assert(battlesOn && stored(BattlesSetting::KEY)==1);
+  // The next row is the match length: A switches between first to 4 and 7,
+  // saved in the same byte, and the next launch tells it.
+  buttonB();assert(controls.battleRow==1);
+  buttonA();assert(battleMatchTo==Battle::MATCH_LONG && settingsSave.pending()==SettingsSave::Battles && controls.page==Page::Battles);
+  retry(2000);assert(!settingsSave.pending() && stored(BattlesSetting::KEY)==3);
+  pass();assert(battle.matchLength()==Battle::MATCH_LONG);
+  // What boot reads back.
+  {bool on=false;uint8_t to=0;assert(BattlesSetting::load(prefs,on,to) && on && to==Battle::MATCH_LONG);}
+  buttonA();retry(3000);assert(battleMatchTo==Battle::MATCH_SHORT && stored(BattlesSetting::KEY)==1);
+  // A value this firmware did not write is kept and reads as On, first to 4.
+  directWrites=true;prefs.putUChar(BattlesSetting::KEY,7);directWrites=false;
+  {bool on=false;uint8_t to=0;assert(!BattlesSetting::load(prefs,on,to) && on && to==Battle::MATCH_SHORT && stored(BattlesSetting::KEY)==7);}
+  // B moves through Auto battles, Match, the rival and Back; A opens the rival, and A or hold B returns.
+  pass();assert(controls.rivals==1);
+  buttonB();assert(controls.battleRow==2);buttonA();assert(controls.page==Page::Rival && controls.rival==0);
+  buttonB();assert(controls.page==Page::Rival);buttonA();assert(controls.page==Page::Battles && controls.battleRow==2);
+  buttonA();holdB();assert(controls.page==Page::Battles);
+  buttonB();assert(controls.battleRow==3);buttonB();assert(controls.battleRow==0);
+  buttonB();buttonB();buttonB();buttonA();assert(controls.page==Page::Menu);
+  controls.menu=Controls::BATTLES_ROW;buttonA();assert(controls.page==Page::Battles && controls.battleRow==0);
+  holdB();assert(controls.page==Page::Menu && controls.menu==Controls::BATTLES_ROW);
+  std::cout<<"PASS: battles through the sketch's own feed and buttons: told only with the radio, Auto battles on and outside tournament mode; "
+             "the card takes A, B and hold B on the main screen alone; results, corrections and the Battles pages\n";
+}
 int main(){
+  battles();
   reset();holdB();assert(controls.page==Controls::Page::Analysis);
   analysis.begin(1,true,9000,500000);buttonB();assert(!analysis.running() && !analysis.results());
   buttonB();assert(analysis.results() && analysis.tablePage()==0);
@@ -500,6 +637,18 @@ int main(){
   Preferences::failWrite=false;retry(SettingsSave::FAILED_RETRY_MS);
   assert(!settingsSave.pending() && MountOrientationSetting::load(prefs,mountSaved) && mountSaved==mountMode && imuAcquisition.changes==mountChanges+1);
   assert(acquisition.begins==acquisition.ends);
+  // Min RPM: B steps 500 rpm and wraps from 10,000 to 1,000; drafts change
+  // nothing, hold B cancels, Apply takes it at once and saves it inside a
+  // checkpoint, and Apply of the same value writes nothing.
+  reset();edit(unsigned(Controls::Setting::MinRpm));assert(controls.draft==MinRpm::DEFAULT_STEPS);
+  buttonB();assert(controls.draft==9 && minRpmSteps==MinRpm::DEFAULT_STEPS && !prefs.writes);
+  holdB();assert(controls.page==Page::Settings && minRpmSteps==MinRpm::DEFAULT_STEPS && !prefs.writes);
+  edit(unsigned(Controls::Setting::MinRpm));
+  for(unsigned i=MinRpm::DEFAULT_STEPS;i<MinRpm::MAX_STEPS;++i)buttonB();
+  assert(controls.draft==MinRpm::MAX_STEPS);buttonB();assert(controls.draft==MinRpm::MIN_STEPS);buttonB();buttonB();
+  buttonA();assert(controls.page==Page::Settings && !settingsSaveError && minRpmSteps==4 && !settingsSave.pending());
+  {uint8_t saved=0;assert(MinRpmSetting::load(prefs,saved) && saved==4 && acquisition.begins==acquisition.ends && acquisition.begins);}
+  {const auto bytes=Preferences::data;edit(unsigned(Controls::Setting::MinRpm));buttonA();assert(Preferences::data==bytes);}
   // Celebrate: drafts change nothing; Apply takes the mode at once and saves
   // it with the milestone table, inside a checkpoint, leaving the table and
   // the look alone.
@@ -551,6 +700,8 @@ def definition(signature):
         cursor+=1
     return source[start:cursor]
 prefix+=definition('static uint8_t settingValue(unsigned row)')+'\n'
+# The sketch's own BattleFeed (the definition, after its forward declaration).
+prefix+=definition('namespace BattleFeed {\nstatic bool allowed()')+'\n'
 names=['syncNavigation','toggleFeedback','previewSetting','beginWipe','cancelWipe','cancelSettingEdit','writeSettings','saveSettings','commitSetting','newSession','browseOlder','navigate','buttonA','buttonB','holdA','holdB']
 with tempfile.TemporaryDirectory(prefix='launchlab-controls-') as directory:
     directory=Path(directory);cpp=directory/'test.cpp';exe=directory/'test'

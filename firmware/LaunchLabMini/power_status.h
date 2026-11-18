@@ -149,6 +149,49 @@ struct PhoneLinkAwake {
   }
 };
 
+// A pull or best no store takes holds a power-off back (with the history log
+// open the log takes it and NVS holds only a copy, 0.20.6). With the log
+// closed (a newer layout, a flash failure) NVS is the only store, and through
+// 0.20.10 one that refused the write (full) deferred every sleep and every
+// side-key power-off, until flat. After LIMIT refusals in a row a power-off
+// goes ahead anyway, the unsaved RAM lost as a flat battery loses it. A
+// Bluetooth restart is not a power-off and never counts. A power-off flush
+// with nothing refused starts the count again.
+class ShutdownSaveGuard {
+public:
+  static constexpr uint8_t LIMIT=3;
+  // One more refusal: whether this power-off goes ahead unsaved.
+  bool refused(){if(refusals_<LIMIT)++refusals_;return refusals_>=LIMIT;}
+  void clear(){refusals_=0;}
+  uint8_t refusals()const{return refusals_;}
+private:
+  uint8_t refusals_=0;
+};
+
+// A wipe that failed, or a boot that found a wipe marker it cannot resume,
+// blocks every save until restart (docs/FIRMWARE_WIPE_ALL.md). Through
+// 0.20.10 that page also ignored the side key and never slept: only PM1's
+// double click turned the unit off, and the next boot blocked again, so the
+// battery ran flat. It now powers off at the side key, or IDLE_MS after the
+// last button, and that power-off writes nothing: it is the restart the page
+// offers (B), left off. A computer attached (USB power) keeps it on, as it
+// keeps any unit on; a power-off PM1 refused, or a HIL dry run, is retried
+// RETRY_MS later. The side key is always honoured.
+class WipeBlockedPower {
+public:
+  static constexpr uint32_t IDLE_MS=120000,RETRY_MS=60000;
+  enum class Off:uint8_t {Stay,Key,Idle};
+  Off decide(uint32_t now,bool key,uint32_t sinceUse,bool host)const {
+    if(key)return Off::Key;
+    if(host || (tried_ && now-triedAt_<sleepLimit(RETRY_MS)) || sinceUse<sleepLimit(IDLE_MS))return Off::Stay;
+    return Off::Idle;
+  }
+  void tried(uint32_t now){tried_=true;triedAt_=now;}
+  static const char *name(Off off){return off==Off::Key?"power_key":off==Off::Idle?"inactivity":"none";}
+private:
+  uint32_t triedAt_=0;bool tried_=false;
+};
+
 // How an inactivity sleep wakes. On: the IMU's motion interrupt is armed and
 // its supply held (PM1 GPIO4 wake), and the side key wakes too. Off: the
 // side key's power-off state, a deeper sleep with the IMU unpowered on

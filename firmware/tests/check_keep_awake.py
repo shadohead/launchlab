@@ -39,6 +39,8 @@ KEEP_AWAKE = [
      'one per Wear check pull, a person pulling (check_wear_pipeline)'),
     ('pollLevel', 'lastActivityMotionUs=sample.activity.lastMotionUs;inactivity.motion(now);',
      'movement: MOTION_LIMIT_MS after the last use, UNUSED_SHAKE_LIMIT_MS after a shake wake (test_motion_activity, HIL sleep_blockers)'),
+    ('routeEvent', 'inactivity.touch(now);',
+     'an accepted pull, in the loop or the shutdown flush, a person pulling (check_history_retry, check_power_key_pipeline)'),
     ('flushForShutdown', 'inactivity.touch(now);dirty=true;',
      'a pull accepted during the flush, a person pulling (check_history_retry)'),
     ('autoPowerOff', 'usbCancelled=true;inactivity.touch(millis());lastShutdownTry=0;',
@@ -66,8 +68,6 @@ KEEP_AWAKE = [
     ('loop', 'inactivity.touch(millis());dirty=true;',
      'a Wear check step, a person pulling (check_wear_pipeline)'),
     ('loop', 'inactivity.touch(millis());',
-     'an accepted pull (check_history_retry)'),
-    ('loop', 'inactivity.touch(millis());',
      'once when the five-minute Analysis limit stops the session (check_analysis_lifecycle)'),
     ('navigate', 'if(analysis.stop(esp_timer_get_time())){captureStoppedCalibration();inactivity.touch(millis());dirty=true;}',
      'one manual stop per launch (check_analysis_lifecycle)'),
@@ -80,14 +80,18 @@ KEEP_AWAKE = [
      'the detector busy: OpticalSleepGuard forces the stop after FORCE_AFTER refusals (test_acquisition_owner, HIL sleep_blockers)'),
     ('flushForShutdown', 'return ShutdownFlush::NewPull;',
      'a pull accepted during the flush, a person pulling'),
-    ('flushForShutdown', 'Serial.printf("POWER_OFF_DEFERRED %s_save_failed\\n",calibrationFailed?"calibration":historyFailed?"history":"best");',
+    ('flushForShutdown', 'Serial.printf("POWER_OFF_DEFERRED %s_save_failed refusals=%u limit=%u\\n",calibrationFailed?"calibration":historyFailed?"history":"best",',
      'a save no store holds: with the history log open the log takes it, NVS only a copy (check_save_paths, HIL sleep_blockers); '
-     'a failed Analysis archive also defers shutdown until saved, showing the save error (check_calibration_export)'),
+     'with the log closed a sleep or power-off goes ahead unsaved at the ShutdownSaveGuard::LIMIT-th refusal in a row '
+     '(test_motion_activity, check_save_paths, check_power_key_pipeline, HIL sleep_blockers); a Bluetooth restart is not a power-off; '
+     'a failed Analysis archive defers the same way, showing the save error (check_calibration_export)'),
     ('flushForShutdown', 'return ShutdownFlush::SaveFailed;', 'as the line above'),
+    ('flushForShutdown', 'return ShutdownFlush::Ready;', 'the sleep goes ahead, unsaved (the bound above)'),
     ('flushForShutdown', 'return ShutdownFlush::Ready;', 'the sleep goes ahead'),
     # ---- Ways out of the inactivity sleep before it runs.
     ('autoPowerOff', 'if(wipeBlocked || controls.page==Controls::Page::Wipe)return;',
-     'the Wipe page closes itself after WipeConfirmation::TIMEOUT_MS; only a failed erase holds it, and saves are blocked there (check_wipe_pipeline)'),
+     'the Wipe page closes itself after WipeConfirmation::TIMEOUT_MS; only a failed erase or an unresumable boot marker holds it, '
+     'saves are blocked there, and wipeBlockedPowerOff below powers it off instead (check_wipe_pipeline)'),
     ('autoPowerOff', 'if(Lab::running)return;  // A lab run measures screen-on time: never sleep.',
      'the battery lab build only, never shipped'),
     ('autoPowerOff', 'if(!Hil::allowSleep.load())return;', 'HIL builds only, never shipped'),
@@ -114,11 +118,19 @@ KEEP_AWAKE = [
      'after a power-off PM1 refused: retried every 60 s (an IMU that cannot be armed sleeps for the side key, check_usb_pipeline)'),
     ('autoPowerOff', '} else Serial.println("POWER_OFF_DEFERRED imu_bus_busy");',
      'the IMU bus busy for one attempt: retried every 60 s'),
+    # ---- Ways the blocked Wipe page stays on (it writes nothing either way).
+    ('wipeBlockedPowerOff', 'if(off==WipeBlockedPower::Off::Stay || (off==WipeBlockedPower::Off::Idle && !allowed))return;',
+     'WipeBlockedPower: the side key always powers off, no button for IDLE_MS does unless a computer is attached (USB power); '
+     'allowed is false only in HIL builds before !sleepok (test_motion_activity, check_wipe_pipeline, HIL wipe_blocked)'),
+    ('wipeBlockedPowerOff', 'if(dry){Serial.println("POWER_OFF_DEFERRED reason=sleep_dry_run wipe_blocked=1 retry_s=60");return;}',
+     'the HIL dry run, HIL builds only'),
+    ('wipeBlockedPowerOff', 'Serial.println("POWER_OFF_DEFERRED reason=pm1_power_off_refused wipe_blocked=1 retry_s=60");',
+     'a power-off PM1 refused: retried WipeBlockedPower::RETRY_MS later (check_wipe_pipeline)'),
 ]
 
 FUNCTION = re.compile(r'^(?:LOOP_HELPER )?(?:static )?(?:IRAM_ATTR )?[\w:<>]+[\s*&]+(\w+)\([^;]*$')
 RENEWAL = re.compile(r'inactivity\.(touch|motion|begin)\(')
-EXITS = ('autoPowerOff', 'flushForShutdown')
+EXITS = ('autoPowerOff', 'flushForShutdown', 'wipeBlockedPowerOff')
 
 
 def found(source):

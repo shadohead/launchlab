@@ -8,7 +8,7 @@
 // entries free, every theme and milestone save refused). The SDK also writes
 // it from the radio's own task while the ADC and the IMU run.
 // So the build refuses that namespace (the linker wraps nvs_open, see
-// build-m5.sh): nothing is read or written, and the radio calibrates in full
+// build-m5.sh and src/link_wraps/link_wraps.cpp): nothing is read or written, and the radio calibrates in full
 // each time it starts, which Bluetooth On pays once a boot. What an earlier
 // build or an unwrapped one (the Arduino IDE) left is removed at boot.
 #include <cstddef>
@@ -45,6 +45,7 @@ template<class Api> int reclaim() {
 #define LAUNCHLAB_RADIO_CAL_WRAP 0
 #endif
 #if LAUNCHLAB_RADIO_CAL_WRAP
+#include "link_wraps.h"
 extern "C" esp_err_t __real_nvs_open(const char *name,nvs_open_mode_t mode,nvs_handle_t *out);
 #endif
 namespace RadioCalibration {
@@ -76,9 +77,11 @@ inline void status() {
 }
 }
 #if LAUNCHLAB_RADIO_CAL_WRAP
-extern "C" esp_err_t __wrap_nvs_open(const char *name,nvs_open_mode_t mode,nvs_handle_t *out) {
-  if(RadioCalibration::refuses(name)){RadioCalibration::refused=RadioCalibration::refused+1;return ESP_ERR_NVS_NOT_FOUND;}
-  return __real_nvs_open(name,mode,out);
+// What __wrap_nvs_open asks before it opens anything (src/link_wraps/link_wraps.cpp: the
+// wrapper is outside the sketch's object file).
+bool LinkWraps::nvsOpenRefused(const char *name) {
+  if(!RadioCalibration::refuses(name))return false;
+  RadioCalibration::refused=RadioCalibration::refused+1;return true;
 }
 #endif
 #endif

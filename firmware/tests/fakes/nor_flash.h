@@ -11,11 +11,18 @@ struct NorFlash {
   std::vector<uint8_t> bytes=std::vector<uint8_t>(FlashLayout::PARTITION_BYTES,0xff);
   long budget=-1;  // bytes left to program before a power loss; -1 never
   bool dead=false;unsigned erases=0,writes=0;
+  unsigned failReads=0;  // the next reads fail: a record that landed and does not read back
+  unsigned unreadAfter=0;  // arms failReads=1 once this many more writes are done
   bool begin(){return true;}
-  bool read(uint32_t at,void *out,size_t n){if(at+n>bytes.size())return false;std::memcpy(out,bytes.data()+at,n);return true;}
+  bool read(uint32_t at,void *out,size_t n) {
+    if(failReads){--failReads;return false;}
+    if(at+n>bytes.size())return false;
+    std::memcpy(out,bytes.data()+at,n);return true;
+  }
   bool write(uint32_t at,const void *data,size_t n) {
     if(dead || at+n>bytes.size())return false;
     ++writes;const auto *p=static_cast<const uint8_t *>(data);
+    if(unreadAfter && !--unreadAfter)failReads=1;
     for(size_t i=0;i<n;++i) {
       if(budget==0){dead=true;return false;}
       if(budget>0)--budget;

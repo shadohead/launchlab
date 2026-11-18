@@ -15,8 +15,8 @@ parser.add_argument('firmware',nargs='?',type=pathlib.Path,
 parser.add_argument('--late-save-probe',action='store_true',help='compatibility option; late-save attachment is always tested')
 args=parser.parse_args()
 source=(args.firmware/'LaunchLabMini/LaunchLabMini.ino').read_text()
-def function(name):
-    start=source.index('static void '+name+'(')
+def function(name,result='void'):
+    start=source.index('static '+result+' '+name+'(')
     cursor=source.index('{',start)+1
     depth=1
     while depth:
@@ -33,7 +33,7 @@ def shutdown_flush():
         depth += (source[cursor] == "{") - (source[cursor] == "}")
         cursor += 1
     enum = source.index("enum class ShutdownFlush")
-    return source[enum:source.index("};", enum) + 2] + "\n" + source[start:cursor]
+    return source[enum:source.index("};", source.index("enum class ShutdownWhy")) + 2] + "\n" + source[start:cursor]
 
 prefix=r'''
 #include "usb_awake.h"
@@ -47,9 +47,11 @@ static FrameRows frameRows;
 #include "power_diagnostics.h"
 #include "wake_ui_state.h"
 #include "controls.h"
+#include "level_indicator.h"
 #include "analysis_mode.h"
 static AnalysisMode::Session analysis;
 #include <cassert>
+#include <deque>
 #include <cstring>
 #include <iostream>
 #include <map>
@@ -61,6 +63,7 @@ static Controls::State controls;static bool wipeBlocked=false;
 static struct {bool running=false,stuck=false;uint32_t stopAt=0;bool off()const{return !running;}
   bool holdsSleep(uint32_t now)const{return MicSession::holdsSleep(!running?MicSession::State::Off:stopAt?MicSession::State::Stopping:MicSession::State::On,now-stopAt);}
   void dump(){}void askBench(){}void armTape(){}void sendTape(){}void launch(uint32_t,bool,float,uint64_t,uint64_t){}}micListener;
+template<class E> static void followAnalysisLaunch(const E &e){micListener.launch(e.launches,e.valid,e.resultRpm,e.burstStartHostUs,e.burstEndHostUs);}  // Analysis closed
 static uint32_t millis();
 static unsigned micPageLeaves=0;static void leaveMicPage(){++micPageLeaves;if(!micListener.stuck)micListener.running=false;else if(!micListener.stopAt)micListener.stopAt=millis();}
 static uint64_t clockUs=1000000;
@@ -76,17 +79,25 @@ namespace UsbTx {inline unsigned drains=0;inline bool drain(uint32_t){++drains;r
 
 #include "ble_link_fake.h"
 static UsbHostAwake usbAwake;static bool usbAutoOffInhibited=false;
-static InactivityTimer inactivity;static OpticalSleepGuard opticalGuard;static PracticeHistory practice;static PracticeStore practiceStore;
+static InactivityTimer inactivity;static OpticalSleepGuard opticalGuard;static ShutdownSaveGuard shutdownSaves;static PracticeHistory practice;static PracticeStore practiceStore;
 static bool motionPending=false,saveError=false,dirty=false,extPower=false,tournamentMode=false,historyPage=false,demo=false,diagnostics=false;
 static uint32_t lastShutdownTry=0,lastSaveTry=0,saveErrors=0,historyPendingSince=0;
 static PowerDiagnostics::Image powerLog;static bool powerLogDirty=false;
 enum class TournamentView:uint8_t {RecordingOnly,Rpm};static TournamentView tournamentView=TournamentView::RecordingOnly;
 namespace PracticeUI {enum class View:uint8_t {Recent};}static PracticeUI::View historyView=PracticeUI::View::Recent;
 enum class Action {ShutdownBegin,ShutdownForce,CheckpointEnd,Pin};
-struct Snapshot {AnalogTachometer::Phase phase=AnalogTachometer::Phase::Ready;uint32_t launches=0;bool valid=true;float resultRpm=6000;uint8_t pin=1;};
+struct Snapshot {AnalogTachometer::Phase phase=AnalogTachometer::Phase::Ready;uint32_t launches=0;bool valid=true;float resultRpm=6000;uint8_t pin=1;
+  uint32_t revision=1,revolutions=40;bool signalFault=false;float amplitude=900,startNoise=8,contrast=1000,noise=8;
+  uint64_t detectorUs=5000000,burstStartHostUs=4000000,burstEndHostUs=4800000;
+  float minRpm=4000,belowMinRpm=0;uint32_t belowMin=0;
+  const char *endName()const{return "slowdown";}const char *stateName()const{return "REARM";}};
+// The loop's record of the last event, for the shared handler (routeEvent).
+static uint32_t lastRevision=0,lastBelowMin=0;static AnalogTachometer::Phase lastPhase=AnalogTachometer::Phase::Ready;static bool lastFault=false;
+static StickS3Level level;
 struct Acquisition {
-  Snapshot state;bool suspended=false;unsigned begins=0,resumes=0;
-  Snapshot snapshot(){return state;}bool takeEvent(Snapshot&){return false;}
+  Snapshot state;bool suspended=false;unsigned begins=0,resumes=0;std::deque<Snapshot> events;
+  Snapshot snapshot(){return state;}
+  bool takeEvent(Snapshot &e){if(events.empty())return false;e=events.front();events.pop_front();return true;}
   bool request(Action action,uint32_t expected=0){
     if(action==Action::CheckpointEnd || action==Action::Pin){suspended=false;++resumes;return true;}
     if((action!=Action::ShutdownForce && state.phase==AnalogTachometer::Phase::Launch) || expected!=state.launches)return false;
@@ -130,7 +141,8 @@ struct ShakeWake {unsigned arms=0,sleeps=0,restores=0,clears=0;bool armOk=true,k
 } shakeWake;
 static bool shakeToWake=true;static uint8_t unusedWakes=0;
 static unsigned restoreFailureNotes=0;static void noteMotionRestoreFailure(){++restoreFailureNotes;}
-static void prepareMotion(const Snapshot&){motionPending=true;}
+static unsigned motionPreps=0,celebrations=0;
+static void prepareMotion(const Snapshot&,bool celebrate=true){++motionPreps;celebrations+=celebrate;motionPending=true;}
 static void logLaunchMetrics(const Snapshot&){}static void noteStartMark(const Snapshot&){}static void saveStartMarks(){}
 // Settings persistence has its own production harness (check_save_paths.py).
 static void writeSettings(){}
@@ -147,6 +159,7 @@ static void reset(){
   BleLink::linkUp=false;usbAwake=UsbHostAwake{};usbAutoOffInhibited=false;inactivity=InactivityTimer{};inactivity.setMinutes(1);inactivity.touch(millis());
   practice=PracticeHistory{};practiceStore=PracticeStore{};acquisition=Acquisition{};M5=M5Fake{};prefs=Settings{};shakeWake=ShakeWake{};
   motionPending=saveError=dirty=extPower=tournamentMode=historyPage=demo=diagnostics=false;soundPlayer.shutdowns=0;
+  lastRevision=lastBelowMin=0;lastPhase=AnalogTachometer::Phase::Ready;lastFault=false;level={};motionPreps=celebrations=0;
   lastShutdownTry=lastSaveTry=saveErrors=historyPendingSince=0;PowerDiagnostics::fresh(powerLog);powerLogDirty=false;sleepReceipt={};
   prefs.values["sleep_min"]=1;prefs.values["ext5v"]=0;prefs.values["bright_pct"]=40;
   Preferences::data.clear();Preferences::zeroLengthKeys.clear();Preferences::failWrite=Preferences::shortRead=false;Preferences::beforeWrite=nullptr;
@@ -318,12 +331,22 @@ int main(){
     assert(prefs.values==settings && inactivity.minutes()==1);
     std::cout<<"PASS: late power-log attachment cancels sleep/restores display+IMU+ADC, clears markers and rolls back diagnostics; prior_entries="<<entries<<"\n";
   }
+  // A pull the inactivity sleep's flush drains abandons the sleep: the unit
+  // stays on for minutes, so the pull may celebrate as in the loop (only the
+  // side key and the restart, which go dark next, skip it).
+  reset();at(61000);assert(inactivity.due(millis(),false));
+  acquisition.events.push_back(Snapshot{AnalogTachometer::Phase::Ready,1,true,9000,1});
+  off();
+  assert(practice.size()==1 && motionPreps==1 && !shakeWake.sleeps && !lastShutdownTry && !acquisition.suspended && !inactivity.due(millis(),false));
+  if(!celebrations)std::cout<<"a pull drained by the inactivity sleep's flush did not celebrate though the sleep was abandoned\n";
+  assert(celebrations==1);
+  std::cout<<"PASS: a pull drained by the inactivity sleep's flush abandons the sleep and may celebrate\n";
   std::cout<<"PASS: exact production pollUsbAwake and autoPowerOff; real USB policy, inactivity timer and alternating history store\n";
 }
 '''
 with tempfile.TemporaryDirectory() as tmp:
     cpp=pathlib.Path(tmp)/'usb_pipeline.cpp'
-    cpp.write_text(prefix+closed(source)+function('pollUsbAwake')+'\n'+shutdown_flush()+'\n'+function('autoPowerOff')+tests)
+    cpp.write_text(prefix+closed(source)+function('pollUsbAwake')+'\n'+function('logWearPull')+'\n'+function('routeEvent','bool')+'\n'+shutdown_flush()+'\n'+function('autoPowerOff')+tests)
     exe=pathlib.Path(tmp)/'usb_pipeline'
     cmd=[os.environ.get('CXX','c++'),'-std=c++17','-O1','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer',
          '-I'+str(args.firmware/'tests/fakes'),'-I'+str(args.firmware/'LaunchLabMini'),'-I'+str(args.firmware/'LaunchLabRpm'),str(cpp),'-o',str(exe)]

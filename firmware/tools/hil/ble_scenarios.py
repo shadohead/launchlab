@@ -411,6 +411,12 @@ def ble_tap(rig):
     scenarios.drain_history(rig)
 
 
+def nvs_entries(size):
+    """At most the NVS entries a write of `size` bytes takes: one for an integer,
+    a blob's 32-byte data entries with its header and index entries."""
+    return 1 if size <= 8 else (size + 31) // 32 + 2
+
+
 def set_bluetooth(rig, on):
     """Bluetooth On or Off as Apply does it: saved, then the restart that applies
     it. Returns the lines from the command to the new boot's settled state."""
@@ -451,7 +457,7 @@ def bluetooth_storage(rig):
     rig.check('this build refuses the radio its NVS namespace', first.get('RADIO_CAL', {}).get('wrapped') == '1', str(first.get('RADIO_CAL')))
     used = number(first.get('NVS_STATUS', {}).get('used_entries'), -1)
     try:
-        set_bluetooth(rig, True)
+        lines_on = set_bluetooth(rig, True)
         on = {}
         for _ in range(20):
             on = d.status()
@@ -463,7 +469,15 @@ def bluetooth_storage(rig):
         cal = on.get('RADIO_CAL', {})
         rig.check('On: the radio asked for its NVS namespace and was refused', number(cal.get('refused'), 0) >= 1, str(cal))
         used_on = number(on.get('NVS_STATUS', {}).get('used_entries'), -2)
-        rig.check('On: no NVS entries taken for the radio', abs(used_on - used) <= 3, f'{used} -> {used_on}')
+        # The restart's shutdown flush may mirror the stick's own records first
+        # (history, the log, start marks: whatever the scenarios before left
+        # unmirrored), each HIL_NVS-logged. Those entries are allowed; the
+        # radio's would be unlogged, and in a namespace of their own.
+        own = sum(nvs_entries(int(number(l.split('bytes=')[1].split()[0], 0)))
+                  for l in lines_on if 'HIL_NVS key=' in l and 'bytes=' in l)
+        spaces, spaces_on = first.get('NVS_STATUS', {}).get('namespaces'), on.get('NVS_STATUS', {}).get('namespaces')
+        rig.check('On: no NVS entries taken for the radio', used_on - used <= 3 + own and spaces_on == spaces,
+                  f'{used} -> {used_on} entries ({own} for the stick\'s own logged writes), namespaces {spaces} -> {spaces_on}')
     finally:
         lines = set_bluetooth(rig, False)
     off = d.status()
@@ -476,3 +490,433 @@ def bluetooth_storage(rig):
     # the first run); the radio's data would be 67.
     rig.check('Off again: the NVS entries it had with Bluetooth On, give or take the stick\'s own', abs(used_off - used_on) <= 3, f'{used_on} -> {used_off}')
 
+
+
+# ---- Battles (docs/FIRMWARE_BATTLES.md): the rig's host as the rival stick.
+
+LAUNCH_FRAME = struct.Struct('<BBIHHHIHBHBB')  # magic, kind, id, tag, age, rpm, peer, peer tag, result, earlier tag, earlier result, match length
+RIG_RIVAL, RIG_TAG = 0x0badcafe, 0x7a11
+WON, LOST, VOID = 1, 2, 3
+SPIN, OVER, BURST, XTREME = range(4)
+NAME_AFTER_S, TOGETHER_S = 3.5, 2.0  # Battle::Session::NAME_AFTER_MS, TOGETHER_MS
+# How strongly the rival is heard, in dB below 0 dBm: across a stadium (two
+# real sticks 28 cm apart, 2026-11-16), a stick too far away to be across one
+# (Battle::Session::MIN_RSSI is -50), and a single frame faded by a hand.
+NEAR_DB, FAR_DB, FADED_DB = 43, 56, 80
+
+
+def claim(outcome, finish, rev):
+    """A result register's byte."""
+    return outcome | finish << 2 | rev << 4
+
+
+def told(d, since):
+    """[(line, fields)] of the launch frames the stick told after `since`."""
+    frames = []
+    for line in d.since(since, 'BATTLE_TELL '):
+        try:
+            data = bytes.fromhex(line.text.split()[1])
+        except (IndexError, ValueError):
+            continue
+        if len(data) != LAUNCH_FRAME.size or data[0] != 0x4c or data[1] != 0xb1:
+            continue
+        keys = ('id', 'tag', 'age', 'rpm', 'peer', 'peer_tag', 'claim', 'prev_tag', 'prev_claim', 'match_to')
+        frames.append((line, dict(zip(keys, LAUNCH_FRAME.unpack(data)[2:]))))
+    return frames
+
+
+class Rival:
+    """The other stick: its launch began at `began` (host clock)."""
+
+    def __init__(self, d, rpm, began, tag=RIG_TAG):
+        self.d, self.rpm, self.began, self.tag = d, rpm, began, tag
+        self.peer = self.peer_tag = self.claim = self.prev_tag = self.prev_claim = 0
+        self.match_to = 4
+
+    def tell(self, strength=NEAR_DB):
+        age = min(0xffff, max(0, int((time.monotonic() - self.began) * 100)))
+        frame = LAUNCH_FRAME.pack(0x4c, 0xb1, RIG_RIVAL, self.tag, age, self.rpm, self.peer, self.peer_tag, self.claim, self.prev_tag, self.prev_claim,
+                                  self.match_to)
+        self.d.hil(f'battlerx {frame.hex()} {strength}', expect='HIL_OK battlerx')
+
+    def name(self, text):
+        frame = bytes([0x4c, 0xb2]) + struct.pack('<IB', RIG_RIVAL, len(text)) + text.encode()
+        self.d.hil(f'battlerx {frame.hex()}', expect='HIL_OK battlerx')
+
+    def tell_until(self, want, timeout, every=0.15, strength=NEAR_DB, fading=False):
+        """Tell the frame until want() is true; whether it became true.
+        `fading`: every other frame is heard faded far below the floor."""
+        end = time.monotonic() + timeout
+        n = 0
+        while time.monotonic() < end:
+            self.tell(FADED_DB if fading and n % 2 else strength)
+            n += 1
+            if want():
+                return True
+            time.sleep(every)
+        return bool(want())
+
+
+def battle_status(d):
+    return d.status().get('BATTLE_STATUS', {})
+
+
+def card_up(rig, since, timeout=25):
+    """Wait until the recap of the pull after `since` has left the main screen:
+    the battle card is then on it, and A and B are the battle's."""
+    d = rig.dev
+    gone = d.wait(lambda l: l.text.startswith('MAIN_FEEDBACK shown=0'), timeout, since=since)
+    if gone is None:
+        rig.note('the recap did not close by itself: closing it with A')
+        d.write('a\n')
+        gone = d.wait(lambda l: l.text.startswith('MAIN_FEEDBACK shown=0'), 3, since=since)
+    time.sleep(0.3)
+    return gone is not None
+
+
+def press(rig, letter, want, timeout=3.0):
+    """One USB button letter (a: A, h: B, b: hold B), then wait for the card's view."""
+    d = rig.dev
+    d.write(letter + '\n')
+    end = time.monotonic() + timeout
+    while True:
+        view = battle_status(d).get('view')
+        if view == want or time.monotonic() >= end:
+            return view == want
+        time.sleep(0.2)
+
+
+def rivals_reply(rig):
+    """Get rivals (op 16) through the tap: (count, wins, losses, points, [rival dict])."""
+    payload, error = ask(rig, '10')
+    if payload is None or error or len(payload) < 13:
+        return None
+    count, wins, losses, points = struct.unpack_from('<BIII', payload, 0)
+    at, rivals = 13, []
+    for _ in range(count):
+        if at + 5 > len(payload):
+            return None
+        ident, n = struct.unpack_from('<IB', payload, at)
+        name = payload[at + 5:at + 5 + n].decode('ascii', 'replace')
+        fields = struct.unpack_from('<10H2B4HBB', payload, at + 5 + n)
+        keys = ('wins', 'losses', 'points_for', 'points_against', 'spin', 'over', 'burst', 'xtreme', 'match_wins', 'match_losses',
+                'match_me', 'match_them', 'together', 'faster', 'rpm', 'rival_rpm', 'last', 'match_to')
+        rivals.append(dict(zip(keys, fields), id=ident, name=name))
+        at += 5 + n + 34
+    return count, wins, losses, points, rivals
+
+
+def battle(rig):
+    """A battle against the rig's host, which plays the other stick.
+
+    The tap stands in for the radio: what the stick tells is on its
+    BATTLE_TELL lines, and the host's frames arrive through `!battlerx` as if
+    heard. The stick's own pull is a real injected one. Checked: a pull is told
+    and names nobody until every stick that pulled with it could have been
+    heard; then it names the rival, and the battle is on once the rival names
+    it back; A, B, A enters "won by Over" and tells it until the rival shows
+    it back; the rival's correction is adopted and shown; the record is saved
+    to the log without stopping the ADC and is there after a reboot, also as a
+    phone reads it; a result the stick missed arrives with the next battle; a
+    pull alone, a pull in tournament mode and a pull with Auto battles off are
+    not battles; and nothing of a battle keeps the stick from sleeping.
+    The radio itself (the advertisement and the scan) is not in this: that is
+    scenario `battle_air` and two sticks side by side.
+    """
+    import scenarios
+    scenarios.settle(rig)
+    d = rig.dev
+    d.hil('home')
+    d.hil('bletap 1', expect='HIL_OK bletap')
+    try:
+        d.hil('battleclear', expect='HIL_OK battleclear')
+        status = battle_status(d)
+        rig.check('Auto battles is on, with the tap for its radio, and no rival yet',
+                  status.get('on') == '1' and status.get('allowed') == '1' and status.get('rivals') == '0', str(status))
+
+        # ---- A pull alone: told for 8 s, then quiet, and no battle.
+        mark = d.mark()
+        r = rig.pull(signals.standard_pull(6000), signals.launch_motion(tilt_rate_dps=300, pull_g=4, seed=70))
+        rig.check_pull(r, tolerance=0.03)
+        on = d.wait('BATTLE_RADIO beacon=1', 2, since=mark)
+        off = d.wait('BATTLE_RADIO beacon=0', 11, since=mark)
+        rig.check('a pull alone is told for about 8 s and then not', on is not None and off is not None and 7.0 <= off.t - on.t <= 9.5,
+                  f'{off.t - on.t:.1f} s' if on and off else 'no beacon lines')
+        frames = told(d, mark)
+        rig.check('its frame names nobody', len(frames) == 1 and frames[0][1]['peer'] == 0 and frames[0][1]['claim'] == 0, str([f for _, f in frames]))
+        status = battle_status(d)
+        rig.check('and no battle came of it', status.get('active') == '0' and status.get('rivals') == '0' and status.get('view') == '0', str(status))
+
+        # ---- A battle: the rival pulls 0.3 s before the stick.
+        scenarios.settle(rig)
+        mark = d.mark()
+        r = rig.pull(signals.standard_pull(6400), signals.launch_motion(tilt_rate_dps=320, pull_g=4, seed=71))
+        rig.check_pull(r, tolerance=0.03)
+        launched = d.wait('BATTLE_LAUNCH', 2, since=mark)
+        rig.check('the pull is told', launched is not None and d.wait('BATTLE_RADIO scan=detect', 2, since=mark) is not None)
+        if launched is None:
+            return
+        began = launched.t - float(launched.f['pull_began_ms_ago']) / 1000  # the stick's pull, on the host's clock
+        mine = told(d, mark)
+        rig.check('with its own RPM, a tag and its age', bool(mine) and mine[0][1]['tag'] != 0 and mine[0][1]['id'] != 0 and
+                  abs(mine[0][1]['rpm'] - float(r.launch['peak_rpm'])) <= 1 and abs(mine[0][1]['age'] * 10 - float(launched.f['pull_began_ms_ago'])) <= 150,
+                  f"{mine[0][1] if mine else None} launch={r.launch.get('peak_rpm')} began_ms_ago={launched.f.get('pull_began_ms_ago')}")
+        if not mine:
+            return
+        stick, tag = mine[0][1]['id'], mine[0][1]['tag']
+        rival = Rival(d, 5980, began - 0.3)
+
+        def named():
+            return any(f['peer'] == RIG_RIVAL and f['peer_tag'] == RIG_TAG for _, f in told(d, mark))
+        heard = rival.tell_until(named, 6)
+        naming = next((line for line, f in told(d, mark) if f['peer'] == RIG_RIVAL), None)
+        rig.check('the stick names the rival', heard and naming is not None)
+        if naming is not None:
+            after = naming.t - began
+            rig.check(f'only once every stick that pulled with it could have been heard ({NAME_AFTER_S} s after its pull began)',
+                      NAME_AFTER_S - 0.25 <= after <= NAME_AFTER_S + 1.0, f'{after:.2f} s')
+        rig.check('and that alone is no battle yet', battle_status(d).get('in_battle') == '0')
+        rival.peer, rival.peer_tag = stick, tag
+        rival.tell()
+        matched = d.wait('BATTLE_MATCHED', 2, since=mark)
+        rig.check('named back, the battle is on: both launches side by side',
+                  matched is not None and matched.f.get('rival') == f'{RIG_RIVAL:08x}' and matched.f.get('their_rpm') == '5980' and
+                  abs(float(matched.f.get('my_rpm', 0)) - float(r.launch['peak_rpm'])) <= 1 and matched.f.get('launches_together') == '1',
+                  matched.text if matched else 'no BATTLE_MATCHED')
+        rival.name('Rig Rival')
+        quiet = d.wait('BATTLE_RADIO scan=listen', 6, since=mark)
+        rig.check('the stick then only listens, a tenth of the time', quiet is not None and d.wait('BATTLE_RADIO beacon=0', 6, since=mark) is not None)
+        # The recap has the screen for a few seconds; then the card is the main screen's.
+        rig.check('the battle card is up once the recap has gone', card_up(rig, mark) and battle_status(d).get('view') == '1')
+        rig.screenshot('battle_versus')
+
+        # ---- A, B, A: won by an Over finish.
+        entered = d.mark()
+        rig.check('A opens the picker', press(rig, 'a', '2'))
+        rig.screenshot('battle_picker')
+        d.write('h\n')
+        time.sleep(0.6)
+        d.write('a\n')
+        result = d.wait('BATTLE_RESULT', 4, since=entered)
+        rig.check('A, B, A: won by an Over finish, two points',
+                  result is not None and result.f.get('outcome') == 'won' and result.f.get('finish') == 'Over' and result.f.get('rev') == '1' and
+                  result.f.get('won') == '1' and result.f.get('points') == '2-0' and result.f.get('match') == '2-0',
+                  result.text if result else 'no BATTLE_RESULT')
+        # The frame goes out with the loop's next pass, a moment after the result line.
+        end = time.monotonic() + 2
+        while not any(f['claim'] == claim(WON, OVER, 1) for _, f in told(d, entered)) and time.monotonic() < end:
+            time.sleep(0.05)
+        telling = [f for _, f in told(d, entered)]
+        rig.check('and tells it', bool(telling) and telling[-1]['claim'] == claim(WON, OVER, 1) and telling[-1]['peer'] == RIG_RIVAL, str(telling[-1:]))
+        rig.screenshot('battle_result_win')
+        rig.check('still telling while the rival has not shown it back', d.wait('BATTLE_SYNCED', 1.0, since=entered) is None)
+        rival.claim = claim(LOST, OVER, 1)
+        rival.tell()
+        synced = d.wait('BATTLE_SYNCED', 2, since=entered)
+        rig.check('the rival shows it back: both agree', synced is not None)
+        stopped = d.wait('BATTLE_RADIO beacon=0', 4, since=entered)
+        rig.check('and the stick stops telling within 2 s', synced is not None and stopped is not None and stopped.t - synced.t <= 2.5)
+
+        # ---- The rival corrects it: a Spin finish, and its own win.
+        fix = d.mark()
+        rival.claim = claim(WON, SPIN, 2)
+        rival.tell()
+        result = d.wait('BATTLE_RESULT', 2, since=fix)
+        rig.check('the rival\'s correction is adopted: lost by a Spin finish',
+                  result is not None and result.f.get('outcome') == 'lost' and result.f.get('rev') == '2' and result.f.get('won') == '0' and
+                  result.f.get('lost') == '1' and result.f.get('points') == '0-1' and result.f.get('match') == '0-1',
+                  result.text if result else 'no BATTLE_RESULT')
+        echo = [f for _, f in told(d, fix)]
+        rig.check('and shown back to it', bool(echo) and echo[-1]['claim'] == claim(LOST, SPIN, 2), str(echo[-1:]))
+        rig.check('the card shows it', battle_status(d).get('view') == '3')
+        rig.screenshot('battle_result_loss')
+
+        # ---- Saved to the log, with the ADC sampling throughout, and kept across a reboot.
+        saved = d.wait('BATTLE_SAVE', 20, since=mark)
+        late = d.wait('BATTLE_SAVE', 12, since=fix) if saved is None or saved.index < fix else saved
+        rig.check('the record is saved to the log', late is not None and late.f.get('ok') == '1' and late.f.get('rivals') == '1',
+                  late.text if late else 'no BATTLE_SAVE')
+        if late is not None:
+            rig.check('in a few milliseconds', float(late.f.get('duration_us', 1e9)) <= 40000, late.f.get('duration_us'))
+        seen = rivals_reply(rig)
+        rig.check('a phone reads the same record (Get rivals), under the rival\'s name',
+                  seen is not None and seen[0] == 1 and seen[1:4] == (0, 1, 0) and seen[4][0]['id'] == RIG_RIVAL and seen[4][0]['name'] == 'Rig Rival' and
+                  seen[4][0]['losses'] == 1 and seen[4][0]['points_against'] == 1 and seen[4][0]['together'] == 1 and seen[4][0]['faster'] == 1 and
+                  seen[4][0]['rival_rpm'] == 5980 and seen[4][0]['last'] == (LOST | SPIN << 2), str(seen))
+    finally:
+        try:
+            d.hil('bletap 0', expect='HIL_OK bletap')
+        except DeviceError:
+            pass
+    boot = d.mark()
+    scenarios.reboot(rig)
+    loaded = d.wait('BATTLE_LOAD', 3, since=boot)
+    if loaded is None:
+        # Printed before the port was back: the status has the same.
+        status = battle_status(d)
+        rig.check('after a reboot the record is there', status.get('rivals') == '1' and status.get('lost') == '1' and status.get('unsaved') == '0', str(status))
+    else:
+        rig.check('after a reboot the record is there', loaded.f.get('found') == '1' and loaded.f.get('rivals') == '1', loaded.text)
+    scenarios.settle(rig)
+    d.hil('bletap 1', expect='HIL_OK bletap')
+    try:
+        # ---- A result the stick missed arrives with the next battle.
+        # The rival says: that last battle was void in the end (revision 3).
+        mark = d.mark()
+        r = rig.pull(signals.standard_pull(6100), signals.launch_motion(tilt_rate_dps=310, pull_g=4, seed=72))
+        rig.check_pull(r, tolerance=0.03)
+        launched = d.wait('BATTLE_LAUNCH', 2, since=mark)
+        mine = told(d, mark)
+        rig.check('the next pull is told, with the battle before it', launched is not None and bool(mine) and mine[0][1]['prev_tag'] != 0 and
+                  mine[0][1]['prev_claim'] == claim(LOST, SPIN, 2), str(mine[:1]))
+        if launched is None or not mine:
+            return
+        began = launched.t - float(launched.f['pull_began_ms_ago']) / 1000
+        again = Rival(d, 6300, began + 0.2, tag=RIG_TAG + 1)
+        again.prev_tag, again.prev_claim = RIG_TAG, claim(VOID, SPIN, 3)
+        # The rival's player has chosen first to 7 since. The first battle turns
+        # out void, so this one starts a match: the longer of the two lengths.
+        again.match_to = 7
+        stick, tag = mine[0][1]['id'], mine[0][1]['tag']
+
+        def named_again():
+            return any(f['peer'] == RIG_RIVAL and f['peer_tag'] == RIG_TAG + 1 for _, f in told(d, mark))
+        # Heard too faintly to be across the same stadium: past the moment it
+        # would have been named, it is not.
+        far = again.tell_until(named_again, max(0.5, began + NAME_AFTER_S + 0.7 - time.monotonic()), strength=FAR_DB)
+        rig.check(f'a stick heard at -{FAR_DB} dBm, too far to be across the stadium, is not named', not far)
+        # Then near, with every other frame faded: the faded ones undo nothing.
+        named = again.tell_until(named_again, 2.5, fading=True)
+        rig.check(f'heard near (-{NEAR_DB} dBm), it is named, though every other frame fades to -{FADED_DB} dBm', named)
+        again.peer, again.peer_tag = stick, tag
+        again.tell()
+        matched = d.wait('BATTLE_MATCHED', 2, since=mark)
+        rig.check('the second battle is on', named and matched is not None and matched.f.get('launches_together') == '2',
+                  matched.text if matched else 'no BATTLE_MATCHED')
+        rig.check('a new match, first to 7 as the rival asked, while this stick still tells its own first to 4',
+                  matched is not None and matched.f.get('match_to') == '7' and matched.f.get('match') == '0-0' and
+                  all(f['match_to'] == 4 for _, f in told(d, mark)), matched.text if matched else '')
+        seen = rivals_reply(rig)
+        rig.check('and the missed result of the first is in the record: void, nothing counted',
+                  seen is not None and seen[1:4] == (0, 0, 0) and seen[4][0]['losses'] == 0 and seen[4][0]['points_against'] == 0 and
+                  seen[4][0]['match_them'] == 0 and seen[4][0]['together'] == 2 and seen[4][0]['faster'] == 1 and seen[4][0]['last'] == 0 and
+                  seen[4][0]['match_to'] == 7, str(seen))
+
+        # ---- Hold B puts the card away; the rival's result still arrives.
+        card_up(rig, mark)
+        rig.check('hold B puts the card away', press(rig, 'b', '0') and battle_status(d).get('in_battle') == '1')
+        mark2 = d.mark()
+        again.claim = claim(LOST, XTREME, 1)
+        again.tell()
+        result = d.wait('BATTLE_RESULT', 2, since=mark2)
+        rig.check('the rival enters its own loss by Xtreme finish: three points here, and the card is back',
+                  result is not None and result.f.get('outcome') == 'won' and result.f.get('finish') == 'Xtreme' and result.f.get('points') == '3-0' and
+                  result.f.get('match') == '3-0' and battle_status(d).get('view') == '3', result.text if result else 'no BATTLE_RESULT')
+        rig.check('A puts the result away', press(rig, 'a', '0'))
+
+        # ---- Not battles: tournament mode and Auto battles off.
+        scenarios.settle(rig)
+        d.write('o\n')  # hold A: tournament mode
+        time.sleep(0.5)
+        mark = d.mark()
+        r = rig.pull(signals.standard_pull(6200), signals.launch_motion(tilt_rate_dps=300, pull_g=4, seed=73), wait_motion=False)
+        time.sleep(1.5)
+        said = [l.text for l in d.since(mark, 'BATTLE_') if l.text.startswith(('BATTLE_LAUNCH', 'BATTLE_RADIO ', 'BATTLE_TELL', 'BATTLE_MATCHED'))]
+        rig.check('a pull in tournament mode is not told', r.launch is not None and not said and battle_status(d).get('active') == '0', str(said))
+        d.write('o\n')
+        time.sleep(0.5)
+        d.hil('home')
+    finally:
+        try:
+            d.hil('battleclear', expect='HIL_OK battleclear')
+            d.hil('bletap 0', expect='HIL_OK bletap')
+        except DeviceError:
+            pass
+    # With the tap off and Bluetooth off there is no radio: a pull tells nothing.
+    scenarios.settle(rig)
+    mark = d.mark()
+    r = rig.pull(signals.standard_pull(6000), signals.launch_motion(tilt_rate_dps=300, pull_g=4, seed=74))
+    rig.check_pull(r, tolerance=0.03)
+    time.sleep(1.0)
+    said = [l.text for l in d.since(mark, 'BATTLE_') if l.text.startswith(('BATTLE_LAUNCH', 'BATTLE_RADIO ', 'BATTLE_TELL', 'BATTLE_MATCHED'))]
+    rig.check('without a radio a pull tells nothing', not said, str(said))
+    scenarios.drain_history(rig)
+
+
+def battle_air(rig):
+    """The radio's side of a battle, on the air, with one stick.
+
+    Bluetooth is turned on for real (no tap). A pull must then be told as an
+    advertisement and listened for with a scan, the stack refusing neither;
+    meanwhile the stick's own advertisement, the one phones and Battle Pass
+    apps find it by, takes every other turn with the frame; both end after 8 s,
+    and the stick's own advertisement stays. A second pull inside the first one's window is measured
+    as well as any other: nothing listens while it is measured. Nothing hears
+    the frames here: that takes a second stick, or a phone with a scanner app,
+    and is a hand test (docs/FIRMWARE_BATTLES.md).
+    """
+    import scenarios
+    scenarios.settle(rig)
+    d = rig.dev
+    try:
+        set_bluetooth(rig, True)
+        ble = {}
+        for _ in range(20):
+            ble = d.status().get('BLE_STATUS', {})
+            if ble.get('started') == '1' or ble.get('init_failed') == '1':
+                break
+            time.sleep(1)
+        rig.check('Bluetooth is on and the stick advertises as itself', ble.get('started') == '1' and ble.get('adv_active') == '1', str(ble))
+        d.hil('battleclear', expect='HIL_OK battleclear')
+        before = d.status()
+        failures = before.get('BATTLE_RADIO_STATUS', {}).get('failures')
+        rig.check('battles have the radio', before.get('BATTLE_STATUS', {}).get('allowed') == '1' and
+                  before.get('BATTLE_RADIO_STATUS', {}).get('on_air') == '1', str(before.get('BATTLE_RADIO_STATUS')))
+        mark = d.mark()
+        r = rig.pull(signals.standard_pull(6300), signals.launch_motion(tilt_rate_dps=310, pull_g=4, seed=75))
+        rig.check_pull(r, tolerance=0.03)
+        on = d.wait('BATTLE_RADIO beacon=1', 3, since=mark)
+        listening = d.wait('BATTLE_RADIO scan=detect', 3, since=mark)
+        rig.check('the pull is told and listened for', on is not None and listening is not None and bool(told(d, mark)))
+        time.sleep(1.5)
+        during = d.status()
+        radio = during.get('BATTLE_RADIO_STATUS', {})
+        rig.check('the stack took the frame and the scan', radio.get('beacon') == '1' and radio.get('scan') == '1' and radio.get('failures') == failures and
+                  during.get('BLE_STATUS', {}).get('adv_active') == '1', f"{radio} {during.get('BLE_STATUS')}")
+        # A turn each 200 ms: in about 2 s of telling, the stick's own advertisement has had several.
+        own_before = int(before.get('BATTLE_RADIO_STATUS', {}).get('own_turns', 0))
+        rig.check("and the stick's own advertisement takes turns with the frame, so a phone can still find it",
+                  int(radio.get('own_turns', 0)) >= own_before + 3, str(radio))
+        # A second pull inside the window: its own window starts, and it is measured as well as the first.
+        second = d.mark()
+        r2 = rig.pull(signals.standard_pull(7100), signals.launch_motion(tilt_rate_dps=330, pull_g=4, seed=76))
+        rig.check_pull(r2, tolerance=0.03)
+        relaunch = d.wait('BATTLE_LAUNCH', 2, since=second)
+        time.sleep(0.5)
+        first, frames = told(d, mark), told(d, second)
+        rig.check('a second pull inside the window is told in its place',
+                  r2.launch is not None and relaunch is not None and bool(first) and bool(frames) and frames[-1][1]['tag'] != first[0][1]['tag'] and
+                  abs(frames[-1][1]['rpm'] - float(r2.launch['peak_rpm'])) <= 1, str([f for _, f in frames][-1:]))
+        off = d.wait('BATTLE_RADIO beacon=0', 12, since=second)
+        quiet = d.wait('BATTLE_RADIO scan=off', 12, since=second)
+        rig.check('8 s after it the stick stops telling and listening',
+                  off is not None and quiet is not None and relaunch is not None and 7.0 <= off.t - relaunch.t <= 10.0,
+                  f'{off.t - relaunch.t:.1f} s' if off and relaunch else 'no beacon=0')
+        ble = {}
+        end = time.monotonic() + 8
+        while time.monotonic() < end:
+            ble = d.status().get('BLE_STATUS', {})
+            if ble.get('adv_active') == '1':
+                break
+            time.sleep(0.5)
+        after = d.status()
+        radio = after.get('BATTLE_RADIO_STATUS', {})
+        rig.check('and advertises as itself again, for phones', ble.get('adv_active') == '1', str(ble))
+        rig.check('with nothing refused on the way', radio.get('failures') == failures and radio.get('beacon') == '0' and radio.get('scan') == '0', str(radio))
+        perf = after.get('PERF', {})
+        rig.note(f"with the radio's windows: max_read_gap_us={perf.get('max_read_gap_us')} lost_events={perf.get('lost_events')} adc_stalls={perf.get('adc_stalls')} "
+                 f"frames heard from other sticks={radio.get('heard')} dropped={radio.get('dropped')}")
+        rig.check('no battle came of launches alone', after.get('BATTLE_STATUS', {}).get('rivals') == '0', str(after.get('BATTLE_STATUS')))
+    finally:
+        set_bluetooth(rig, False)
+    scenarios.drain_history(rig)

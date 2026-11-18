@@ -10,14 +10,17 @@
 class SettingsSave {
 public:
   static constexpr uint32_t RETRY_MS=1000,FAILED_RETRY_MS=5000;
+  // 32 bits since Min RPM (0.21.0) needed a seventeenth.
   enum Item:uint32_t {Sleep=1,Rpm=2,Brightness=4,Flip=8,Sensor=16,Appearance=32,Mount=64,Pin=128,ExtPower=256,Milestones=512,ShakeWake=1024,BatteryIcon=2048,
-    Bluetooth=4096,Bonds=8192,Name=16384,PassConfirmed=32768,AnalysisResult=65536};
+    Bluetooth=4096,Bonds=8192,Name=16384,PassConfirmed=32768,MinRpm=65536,
+    AnalysisResult=131072,Battles=262144};
   // Bit for a Controls::Setting row: Sleep, Rpm, Brightness, Flip, Sensor,
-  // Theme, BestEffect, Celebrate, Sound, Mount, ShakeWake, then BatteryIcon
-  // after Wipe all and About, which save nothing. The three appearance rows
-  // share a record; Celebrate is saved with the milestone table.
+  // Theme, BestEffect, Celebrate, Sound, Mount, ShakeWake, then BatteryIcon,
+  // Bluetooth and MinRpm after Wipe all and About, which save nothing. The
+  // three appearance rows share a record; Celebrate is saved with the
+  // milestone table.
   static uint32_t item(unsigned row) {
-    static constexpr uint32_t items[]={Sleep,Rpm,Brightness,Flip,Sensor,Appearance,Appearance,Milestones,Appearance,Mount,ShakeWake,0,0,BatteryIcon,Bluetooth};
+    static constexpr uint32_t items[]={Sleep,Rpm,Brightness,Flip,Sensor,Appearance,Appearance,Milestones,Appearance,Mount,ShakeWake,0,0,BatteryIcon,Bluetooth,MinRpm};
     return row<sizeof(items)/sizeof(items[0])?items[row]:0;
   }
   // The owner rechecks everything itself. This only skips a request it would

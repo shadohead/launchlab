@@ -1,13 +1,10 @@
 #pragma once
 
-// Analysis has its own release cycle; retain the base firmware version.
+// Analysis Mode keeps its own version beside the firmware's. It is
+// experimental (0.21.0): the finish forecast is a model still being trained
+// and improved, so its screens say so.
 #define LAUNCHLAB_ANALYSIS_VERSION "1.0-rc.5"
-#define LAUNCHLAB_RUNTIME_PM "0.20.11-analysis-1.0-rc.5-pm"
-
-#if LAUNCHLAB_HIL
-static constexpr char VERSION[] = "0.20.11-analysis-1.0-rc.5-hil";
-#elif LAUNCHLAB_CPU_PM
-static constexpr char VERSION[] = LAUNCHLAB_RUNTIME_PM;
-#else
-static constexpr char VERSION[] = "0.20.11-analysis-1.0-rc.5";
-#endif
+#define LAUNCHLAB_ANALYSIS_EXPERIMENTAL 1
+// The production runtime: the PM VERSION line of LaunchLabMini.ino, which the
+// release tools read (check_analysis_release.py keeps the two equal).
+#define LAUNCHLAB_RUNTIME_PM "0.21.0-sticks3-songs-pm"

@@ -151,22 +151,106 @@ int main() {
   }
   // Newest wins between the log and NVS (the mirror 0.15-0.17 read).
   {
-    // No log yet (a first boot of 0.18): NVS. No NVS: the log.
-    assert(pick(false,0,true,5)==Source::Nvs && pick(true,5,false,0)==Source::Log && pick(false,0,false,0)==Source::None);
-    // NVS still at what was last mirrored: the log holds newer pulls (an unclean power loss after the mirror).
-    assert(pick(true,40,true,40)==Source::Log);
+    using HistoryLog::Nvs;using HistoryLog::NOT_MIRRORED;
+    // No log yet (a first boot of 0.18 after 0.15-0.17, data only in NVS): NVS. Neither: none.
+    assert(pick(false,0,Nvs::Found,5)==Source::Nvs && pick(false,0,Nvs::Absent,0)==Source::None && pick(false,0,Nvs::Unreadable,0)==Source::None);
+    // NVS still at what was last mirrored: the log holds newer pulls (an unclean power loss after the mirror,
+    // or NVS full and refusing the next copy).
+    assert(pick(true,40,Nvs::Found,40)==Source::Log);
     // 0.18 -> 0.17 -> pulls -> 0.18: 0.17 saved into NVS after the last mirror, so NVS is newer,
     // whichever generation each firmware reached.
-    assert(pick(true,40,true,41)==Source::Nvs && pick(true,40,true,12)==Source::Nvs);
+    assert(pick(true,40,Nvs::Found,41)==Source::Nvs && pick(true,40,Nvs::Found,12)==Source::Nvs);
+    // NVS without the record. The log says NVS held none: NVS refused every copy (full), the log is the
+    // only one. The log says NVS held one: NVS was erased behind this firmware's back (Wipe all on
+    // 0.15-0.17 after a rollback), so the wiped record stays wiped. NVS that cannot be read proves nothing.
+    assert(pick(true,NOT_MIRRORED,Nvs::Absent,0)==Source::Log && pick(true,40,Nvs::Absent,0)==Source::None);
+    assert(pick(true,40,Nvs::Unreadable,0)==Source::Log && pick(true,NOT_MIRRORED,Nvs::Unreadable,0)==Source::Log);
     // The whole sequence through the stores: 0.18 mirrors generation G, saves more to the log,
     // a rollback adds pulls in NVS only, then 0.18 again.
     Nor f;LogStore s;assert(s.open(f)==Log::Open::Formatted);
     PracticeHistory nvs=pulls(10);const uint32_t mirroredGen=nvs.generation();
     PracticeHistory logged=nvs;assert(logged.accept(50,true,9500,99000));assert(s.saveHistory(logged,mirroredGen));
-    PracticeHistory back;uint32_t m=0;assert(s.loadHistory(back,m) && pick(true,m,true,nvs.generation())==Source::Log && same(back,logged));
+    PracticeHistory back;uint32_t m=0;assert(s.loadHistory(back,m) && pick(true,m,Nvs::Found,nvs.generation())==Source::Log && same(back,logged));
     PracticeHistory older=nvs;assert(older.accept(60,true,8800,120000));  // the rollback's own save, NVS only
     LogStore reboot;assert(reboot.open(f)==Log::Open::Ready && reboot.loadHistory(back,m));
-    assert(pick(true,m,true,older.generation())==Source::Nvs);
+    assert(pick(true,m,Nvs::Found,older.generation())==Source::Nvs);
+  }
+  // Wipe all on a rolled-back 0.15-0.17 erases NVS only (they do not know the log); upgraded again
+  // before any pull, boot must not bring back the wiped history, bests or power log. Each record was
+  // logged after NVS held its copy, as every save after the first sleep is.
+  {
+    using HistoryLog::Nvs;using HistoryLog::NOT_MIRRORED;
+    Nor f;LogStore s;assert(s.open(f)==Log::Open::Formatted);
+    const PracticeHistory h=pulls(12);Appearance::Bests bests;bests.observe(0,0,true,9300);bests.observe(1,0,true,8100);
+    PowerDiagnostics::Image power;PowerDiagnostics::fresh(power);PowerDiagnostics::append(power,PowerDiagnostics::Sample,3900,0,30,80);
+    power.checksum=PowerDiagnostics::hash(power);
+    assert(s.saveHistory(h,h.generation()) && s.saveBests(bests,bests.generation()) && s.savePower(power,power.checksum));
+    // The rollback, Wipe all there, the upgrade: NVS opens and holds none of the three.
+    LogStore boot;assert(boot.open(f)==Log::Open::Ready);
+    PracticeHistory back;Appearance::Bests b;PowerDiagnostics::Image p;uint32_t mh=0,mb=0,mp=0;
+    assert(boot.loadHistory(back,mh) && boot.loadBests(b,mb) && boot.loadPower(p,mp));
+    if(pick(true,mh,Nvs::Absent,0)!=Source::None)std::cerr<<"wiped history resurrected: NVS erased, log mirrored="<<mh<<"\n";
+    assert(pick(true,mh,Nvs::Absent,0)==Source::None && pick(true,mb,Nvs::Absent,0)==Source::None && pick(true,mp,Nvs::Absent,0)==Source::None);
+    // Boot logs the empty records over them (mirrored: NVS holds none), so the next boot, and 0.18-0.20.10
+    // after another rollback (which loads the log when NVS holds none), load nothing.
+    PowerDiagnostics::Image fresh;PowerDiagnostics::fresh(fresh);fresh.checksum=PowerDiagnostics::hash(fresh);
+    assert(boot.saveHistory(PracticeHistory(),NOT_MIRRORED) && boot.saveBests(Appearance::Bests(),NOT_MIRRORED) && boot.savePower(fresh,NOT_MIRRORED));
+    LogStore again;assert(again.open(f)==Log::Open::Ready && again.loadHistory(back,mh) && again.loadBests(b,mb) && again.loadPower(p,mp));
+    assert(pick(true,mh,Nvs::Absent,0)==Source::Log && back.size()==0 && b.generation()==0 && b.rpm[0]==0 && p.count==0);
+    assert(pick(true,mb,Nvs::Absent,0)==Source::Log && pick(true,mp,Nvs::Absent,0)==Source::Log);
+    // A pull on the old firmware after the wipe (NVS holds a new record) was already safe: NVS differs.
+    assert(pick(true,h.generation(),Nvs::Found,1)==Source::Nvs);
+  }
+  // NVS refused the copies (full, as one StickS3 was): the log is newer and loads, whether NVS held an
+  // older copy, held none, or could not even open the namespace.
+  {
+    using HistoryLog::Nvs;using HistoryLog::NOT_MIRRORED;
+    Nor f;LogStore s;assert(s.open(f)==Log::Open::Formatted);
+    // Never a copy in NVS: every record says NOT_MIRRORED (what 0.18-0.20.10 wrote too: an empty store's generation).
+    PracticeHistory h=pulls(5);assert(s.saveHistory(h,NOT_MIRRORED));
+    PracticeHistory back;uint32_t m=1;LogStore r;assert(r.open(f)==Log::Open::Ready && r.loadHistory(back,m) && m==NOT_MIRRORED);
+    assert(pick(true,m,Nvs::Absent,0)==Source::Log && same(back,h) && pick(true,m,Nvs::Unreadable,0)==Source::Log);
+    // An older copy G in NVS, the next refused: the record says G, NVS still holds G.
+    const uint32_t g=h.generation();assert(h.accept(90,true,9900,500000) && s.saveHistory(h,g));
+    LogStore r2;assert(r2.open(f)==Log::Open::Ready && r2.loadHistory(back,m) && m==g && pick(true,m,Nvs::Found,g)==Source::Log && same(back,h));
+  }
+  // A record logged before NVS took its first copy says NOT_MIRRORED, and would still say so after
+  // that copy: an erase then could not be told from NVS refusing every copy. So the first copy NVS
+  // takes is logged again at once (flushForShutdown, savePowerLog; check_save_paths runs the sketch's).
+  {
+    using HistoryLog::Nvs;using HistoryLog::NOT_MIRRORED;
+    Nor f;LogStore s;assert(s.open(f)==Log::Open::Formatted);
+    const PracticeHistory h=pulls(3);assert(s.saveHistory(h,NOT_MIRRORED));  // first session, NVS empty
+    PracticeHistory back;uint32_t m=0;
+    {LogStore r;assert(r.open(f)==Log::Open::Ready && r.loadHistory(back,m) && pick(true,m,Nvs::Absent,0)==Source::Log);}  // without the re-log
+    assert(s.saveHistory(h,h.generation()));  // NVS took generation 3: logged again
+    LogStore r;assert(r.open(f)==Log::Open::Ready && r.loadHistory(back,m) && m==h.generation());
+    assert(pick(true,m,Nvs::Found,h.generation())==Source::Log && pick(true,m,Nvs::Absent,0)==Source::None);
+  }
+  // NVS lost, not wiped (the core erased the partition at boot: no namespace left): disown() logs each
+  // record again saying NOT_MIRRORED, payload unchanged, so they load. Records already saying it are not
+  // logged again, and a power cut part way leaves each record whole: the next boot finishes the job.
+  {
+    using HistoryLog::Nvs;using HistoryLog::NOT_MIRRORED;
+    Nor base;LogStore s;assert(s.open(base)==Log::Open::Formatted);
+    const PracticeHistory h=pulls(9);Appearance::Bests bests;bests.observe(0,0,true,9700);
+    PowerDiagnostics::Image power;PowerDiagnostics::fresh(power);PowerDiagnostics::append(power,PowerDiagnostics::Sample,3900,0,30,80);
+    power.checksum=PowerDiagnostics::hash(power);
+    assert(s.saveHistory(h,h.generation()) && s.saveBests(bests,bests.generation()) && s.savePower(power,NOT_MIRRORED));
+    unsigned cuts=0;
+    for(long budget=0;budget<long(HISTORY_BYTES)+400;budget+=53,++cuts) {
+      Nor f=base;LogStore t;assert(t.open(f)==Log::Open::Ready);
+      f.budget=budget;t.disown();f.restore();
+      LogStore r;assert(r.open(f)==Log::Open::Ready);
+      const int n=r.disown();assert(n>=0 && n<=2);
+      LogStore again;assert(again.open(f)==Log::Open::Ready && again.disown()==0);
+      PracticeHistory back;Appearance::Bests b;PowerDiagnostics::Image p;uint32_t mh=1,mb=1,mp=1;
+      assert(again.loadHistory(back,mh) && again.loadBests(b,mb) && again.loadPower(p,mp));
+      assert(mh==NOT_MIRRORED && mb==NOT_MIRRORED && mp==NOT_MIRRORED && same(back,h) && b.rpm[0]==bests.rpm[0] && p.count==power.count);
+      assert(pick(true,mh,Nvs::Absent,0)==Source::Log && pick(true,mb,Nvs::Absent,0)==Source::Log);
+    }
+    {Nor f=base;LogStore t;assert(t.open(f)==Log::Open::Ready && t.disown()==2);}  // the power record already said NOT_MIRRORED
+    std::cout<<"  "<<cuts<<" power-loss points in a disown: every record whole, the next disown finishes\n";
   }
   // Saves take nothing from the default heap: on the device that is internal
   // RAM for buffers this size, and a history save while a song streamed took
@@ -208,7 +292,87 @@ int main() {
     unsigned pieces=0;
     assert(!FlashChunks::write(at,src.data(),src.size(),false,[&](uint32_t,const void *,size_t){return ++pieces<3;}) && pieces==3);
   }
+  // Battle records (rival_book.h): a fourth record type, kept in the log
+  // alone. Its save is program-only and takes no default heap, it loads after
+  // any number of other saves (its sector is never erased), and a record that
+  // does not read as one leaves the book as it was.
+  {
+    Nor f;LogStore s;assert(s.open(f)==Log::Open::Formatted);
+    Battle::Book book,none;
+    assert(!s.loadRivals(none) && !none.count());
+    const uint32_t kai=0x11110001;
+    book.begin(kai,1,2,6420,5980);book.rename(kai,"Kai");book.claim(kai,Battle::Outcome::Won,Battle::Finish::Xtreme);
+    Battle::Book::Image saved;book.encode(saved);
+    counting=true;allocations=0;const unsigned erases=f.erases;
+    const bool ok=s.saveRivals(book);
+    counting=false;
+    assert(ok && !allocations && f.erases==erases);
+    PracticeHistory h;uint32_t next=1;
+    for(unsigned save=0;save<200;++save) {
+      assert(h.accept(next,true,7000+float(next%500),next*1000));++next;
+      assert(s.saveHistory(h,3));
+      while(s.readyAhead()){}
+    }
+    {
+      LogStore r;assert(r.open(f)==Log::Open::Ready);
+      Battle::Book back;Battle::Book::Image image;assert(r.loadRivals(back));back.encode(image);assert(image==saved);
+      PracticeHistory history;uint32_t m=0;assert(r.loadHistory(history,m) && same(history,h));
+    }
+    // A newer save replaces it.
+    book.begin(kai,3,4,6000,6100);assert(s.saveRivals(book));
+    book.encode(saved);
+    // The firmware before battles (three record types) on this log: it reads
+    // its own records, takes the battle record for a torn one and carries on
+    // in a new sector, and what it saves is what the newer firmware loads.
+    using Earlier=FlashLog<Nor,4>;
+    std::vector<uint8_t> payload(HISTORY_BYTES);
+    {
+      Earlier old;assert(old.open(f)==Earlier::Open::Ready);
+      const auto found=old.newest(HistoryLog::History);
+      assert(found.found && found.length==HISTORY_BYTES && !old.newest(HistoryLog::Rivals).found);
+      assert(old.readPayload(found,payload.data(),HISTORY_BYTES));
+      PracticeHistory theirs;assert(theirs.decode(payload.data()+4,PracticeHistory::IMAGE_BYTES) && same(theirs,h));
+      assert(!old.append(HistoryLog::Rivals,saved.data(),saved.size()));
+      // One more pull, saved by the earlier firmware.
+      assert(h.accept(next,true,7100,next*1000));
+      PracticeHistory::Image image;h.encode(image);std::memcpy(payload.data()+4,image.data(),image.size());
+      assert(old.append(HistoryLog::History,payload.data(),HISTORY_BYTES));
+    }
+    {
+      LogStore r;assert(r.open(f)==Log::Open::Ready);
+      PracticeHistory history;uint32_t m=0;assert(r.loadHistory(history,m) && same(history,h));
+      Battle::Book back;Battle::Book::Image image;assert(r.loadRivals(back));back.encode(image);assert(image==saved);
+    }
+    // It does not keep the battle record's sector out of its rotation: after
+    // the log has gone round under it the record is gone. Nothing else is
+    // lost, and the newer firmware starts an empty book and saves again.
+    {
+      Earlier old;assert(old.open(f)==Earlier::Open::Ready);
+      for(unsigned save=0;save<40;++save){assert(old.append(HistoryLog::History,payload.data(),HISTORY_BYTES));while(old.readyAhead()){}}
+    }
+    {
+      LogStore r;assert(r.open(f)==Log::Open::Ready);
+      PracticeHistory history;uint32_t m=0;assert(r.loadHistory(history,m) && same(history,h));
+      Battle::Book back;back.begin(7,1,1,1,1);
+      assert(!r.loadRivals(back) && back.count()==1 && back.find(7));
+      assert(r.saveRivals(book));
+      LogStore again;assert(again.open(f)==Log::Open::Ready);
+      Battle::Book reloaded;Battle::Book::Image image;assert(again.loadRivals(reloaded));reloaded.encode(image);assert(image==saved);
+    }
+    // A record of another size or with a byte changed is not a book.
+    {
+      Nor g;LogStore t;assert(t.open(g)==Log::Open::Formatted);
+      Battle::Book::Image bad=saved;bad[40]^=1;
+      assert(t.log().append(HistoryLog::Rivals,bad.data(),bad.size()));
+      Battle::Book back;back.begin(7,1,1,1,1);
+      assert(!t.loadRivals(back) && back.count()==1);
+      assert(t.log().append(HistoryLog::Rivals,saved.data(),saved.size()-16) && !t.loadRivals(back) && back.count()==1);
+      assert(t.saveRivals(book) && t.loadRivals(back) && back.count()==1 && back.find(kai));
+    }
+  }
   std::cout<<"PASS: the history log formats a blank or foreign partition touching only its own sectors, leaves a newer layout alone, "
              "wraps evenly with program-only saves, survives a power loss anywhere in a save or erase, newest wins against the NVS mirror, "
-             "saves take no default (internal) heap, and writes from PSRAM go through page-aligned internal chunks\n";
+             "a record NVS lost to an old firmware's Wipe all stays wiped while one NVS refused or the core erased still loads, "
+             "saves take no default (internal) heap, writes from PSRAM go through page-aligned internal chunks, and battle records "
+             "load after any number of saves and are passed over by the firmware before them\n";
 }

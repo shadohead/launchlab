@@ -70,14 +70,22 @@ public:
   // Where begin() found the table.
   Source source()const{return source_;}
   bool pending(const Milestones::Config &c)const{return c.generation()!=saved_;}
+  // The generation the store holds now (saved or loaded).
+  uint32_t savedGeneration()const{return saved_;}
+  // A write NVS took did not read back: that slot holds a record this store
+  // has not seen, which may be newer than savedGeneration() and load at the
+  // next boot. The next save goes to the same slot and settles it.
+  bool unverified()const{return unverified_!=0;}
   // Writes the table's record over the older slot, then (a table 0.16
   // cannot read) forV016() over the other. Run inside the caller's
   // checkpoint; each write is read back and decoded. The table is saved once
   // its own record is: should the second write fail, this firmware still
   // loads the table, and only a rolled-back unit sees the older slot.
+  // A table older than the saved one would lose to it at the next boot: refused.
   bool save(const Milestones::Config &c) {
     if(!ready_)return false;
     if(!pending(c) && !damaged_)return true;
+    if(int32_t(c.generation()-saved_)<0)return false;
     const unsigned next=slot_^1u;
     if(!write(next,c))return false;
     slot_=next;saved_=c.generation();damaged_=false;source_=c.fitsV2()?Source::Narrow:Source::Wide;
@@ -100,10 +108,12 @@ private:
     if(c.fitsV2()){Config::V2Image v2;c.encodeV2(v2);std::copy(v2.begin(),v2.end(),image.begin());}
     else if(c.encodePacked(image))n=Config::PACKED_IMAGE_BYTES;
     else return false;
-    if(prefs_.putBytes(key(slot),image.data(),n)!=n || prefs_.getBytes(key(slot),readback.data(),n)!=n ||
-       !std::equal(image.begin(),image.begin()+n,readback.begin()))return false;
+    if(prefs_.putBytes(key(slot),image.data(),n)!=n)return false;
+    unverified_|=1u<<slot;
+    if(prefs_.getBytes(key(slot),readback.data(),n)!=n || !std::equal(image.begin(),image.begin()+n,readback.begin()))return false;
     Config decoded;
-    return n==Config::V2_IMAGE_BYTES?decoded.decode(readback.data(),n):decoded.decodePacked(readback.data(),n);
+    if(!(n==Config::V2_IMAGE_BYTES?decoded.decode(readback.data(),n):decoded.decodePacked(readback.data(),n)))return false;
+    unverified_&=~(1u<<slot);return true;
   }
-  Preferences prefs_;uint32_t saved_=0;unsigned slot_=0;Source source_=Source::None;bool ready_=false,damaged_=false;
+  Preferences prefs_;uint32_t saved_=0;unsigned slot_=0,unverified_=0;Source source_=Source::None;bool ready_=false,damaged_=false;
 };

@@ -88,12 +88,18 @@ inline Superblock historyLayout(uint32_t sequence) {
 // cut short by a power loss never counts and the log moves to a new sector.
 // The newest committed record of a type is the one in the highest sequence
 // sector at the highest offset.
-template<class Flash> class FlashLog {
+//
+// `Types` is one more than the highest record type this firmware knows: 4
+// through 0.20 (history, bests, the power log), 5 with battle records. A
+// reader that knows fewer types takes a newer type's record for a torn one:
+// it reads every record it knows, continues the log in a new sector, and
+// does not keep that record's sector from the rotation.
+template<class Flash,unsigned Types=5> class FlashLog {
 public:
   static constexpr uint32_t SECTOR=FlashLayout::SECTOR,HEADER=32,RECORD_HEADER=16;
   static constexpr uint32_t MAGIC=0x4c48484c;  // "LLHL"
   static constexpr uint32_t ERASED=0xffffffffu;
-  static constexpr unsigned MAX_SECTORS=32,TYPES=4,READY_AHEAD=3;
+  static constexpr unsigned MAX_SECTORS=32,TYPES=Types,READY_AHEAD=3;
   static constexpr uint32_t MAX_PAYLOAD=SECTOR-HEADER-RECORD_HEADER;
   struct Located {bool found=false;uint32_t offset=0,length=0,sequence=0;};
 
@@ -130,6 +136,8 @@ public:
     open_=true;return result;
   }
   bool isOpen()const{return open_;}
+  // Stops using the log until the next open (HIL !logclose: a log that did not open).
+  void close(){open_=false;}
   // The newest committed record of `type`, if any.
   Located newest(uint16_t type)const{return type<TYPES?newest_[type]:Located{};}
   bool readPayload(const Located &r,void *out,uint32_t n)const {
@@ -151,11 +159,16 @@ public:
     tail_+=need;  // whatever happens next, this space is spent
     if(!flash_->write(at,h,sizeof(h)) || !flash_->write(at+RECORD_HEADER,payload,length))return false;
     const uint8_t committed[2]={0,0};
+    unverified_[type]=true;  // from the commit on, a boot may read this record
     if(!flash_->write(at+2,committed,2))return false;
     // Read the record back as boot would before calling it saved.
     Located r;if(!readRecord(at,r) || r.length!=length)return false;
-    r.sequence=sequence_[active_];newest_[type]=r;return true;
+    r.sequence=sequence_[active_];newest_[type]=r;unverified_[type]=false;return true;
   }
+  // An append of `type` reached its commit and did not read back: the log
+  // may hold a record newer than newest(type), which the next boot would
+  // load. The next append of the type that succeeds lands after it.
+  bool unverified(uint16_t type)const{return type<TYPES && unverified_[type];}
   // At idle: erase one sector so READY_AHEAD stay ready. A sector that holds
   // the newest record of a type is never erased (at most TYPES-1 are), so a
   // rarely written type keeps its record while the rotation passes it.
@@ -191,6 +204,7 @@ private:
   bool scan() {
     active_=-1;uint32_t best=0;
     for(auto &n:newest_)n={};
+    for(auto &u:unverified_)u=false;
     for(unsigned i=0;i<sectors_;++i) {
       uint8_t h[HEADER];state_[i]=SectorState::Dirty;erases_[i]=0;sequence_[i]=ERASED;
       if(!flash_->read(sectorOffset(i),h,sizeof(h)))return false;
@@ -278,5 +292,5 @@ private:
   uint32_t base_=0;unsigned sectors_=0;
   SectorState state_[MAX_SECTORS]={};uint32_t erases_[MAX_SECTORS]={},sequence_[MAX_SECTORS]={};
   int active_=-1;uint32_t tail_=0;
-  Located newest_[TYPES]={};
+  Located newest_[TYPES]={};bool unverified_[TYPES]={};
 };

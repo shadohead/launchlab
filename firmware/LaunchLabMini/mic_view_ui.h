@@ -5,8 +5,9 @@
 #include "motion_ui.h"
 #include "palette.h"
 
-// The Mic RPM page: RPM heard over time, as the apps' spin trace, so the
-// decline shows. Time starts at the launch. The optical peak is a separate
+// RPM heard over time, as the apps' spin trace, so the decline shows: the
+// pieces of Analysis's graph (analysis_ui.h; through 0.20.11 the Mic RPM page
+// drew them alone). Time starts at the launch. The optical peak is a separate
 // marker at time zero and the shaded band is the time nothing was heard: the
 // line is sound alone, starts where the sound starts, and never joins the marker.
 namespace MicView {
@@ -70,49 +71,5 @@ inline void plot(lgfx::LGFXBase &g,const MicTrace::Trace &t,const Palette::Color
   if(showRejected && t.rawCount()>t.heard())for(unsigned i=0;i<t.count();++i)
     if(t.rejectedRpm(i))g.fillCircle(x(Trace::seconds(i)),y(t.rejectedRpm(i)),1,Palette::DARKGREY);
 
-}
-inline void draw(lgfx::LGFXBase &g,const MicTrace::Trace *trace,Mic mic,const Palette::Colors &c) {
-  using namespace MicTrace;
-  static constexpr Trace none;
-  const Trace &t=trace?*trace:none;
-  const int cx=g.width()/2;
-  ControlsUI::heading(g,"Mic RPM");
-  char text[32];
-  if(t.heard())snprintf(text,sizeof(text),"%u",unsigned(t.latestRpm()));else snprintf(text,sizeof(text),"--");
-  g.setTextColor(c.number,c.background);g.drawString(text,cx,28,4);
-  g.setTextColor(c.muted,c.background);g.drawString(t.ended()?"Last RPM heard":"RPM heard",cx,56,1);
-
-  plot(g,t,c);
-  g.setTextDatum(top_center);
-  const int middle=(TOP+BOTTOM)/2-4,plotCentre=LEFT+(RIGHT-LEFT)/2;
-  if(mic==Mic::Failed || mic==Mic::NoMemory) {
-    g.setTextColor(c.warning,c.background);g.drawString(mic==Mic::Failed?"Mic did not start":"Not enough memory",plotCentre,middle,1);
-  } else if(mic==Mic::Starting) {
-    g.setTextColor(c.muted,c.background);g.drawString("Mic warming up",plotCentre,middle,1);
-  } else if(!t.started()) {
-    g.setTextColor(c.muted,c.background);g.drawString("Pull to start",plotCentre,middle,1);
-    g.drawString("Sounds off here",cx,203,1);
-  } else {
-    if(t.opticalRpm()) {
-      snprintf(text,sizeof(text),"Launch peak %u",unsigned(t.opticalRpm()));
-      g.setTextColor(c.text,c.background);g.drawString(text,cx+5,190,1);
-      marker(g,cx-g.textWidth(text,&fonts::Font0)/2-3,193,c);
-    }
-    if(t.heard()) {
-      snprintf(text,sizeof(text),"First heard at %.1f s",t.firstSeconds());
-      g.setTextColor(c.text,c.background);g.drawString(text,cx,203,1);
-      const float seconds=t.lastSeconds()-t.firstSeconds();
-      if(seconds>=1) {
-        snprintf(text,sizeof(text),"%+.0f%% in %.1f s",t.changePercent(),seconds);
-        g.setTextColor(c.accent,c.background);g.drawString(text,cx,216,1);
-      }
-    } else if(t.ended()) {
-      g.setTextColor(c.warning,c.background);g.drawString("No clear tone heard",cx,203,1);
-    } else {
-      snprintf(text,sizeof(text),"Listening: %s",withheld(t.reason()));
-      g.setTextColor(c.text,c.background);g.drawString(text,cx,203,1);
-    }
-  }
-  ControlsUI::footer(g,"A Done  Hold B Back");
 }
 }

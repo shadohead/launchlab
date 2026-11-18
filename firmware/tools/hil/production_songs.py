@@ -40,6 +40,7 @@ from pathlib import Path
 
 import fx_client
 from hil_device import Device, number
+import port_guard
 
 MUSIC = fx_client.ROOT / 'tools/fx/effects/music'
 # The example songs and their lengths in seconds (test_fx_music pins them).
@@ -245,7 +246,9 @@ def main():
     p.add_argument('--replace-added', action='store_true', help='remove the added effects the unit already holds')
     p.add_argument('--build-dir', type=Path, default=fx_client.ROOT / 'build-m5-pm',
                    help='build of the flashed production image; its build-info.json is recorded for the release gate')
+    port_guard.add_arguments(p)
     a = p.parse_args()
+    port_guard.apply(a, a.port)
     a.out.mkdir(parents=True, exist_ok=True)
     report = Report()
     dev = Device(a.port, log_path=a.out / 'serial.log')

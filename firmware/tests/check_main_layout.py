@@ -39,6 +39,11 @@ prefix = r'''
 #include <iostream>
 static constexpr uint16_t TFT_BLACK=0,TFT_WHITE=0xffff,TFT_DARKGREY=0x7bef,TFT_ORANGE=0xfd20,TFT_GREEN=0x07e0;
 static constexpr int top_center=0,top_left=1;
+// No battle is open here: the main screen as it is without one. The battle
+// cards have their own checks (test_battle_ui, check_ui_render).
+namespace Battle {struct Rival {};struct Session {enum class View:uint8_t {None,Versus,Pick,Result};};}
+namespace BattleUI {template<class G,class C,class T>void versus(G &,const C &,const char *,T,const Battle::Rival &){assert(false);}}
+static const Battle::Rival *battleRival=nullptr;static const auto battleCard=Battle::Session::View::None;
 namespace fonts {static int Font6=6,Font4=4,Font2=2;}
 namespace lgfx {
 class LGFXBase {
@@ -126,8 +131,8 @@ assert source.index("bluetoothAtBoot=bluetoothOn;")<source.index("screen.setPsra
 assert "BleLink::tick(millis(),bluetoothAtBoot," in source
 restart=source[source.index("LOOP_HELPER static void restartForBluetooth("):]
 restart=restart[:restart.index("ESP.restart();")]
-assert restart.index("BleLink::replyFlushed(now)")<restart.index("flushForShutdown(now,s)!=ShutdownFlush::Ready")
-assert restart.index("s.phase==AnalogTachometer::Phase::Launch || motionPending")<restart.index("flushForShutdown(now,s)!=ShutdownFlush::Ready")<restart.index("settingsSave.pending()&SettingsSave::Bluetooth")<restart.index("BLUETOOTH_RESTART")
+assert restart.index("BleLink::replyFlushed(now)")<restart.index("flushForShutdown(now,s,ShutdownWhy::Restart)!=ShutdownFlush::Ready")
+assert restart.index("s.phase==AnalogTachometer::Phase::Launch || motionPending")<restart.index("flushForShutdown(now,s,ShutdownWhy::Restart)!=ShutdownFlush::Ready")<restart.index("settingsSave.pending()&SettingsSave::Bluetooth")<restart.index("BLUETOOTH_RESTART")
 with tempfile.TemporaryDirectory(prefix="launchlab-main-layout-") as directory:
     build=Path(directory); cpp=build/"test.cpp"; exe=build/"test"
     cpp.write_text(prefix+tests)

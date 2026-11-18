@@ -37,6 +37,7 @@ import time
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
 sys.path.insert(0, str(HERE))
+import port_guard  # noqa: E402
 from port_guard import require_free  # noqa: E402
 
 APP_OFFSET = 0x10000
@@ -161,10 +162,11 @@ def esptool_command():
 
 
 def esptool(port, *arguments):
-    """One guarded esptool call (port_guard.py refuses a port another process holds)."""
-    command = [sys.executable, str(HERE / 'port_guard.py'), *esptool_command(), '--chip', 'esp32s3', '--port', port,
+    """One guarded esptool call (port_guard.py refuses a port another process holds, and the owner's units)."""
+    command = [sys.executable, str(HERE / 'port_guard.py'), *port_guard.forward(), *esptool_command(), '--chip', 'esp32s3',
+               '--port', port,
                '--after', 'watchdog-reset', *arguments]
-    print('$', ' '.join(command[2:]), flush=True)
+    print('$', ' '.join(command[2 + len(port_guard.forward()):]), flush=True)
     result = subprocess.run(command)
     if result.returncode != 0:
         raise HilError(f'esptool failed (exit {result.returncode})')
@@ -319,7 +321,7 @@ def run(*, port, backup, out, build_dir, scenarios, sensor=None, stable=None):
             dev.hil(f'set {MOUNTING_ROW} 0', expect='HIL_SET', timeout=6)
         finally:
             dev.close()
-        command = [sys.executable, str(HERE / 'run_hil.py'), '--port', port, '--out', str(out / 'hil'),
+        command = [sys.executable, str(HERE / 'run_hil.py'), '--port', port, *port_guard.forward(), '--out', str(out / 'hil'),
                    '--build-dir', str(build_dir), *(['--sensor', sensor] if sensor else []), *scenarios]
         print('$', ' '.join(command[1:]), flush=True)
         returncode = subprocess.run(command).returncode

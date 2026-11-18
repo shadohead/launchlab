@@ -24,7 +24,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from hil_device import Device  # noqa: E402
-from port_guard import require_free  # noqa: E402
+import port_guard  # noqa: E402
 import fx_client  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -34,7 +34,9 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--port', required=True)
     p.add_argument('--out', type=Path, required=True)
+    port_guard.add_arguments(p)
     a = p.parse_args()
+    port_guard.apply(a, a.port)
     a.out.mkdir(parents=True, exist_ok=True)
     checks = []
 
@@ -42,7 +44,6 @@ def main():
         checks.append({'name': name, 'ok': bool(ok), 'detail': str(detail)})
         print(('PASS ' if ok else 'FAIL ') + name + (f': {detail}' if detail and not ok else ''))
 
-    require_free(a.port)
     d = Device(a.port, a.out / 'serial.log')
     time.sleep(3)
     source_text = (ROOT / 'tools/fx/effects/idiom/waterleaf.fx').read_text()

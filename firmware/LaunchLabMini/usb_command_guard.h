@@ -18,9 +18,31 @@
 // "g<pin>\n" and "E<id>" may be typed key by key (TYPING_MS between keys),
 // except that an id's second digit must follow its first within QUIET_MS;
 // a pin needs its newline. Inside a continuous burst of other bytes nothing
-// can qualify. The rest of a line a transfer refused runs nothing either, not
-// even K or R: an R in a refused backup line started another restore, which
-// took the commands after it.
+// can qualify.
+//
+// A transfer that ends without its "." line, because it refused a byte or
+// timed out, leaves its host mid-upload, and what that host still sends runs
+// nothing, not even K or R: an R in a refused backup line started another
+// restore, which took the commands after it, and in 0.20.10 a host that
+// stalled past the 15 s timeout (a throttled tab) sent its next base64 line
+// into the parser, where each K exported a full backup. Pauses prove nothing
+// here (the site writes 64-byte pieces 30 ms apart, and a stall can last any
+// time), so the guard reads the shape of the input:
+// - If the transfer ended mid-line, the rest of that line, up to its newline,
+//   is dropped, even a one-character tail such as "K\n".
+// - Then every body line is dropped (base64, or the "." end line, which ends
+//   this state), however many a host that does not wait sends.
+// - A line of exactly one command letter begun after quiet ("L\n", "p\r\n")
+//   is a command: no body line is one character (base64 lines are multiples
+//   of 4). It runs and ends this state, as does a line that is not body at
+//   all ("!hil" on a HIL build, which the normal guard then judges). One glued
+//   to the bytes before it is a burst and is dropped.
+// - A single letter with quiet before and after it and no newline (the
+//   updater's bare K or R, the rig's bare p) runs and ends this state, even
+//   inside an unfinished line: no host splits a line that way.
+// E<id> and g<pin> are not taken here: "E123" is a valid last base64 line.
+// Send a single letter first. There is no timeout: any request a host makes
+// starts with a single letter or a '!' line, so the state cannot outlast it.
 class UsbCommandGuard {
 public:
   static constexpr uint32_t QUIET_MS=20,TYPING_MS=2000;
@@ -61,6 +83,12 @@ public:
   // by quiet.
   bool due(uint32_t now,char *out) {
     (void)now;
+    if(held_ && quietFor(QUIET_MS)) {
+      // A letter alone after an abandoned transfer: a command if quiet came before it too.
+      const char c=held_;held_=0;
+      if(heldQuiet_)admit(c);else orphan_=Orphan::Body;
+    }
+    if(ready_){out[0]=ready_;out[1]=0;ready_=0;return true;}
     if(!used_ || !quietFor(window()))return false;
     const bool ok=complete(false);
     if(ok)take(out);else reject();
@@ -78,26 +106,58 @@ public:
     else {chain_=false;lineStart_=false;}
     chainNext_=false;
   }
-  // A transfer (restore, theme, milestone or effect request) refused the
-  // line it was reading: drop() takes the rest of that line.
-  void refused(uint32_t now){dropping_=true;dropMs_=now;}
-  // Before feed() and any other parser: true when `c` belongs to a refused
-  // line. The line ends with its newline, or with QUIET_MS of quiet if the
-  // host stopped in the middle of it.
+  // A transfer (restore, theme, milestone or effect request) ended without
+  // its "." line: it refused a byte or timed out. `midLine`: it ended inside
+  // a line (always so for a refused byte), whose rest the host may still send.
+  void refused(uint32_t now,bool midLine){cancel();orphan_=midLine?Orphan::Rest:Orphan::Start;seen_=true;lastMs_=now;}
+  // Before feed() and any other parser: true when `c` belongs to the
+  // abandoned transfer (see the top of this file) and is dropped. A command
+  // letter is held to see what follows: a newline right after it at a line
+  // start lets the normal path run it (false), and due() runs it if quiet
+  // follows it alone.
   bool drop(char c,uint32_t now) {
-    if(!dropping_)return false;
-    if(emptySeen_ && int32_t(emptyMs_-dropMs_)>=int32_t(QUIET_MS)){dropping_=false;return false;}
-    dropMs_=now;
-    if(c=='\n' || c=='\r'){dropping_=false;lineStart_=true;chain_=chainNext_=false;}
+    if(orphan_==Orphan::None)return false;
+    const bool quiet=quietFor(QUIET_MS);
+    seen_=true;lastMs_=now;
+    const bool newline=c=='\n' || c=='\r';
+    if(held_) {
+      const char h=held_;held_=0;
+      if(orphan_==Orphan::Start) {
+        if(newline) {
+          if(heldQuiet_){admit(h);return false;}  // a one-letter line begun after quiet
+          return true;  // glued to what came before: a burst, not a command
+        }
+        orphan_=Orphan::Body;                // more of a body line
+      }
+    }
+    if(orphan_==Orphan::Start) {
+      if(newline)return true;
+      if(c=='.'){orphan_=Orphan::Dot;return true;}
+      if(immediate(c) || guarded(c)){held_=c;heldQuiet_=quiet;return true;}
+      if(!base64(c)){end();return false;}  // not a body line: the normal guard judges it
+      orphan_=Orphan::Body;return true;
+    }
+    if(orphan_==Orphan::Dot) {
+      if(c=='\r')return true;
+      if(c=='\n'){end();return true;}
+      orphan_=Orphan::Body;  // not the end line after all
+    }
+    // The rest of a line: up to its newline, a letter alone after quiet held.
+    if(newline)orphan_=Orphan::Start;
+    else if(quiet && (immediate(c) || guarded(c))){held_=c;heldQuiet_=true;}
     return true;
   }
   // Call whenever the receive queue is seen empty (each pass).
   void idle(uint32_t now){emptyMs_=now;emptySeen_=true;}
-  void cancel(){used_=0;pending_[0]=0;chain_=chainNext_=otherLine_=dropping_=false;}
+  void cancel(){used_=0;pending_[0]=0;held_=ready_=0;orphan_=Orphan::None;chain_=chainNext_=otherLine_=false;}
 private:
-  char pending_[MAX+1]={};unsigned used_=0;
-  bool seen_=false,lineStart_=true,chain_=false,chainNext_=false,otherLine_=false,otherBoundary_=false,dropping_=false;
-  uint32_t lastMs_=0,emptyMs_=0,dropMs_=0;bool emptySeen_=false;
+  // After an abandoned transfer: the rest of its line, a line start, a body
+  // line, or a "." line waiting for its newline.
+  enum class Orphan:uint8_t{None,Rest,Start,Body,Dot};
+  Orphan orphan_=Orphan::None;
+  char pending_[MAX+1]={},held_=0,ready_=0;unsigned used_=0;
+  bool seen_=false,lineStart_=true,chain_=false,chainNext_=false,otherLine_=false,otherBoundary_=false,heldQuiet_=false;
+  uint32_t lastMs_=0,emptyMs_=0;bool emptySeen_=false;
   // The queue was seen empty at least `ms` after the last byte.
   bool quietFor(uint32_t ms)const {return !seen_ || (emptySeen_ && int32_t(emptyMs_-lastMs_)>=int32_t(ms));}
   // How long a pending command may wait for its next key.
@@ -111,6 +171,14 @@ private:
   bool complete(bool newline)const {
     if(pending_[0]=='g')return newline && used_>1;
     return true;
+  }
+  static bool base64(char c){return (c>='A' && c<='Z') || (c>='a' && c<='z') || (c>='0' && c<='9') || c=='+' || c=='/' || c=='=';}
+  // The state ends at a line start: what follows is judged as usual.
+  void end(){orphan_=Orphan::None;lineStart_=true;chain_=chainNext_=false;}
+  // A held letter is a command: as if it had just arrived after quiet.
+  void admit(char c) {
+    orphan_=Orphan::None;lineStart_=chain_=false;chainNext_=true;
+    if(immediate(c))ready_=c;else{pending_[0]=c;pending_[1]=0;used_=1;}
   }
   void take(char *out){memcpy(out,pending_,used_+1);used_=0;pending_[0]=0;}
   void reject(){used_=0;pending_[0]=0;++rejected;chain_=false;}

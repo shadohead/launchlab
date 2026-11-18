@@ -50,6 +50,14 @@ inline uint64_t resume(uint64_t at,uint64_t written,uint64_t usable,uint64_t mar
   if(written<at || written-at<usable)return at;
   return written-(usable>margin?usable-margin:0);
 }
+// Whether the listener follows a pull's result (MicListener::launch): the mic
+// is on, the burst both started and ended, its end after its start, and an
+// unmeasured result never ends a spin being followed. A burst the detector
+// lost or a sensor fault has no end (acquisition.h publishes 0): there is no
+// release to hear from, and the page keeps what it shows.
+inline bool follows(bool on,bool valid,bool following,uint64_t startUs,uint64_t endUs) {
+  return on && startUs && endUs>startUs && (valid || !following);
+}
 // Whether sleep or power-off waits for the mic, which holds the codec and its
 // clock pins. A stop normally takes milliseconds; one that never ends (the task
 // stuck in a spin, in M5Unified's mic end() or on the gate) must not keep the unit

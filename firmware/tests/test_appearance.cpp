@@ -255,5 +255,12 @@ int main(){
   // Unsupported canvases are left alone.
   {auto out=base;renderer.draw({out.data(),240,135},Effect::Orbit,100,accent(Theme::Classic));assert(out==base);
    renderer.draw({nullptr,135,240},Effect::Orbit,100,accent(Theme::Classic));}
-  std::cout<<"PASS: appearance defaults/cycles, verified alternating stores/retry/reboot/corruption, per-profile/method strict PB, presentation token/wrap, "<<frames<<" deterministic halo-clipped effect frames\n";
+  // A record older than the one saved would lose to it at the next boot: refused.
+  {Preferences::data.clear();Config c;AppearanceStore<Config> store;assert(store.begin(c,"g","cfg0","cfg1"));
+   assert(c.select(Theme::Mint,Effect::Orbit) && store.save(c));Config newer=c;newer.revision+=5;assert(store.save(newer));
+   assert(c.select(Theme::Amber,Effect::Orbit) && c.revision<newer.revision && !store.save(c) && store.savedGeneration()==newer.revision);
+   Config loaded;AppearanceStore<Config> boot;assert(boot.begin(loaded,"g","cfg0","cfg1") && loaded.theme==Theme::Mint && loaded.revision==newer.revision);
+   c.revision=newer.revision+1;assert(store.save(c));
+   AppearanceStore<Config> again;assert(again.begin(loaded,"g","cfg0","cfg1") && loaded.theme==Theme::Amber);}
+  std::cout<<"PASS: older-generation save refused; appearance defaults/cycles, verified alternating stores/retry/reboot/corruption, per-profile/method strict PB, presentation token/wrap, "<<frames<<" deterministic halo-clipped effect frames\n";
 }

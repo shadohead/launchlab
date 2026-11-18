@@ -39,7 +39,7 @@ def main():
     if ticks != ['micListener.tick(open,soundPlayer.powered(),now);']:
         problems.append(f'micListener.tick() must run once, from tickMicPage, got {ticks}')
     tick = after(ino, 'LOOP_HELPER static void tickMicPage() {', 4)
-    if 'const bool open=controls.page==Controls::Page::MicRpm || controls.page==Controls::Page::Analysis;' not in tick or 'if(!open && micListener.off())return;' not in tick:
+    if 'const bool open=controls.page==Controls::Page::Analysis;' not in tick or 'if(!open && micListener.off())return;' not in tick:
         problems.append('tickMicPage() must stop at once unless the page is open or the mic is still running')
     if ino.count('tickMicPage();') != 1:
         problems.append('tickMicPage() must run once a loop pass')
@@ -56,10 +56,10 @@ def main():
         if 'if(micListener.holdsSleep(now)){leaveMicPage();return;}' not in body:
             problems.append(f'{name} must leave the mic page and wait')
     controls = (SOURCES / 'controls.h').read_text()
-    if 'Page::MicRpm' not in controls:
-        problems.append('expected the Mic RPM page in controls.h: this check has lost its target')
-    if 'state.page=Page::Menu;state.menu=MIC_ROW;' not in controls:
-        problems.append('the mic must never start on wake: the page wakes on its menu row')
+    if 'Page::Analysis' not in controls:
+        problems.append('expected the Analysis page in controls.h: this check has lost its target')
+    if 'if(state.page==Page::Analysis)state.page=Page::Main;' not in controls:
+        problems.append('the mic must never start on wake: Analysis wakes on Main')
     listener = (SOURCES / LISTENER).read_text()
     # The task stays off the optical core, at the loop's priority. At the idle
     # priority a pull or a stop waited for what the loop left: the owner's

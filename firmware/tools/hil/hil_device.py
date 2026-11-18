@@ -2,7 +2,9 @@
 
 One background thread owns the port. It splits the device's output into
 timestamped lines, survives USB re-enumeration after a reset, and handles the
-binary SNAP payload of the `v` screen command. Callers wait for lines with
+binary SNAP payload of the `v` screen command. A unit that stops answering
+altogether (the USB restart wedge) is re-enumerated from the host, as a cable
+replug would (usb_reenumerate.py), and the run goes on. Callers wait for lines with
 predicates; every line is also written to a log file.
 """
 import re
@@ -14,7 +16,8 @@ from pathlib import Path
 
 import serial
 
-from port_guard import require_free
+import port_guard
+import usb_reenumerate
 
 FIELD = re.compile(r'(\w+)=(\S*)')
 
@@ -91,6 +94,12 @@ COMMAND_QUIET_S = 0.06
 
 
 class Device:
+    # Where the unit is plugged in, for re-enumerating it when it no longer
+    # answers (it cannot be asked for its serial number then), and how often that
+    # was done. Class defaults, so a Device built without __init__ (the guard tests) has them.
+    usb_location = None
+    reenumerations = 0
+
     def __init__(self, port, log_path=None, echo=None):
         self.port_name = port
         self.lines = []
@@ -100,6 +109,8 @@ class Device:
         self.echo = echo  # optional callable(line) for live output
         self.port = None
         self.disconnects = 0
+        self.usb_location = None
+        self.reenumerations = 0
         self._stop = False
         self._write_lock = threading.Lock()
         self._last_write = self._last_line = 0.0
@@ -108,18 +119,37 @@ class Device:
         self.thread.start()
 
     # ---- connection
-    def _open(self):
-        deadline = time.monotonic() + 30
+    def _open(self, wait=30):
+        deadline = time.monotonic() + wait
         while True:
-            # Another session's tool on the same unit: refuse rather than share the port.
-            require_free(self.port_name)
             try:
+                # The owner's units, and another session's tool on the same unit: refuse rather
+                # than open the port. Checked at every open, so a unit swapped onto the port is
+                # caught; a unit still re-enumerating after a reset is waited for.
+                port_guard.require_free(self.port_name)
                 self.port = serial.Serial(self.port_name, 115200, timeout=0.05)
+                if self.usb_location is None:
+                    try:
+                        self.usb_location = usb_reenumerate.location_of(self.port_name)
+                    except Exception:  # noqa: BLE001 - no pyserial listing, no libusb: recovery is simply not offered
+                        pass
                 return
-            except serial.SerialException:
+            except (serial.SerialException, port_guard.UnitUnknown):
                 if time.monotonic() > deadline:
                     raise
                 time.sleep(0.2)
+
+    def _reconnect(self, wait=30):
+        """After a disconnect: True once the port is open again. A unit still off USB after
+        `wait` seconds (a standby, a power-off) is not an error here: the reader keeps trying,
+        and whoever waits for the unit times out on its own. The owner's unit on the port
+        still raises (UnitRefused)."""
+        try:
+            self._open(wait)
+        except (serial.SerialException, port_guard.UnitUnknown):
+            return False
+        self._record('HOST_RECONNECT')
+        return True
 
     def reopen(self, timeout=30):
         """Close and reopen the port, as a person would after a reset left the
@@ -130,6 +160,29 @@ class Device:
         except Exception:
             pass
         return self.wait('HOST_RECONNECT', timeout, since=start) is not None
+
+    MAX_REENUMERATIONS = 5
+
+    def reenumerate(self, why=''):
+        """The USB restart wedge: after a restart the unit's USB link can go
+        dead while its application runs on, and it answers nothing until the
+        cable is replugged. Have the host reset its port and enumerate it
+        again instead (usb_reenumerate.py), then reopen the serial port. True
+        when the device was reset and the port is open again. At most
+        MAX_REENUMERATIONS times a run: a unit that needs more is not wedged."""
+        if self.reenumerations >= self.MAX_REENUMERATIONS:
+            self._record(f'HOST_USB_REENUMERATE ok=0 why={why} error=limit_of_{self.MAX_REENUMERATIONS}_reached')
+            return False
+        self.reenumerations += 1
+        try:
+            location = usb_reenumerate.reenumerate(port=self.port_name, location=self.usb_location)
+        except usb_reenumerate.Unavailable as e:
+            self._record(f'HOST_USB_REENUMERATE ok=0 why={why} error={str(e).replace(" ", "_")}')
+            return False
+        back = self.reopen(timeout=20)
+        self._record(f'HOST_USB_REENUMERATE ok={int(back)} n={self.reenumerations} location={location} why={why}')
+        time.sleep(1.0)  # the port is open; let the unit's output start
+        return back
 
     def close(self):
         self._stop = True
@@ -164,10 +217,7 @@ class Device:
                 except Exception:
                     pass
                 time.sleep(0.5)
-                try:
-                    self._open()
-                    self._record('HOST_RECONNECT')
-                except serial.SerialException:
+                while not self._stop and not self._reconnect():
                     pass
                 continue
             if not chunk:
@@ -282,11 +332,25 @@ class Device:
             start = self.mark()
             self.write('!' + command + '\n')
             line = self.wait(done, timeout, since=start)
+        if line is None and self._silent(word):
+            # Not this command alone: the unit answers nothing at all. Give
+            # it its USB link back and, for a command that only sets state,
+            # send it once more.
+            if self.reenumerate(f'!{word}') and self._idempotent(command):
+                start = self.mark()
+                self.write('!' + command + '\n')
+                line = self.wait(done, timeout, since=start)
         if line is None:
             raise DeviceError(f'no reply to !{command}')
         if line.text.startswith('HIL_ERR'):
             raise DeviceError(f'!{command}: {line.text}')
         return line
+
+    def _silent(self, word):
+        """Whether the unit answers nothing: no HIL_STATUS to `!hil` either."""
+        start = self.mark()
+        self.write('!hil\n')
+        return self.wait('HIL_STATUS', 3, since=start) is None
 
     def _lost(self, word):
         """Classify a missing reply from HIL_STATUS (commands/last/tx_short)."""
@@ -417,7 +481,10 @@ class Device:
         lines = [l.text for l in self.since(start) if l.text.startswith(('BACKUP_BEGIN', 'BACKUP_DATA', 'BACKUP_END'))]
         return '\n'.join(lines) + '\n'
 
-    def restore(self, backup_text, timeout=60):
+    def restore(self, backup_text, timeout=60, refused_ok=False):
+        """Send a `K` backup with `R`; returns RESTORE_OK. With refused_ok a
+        final RESTORE_ERROR (the device validated the backup and refused or
+        failed it) is returned rather than raised."""
         data = [l.split(' ', 1)[1] for l in backup_text.splitlines() if l.startswith('BACKUP_DATA ')]
         if not data:
             raise DeviceError('no BACKUP_DATA lines')
@@ -434,6 +501,24 @@ class Device:
         mark = self.mark()
         self.write('.\n')
         reply = self.wait(lambda l: l.text.startswith(('RESTORE_OK', 'RESTORE_ERROR')), timeout, since=mark)
-        if reply is None or reply.text.startswith('RESTORE_ERROR'):
+        if reply is None or (reply.text.startswith('RESTORE_ERROR') and not refused_ok):
             raise DeviceError(f'restore failed: {reply.text if reply else "timeout"}')
         return reply
+
+    def newest_launch(self, timeout=8):
+        """The newest history record (`u` export, oldest first): (number, rpm), or None."""
+        time.sleep(0.05)
+        start = self.mark()
+        self.write('u')
+        end = time.time() + timeout
+        while time.time() < end:
+            lines = [l.text for l in self.since(start)]
+            export = next((t for t in lines if t.startswith('HISTORY_EXPORT ')), None)
+            launches = [t for t in lines if t.startswith('HISTORY_LAUNCH ')]
+            if export and len(launches) >= int(fields(export).get('records', '0')):
+                if not launches:
+                    return None
+                f = fields(launches[-1])
+                return int(f['number']), round(float(f['rpm']))
+            time.sleep(0.2)
+        return None

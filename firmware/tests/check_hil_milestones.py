@@ -20,6 +20,16 @@ import milestones  # noqa: E402
 import scenarios  # noqa: E402,F401  (the scenario module imports cleanly)
 
 
+def record_table(data):
+    """A v3 record as `M` prints it in data= (base64) -> (mode, revision, [(rpm, effect id set)])."""
+    record = base64.b64decode(data, validate=True)
+    assert len(record) == 232 and record[:4] == b'LLM\x03', len(record)
+    revision, mode, count = int.from_bytes(record[4:8], 'little'), record[8], record[9]
+    rows = [(int.from_bytes(record[12 + 18 * i:14 + 18 * i], 'little'),
+             milestones.effect_ids(int.from_bytes(record[14 + 18 * i:30 + 18 * i], 'little'))) for i in range(count)]
+    return milestones.MODES[mode], revision, rows
+
+
 def main():
     v = json.loads((ROOT / 'firmware/tests/fixtures/milestone_vectors.json').read_text())
     assert v['maxRows'] == milestones.MAX_ROWS and v['requestBytes'] == len(milestones.request('reset'))
@@ -48,14 +58,21 @@ def main():
         show, milestone, effect = milestones.decide(d['mode'], milestones.DEFAULTS, d['valid'], milestones.shown(d['rpm']),
                                                     d['best'], 'Orbit')
         assert (show, milestone, effect if show else 'Off') == (d['show'], d['milestone'], effects[d['effect']] if d['show'] else 'Off'), d
+    # The listing carries the whole v3 record (232 bytes, 312 base64 characters):
+    # 0.20.10 and earlier printed only its last 24 characters.
+    table = v['tables'][14]
+    record = base64.b64encode(bytes.fromhex(table['record'])).decode()
+    assert len(record) == 312 and [(r['rpm'], r['effects']) for r in table['rows']] == [(9000, [2]), (12000, [8, 9, 17]), (15000, [7])]
     header, rows = milestones.parse_list([
-        'MILESTONE_LIST version=3 mode=both rows=3 max_rows=12 min_rpm=1000 max_rpm=30000 effects=83 revision=3 store=damaged default=0 '
-        'nvs_available=150 nvs_needed=65 data=TExNAw==',
+        'MILESTONE_LIST version=3 mode=milestones rows=3 max_rows=12 min_rpm=1000 max_rpm=30000 effects=83 revision=7 store=damaged default=0 '
+        f'nvs_available=150 nvs_needed=65 data={record}',
         'MILESTONE_ROW index=0 rpm=9000 effect=Sparkles effect_id=2 pool=00000000000000000000000000000004 effects=Sparkles next=Sparkles',
         'MILESTONE_ROW index=1 rpm=12000 effect=Tidal effect_id=8 pool=00000000000000000000000000020300 effects=Tidal+Frost+Bloom next=Frost',
         'MILESTONE_ROW index=2 rpm=15000 effect=Slash effect_id=7 pool=00000000000000000000000000000080 effects=Slash next=Slash',
         'MILESTONE_LIST_END'])
-    assert header['mode'] == 'both' and header['store'] == 'damaged' and rows == [(9000, 'Sparkles'), (12000, ('Tidal', 'Frost', 'Bloom')), (15000, 'Slash')]
+    assert header['mode'] == 'milestones' and header['store'] == 'damaged' and rows == [(9000, 'Sparkles'), (12000, ('Tidal', 'Frost', 'Bloom')), (15000, 'Slash')]
+    assert header['data'] == record and record_table(header['data']) == (header['mode'], int(header['revision']),
+                                                                          [(rpm, milestones.effect_ids(milestones.pool(e))) for rpm, e in rows])
     assert header['next'] == ['Sparkles', 'Frost', 'Slash'] and milestones.pool(rows[1][1]) == 0x20300
     assert milestones.decide('milestones', rows, True, 12400, False, 'Orbit') == (True, 12000, ('Tidal', 'Frost', 'Bloom'))
     # A pool past value 63 (0.18) names its effects by label.
@@ -95,11 +112,12 @@ def main():
         assert scenarios.expected_cycle(milestones.EFFECTS.index('Random'), offered, len(cycle)) == cycle
     for x in e['next']:
         assert milestones.next_choice(x['from'], milestones.effect_ids(x['mask'])) == x['next'], x
+    default = base64.b64encode(bytes.fromhex(v['defaults']['record'])).decode()
     header, _ = milestones.parse_list([
-        'MILESTONE_LIST mode=best rows=7 max_rows=8 min_rpm=1000 max_rpm=30000 effects=43 revision=0 store=ok default=1 '
-        'nvs_available=150 nvs_needed=91 data=TExNAQ== effect_set=00000000000000010000040000040180 effect_set_store=damaged effect_set_default=0'])
+        'MILESTONE_LIST version=3 mode=both rows=7 max_rows=12 min_rpm=1000 max_rpm=30000 effects=83 revision=0 store=ok default=1 '
+        f'nvs_available=150 nvs_needed=91 data={default} effect_set=00000000000000010000040000040180 effect_set_store=damaged effect_set_default=0'])
     assert milestones.effect_ids(header['effect_set']) == {7, 8, 18, 42, 64} and header['effect_set_store'] == 'damaged'
-    assert header['data'] == 'TExNAQ=='
+    assert header['data'] == default and record_table(default) == ('both', 0, [(rpm, frozenset({milestones.EFFECTS.index(e)})) for rpm, e in milestones.DEFAULTS])
     print(f"PASS: HIL milestone requests byte-identical to the firmware's {requests} table vectors and reset; "
           f"{len(v['decisions'])} celebration decisions match the firmware's rule; {sets} effect set requests and cycles match")
     return 0

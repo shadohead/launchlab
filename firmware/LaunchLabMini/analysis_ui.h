@@ -1,6 +1,7 @@
 #pragma once
 #include "analysis_mode.h"
 #include "decay_types.h"
+#include "firmware_version.h"
 #include "mic_view_ui.h"
 namespace AnalysisUI {
 inline float graphSpan(float elapsed, bool recording, float predictedFinish = NAN) {
@@ -442,6 +443,10 @@ inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session, uint64
     }
   } else if (mic == MicView::Mic::Failed || mic == MicView::Mic::NoMemory) {
     centered(g, c, FINISH_Y, mic == MicView::Mic::Failed ? "Mic unavailable" : "Not enough memory", c.warning);
+  } else if (!launched && LAUNCHLAB_ANALYSIS_EXPERIMENTAL) {
+    // The finish forecast is a model still being improved (0.21.0): said
+    // before every analysis, where nothing else is on screen yet.
+    centered(g, c, CAPTION_Y, "EXPERIMENTAL", c.warning, 1);
   }
   const float elapsed = float(elapsedUs) / 1000000.f;
   // The model is at work while the microphone feeds a running analysis.

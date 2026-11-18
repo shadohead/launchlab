@@ -50,9 +50,12 @@ namespace Lab {inline PowerLab::Knobs knobs;inline bool running=false,displayAsl
 #include "display_flip_setting.h"
 #include "ble_link.h"
 #include "ble_motion.h"
+#include "battle_radio.h"
+#include "battles_setting.h"
 #include "bluetooth_setting.h"
 #include "shake_wake_setting.h"
 #include "battery_icon_setting.h"
+#include "min_rpm_setting.h"
 #include "display_orientation.h"
 #include "sensor_profile_setting.h"
 #include "start_mark_reference.h"
@@ -70,9 +73,11 @@ namespace Lab {inline PowerLab::Knobs knobs;inline bool running=false,displayAsl
 #include "effect_set.h"
 #include "best_effect_ui.h"
 #include "screens_ui.h"
+#include "battle_ui.h"
 #include "theme_store.h"
 #include "best_effect_speaker.h"
 #include "device_backup.h"
+#include "device_restore.h"
 #include "nvs_budget.h"
 #include "radio_calibration.h"
 #include "device_wipe_nvs.h"
@@ -85,6 +90,14 @@ namespace Lab {inline PowerLab::Knobs knobs;inline bool running=false,displayAsl
 // real calls so each one uses stack only while it runs.
 #define LOOP_HELPER __attribute__((noinline))
 #include "firmware_version.h"
+#if LAUNCHLAB_HIL
+// Test-only hardware-in-the-loop build; never a release. See tools/hil.
+static constexpr char VERSION[] = "0.21.0-sticks3-songs-hil-pm";
+#elif LAUNCHLAB_CPU_PM
+static constexpr char VERSION[] = "0.21.0-sticks3-songs-pm";
+#else
+static constexpr char VERSION[] = "0.21.0-sticks3-songs";
+#endif
 static_assert(sizeof(VERSION)<=DeviceBackup::RUNTIME_BYTES,"Runtime must fit the USB backup header");
 #ifndef LAUNCHLAB_CPU_MHZ
 #define LAUNCHLAB_CPU_MHZ 80
@@ -188,7 +201,7 @@ static bool diagnostics=false,extPower=false,stress=false,dirty=true;
 // since boot). The app has every launch up to it; the pass lists the rest.
 static uint32_t passConfirmed=0,passLastSync=0;
 static constexpr const char *PASS_CONFIRMED_KEY="bp_confirmed";
-static uint32_t lastDraw=0,lastStatus=0,lastRevision=0,maxDrawUs=0,maxEffectUs=0,uiStalls=0;
+static uint32_t lastDraw=0,lastStatus=0,lastRevision=0,lastBelowMin=0,maxDrawUs=0,maxEffectUs=0,uiStalls=0;
 #if LAUNCHLAB_HIL
 // HIL only: each recap effect pass since the last E preview (elapsed ms, us),
 // listed by `!effectframes`, to see where in an effect its time goes.
@@ -203,7 +216,7 @@ static struct {uint16_t elapsed[64];uint32_t us[64],cycles[64][BestEffectUI::Ren
 #endif
 static uint32_t lastImuPoll=0,maxImuPollUs=0;
 static StickS3Level::Reading drawnLevel;
-static InactivityTimer inactivity;static OpticalSleepGuard opticalGuard;static HeldButtonUse heldButtons;
+static InactivityTimer inactivity;static OpticalSleepGuard opticalGuard;static ShutdownSaveGuard shutdownSaves;static HeldButtonUse heldButtons;
 static uint64_t lastActivityMotionUs=0;
 // USB letters a stray byte stream sent outside a standalone command.
 static UsbCommandGuard usbCommands;
@@ -214,7 +227,6 @@ static UsbHostAwake usbAwake;
 static bool usbAutoOffInhibited=false;
 static StickS3ShakeWake shakeWake;
 // A side-key click is latched by the G13 edge ISR and acted on by the loop.
-static volatile bool powerKeyIrq=false;
 static bool powerKeyRequested=false;
 static uint32_t powerKeyRequestedAt=0,lastPowerKeyRead=0;
 static constexpr uint32_t POWER_KEY_WAIT_MS=10000;
@@ -231,11 +243,25 @@ static bool shakeToWake=ShakeWakeSetting::DEFAULT_ON;
 static uint8_t unusedWakes=0;
 // Battery icon (0.20.8, battery_icon_setting.h): the charge in the screens' top right corner.
 static bool batteryIcon=BatteryIconSetting::DEFAULT_ON;
+// Min RPM's step count (min_rpm.h): the slowest launch recorded is 500 x this.
+static uint8_t minRpmSteps=MinRpm::DEFAULT_STEPS;
 static ControlsUI::CornerBattery drawnCornerBattery;  // as last drawn
 // Off until chosen under Settings; the stack then starts without a restart.
 static bool bluetoothOn=BluetoothSetting::DEFAULT_ON;
 // As read at boot: the layout and the stack follow this until a restart.
 static bool bluetoothAtBoot=BluetoothSetting::DEFAULT_ON;
+// Battles (docs/FIRMWARE_BATTLES.md): the record against each rival, and this
+// stick's side of the battle it is in. The record is in PSRAM, as demoPractice
+// is: only the loop reads and changes it, and its save copies it to a PSRAM
+// image before any flash write. It is saved to the history log (history_log.h).
+static Battle::Book &rivals=*new(heap_caps_aligned_alloc(alignof(Battle::Book),sizeof(Battle::Book),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT)) Battle::Book;
+static Battle::Session battle;
+static uint32_t loggedRivals=0;
+// Auto battles (battles_setting.h): whether a launch looks for a rival's, and
+// the match length this player chooses.
+static bool battlesOn=BattlesSetting::DEFAULT_ON;
+static uint8_t battleMatchTo=Battle::MATCH_SHORT;
+namespace BattleFeed {static bool cardShown();static bool press(Battle::Button button);static void status();}
 static RpmEstimator::Mode rpmEstimator=RpmEstimator::DEFAULT_MODE;
 static StickS3SensorProfile::Mode sensorProfile=StickS3SensorProfile::DEFAULT_MODE;
 static MountOrientation::Mode mountMode=MountOrientation::Mode::Top;
@@ -268,6 +294,10 @@ static char standbyWakeText[224]="none";  // USB_STANDBY_WAKE's fields, for HIL 
 // !usbstandby <s>: the next USB-retained standby re-checks after s seconds
 // and then boots rather than sleeping again, so the rig gets the unit back.
 RTC_DATA_ATTR static uint32_t hilStandbyRecheckS=0;
+// !flushpull <s>: the next pull's result is left for the side key's shutdown
+// flush, as for a pull that ends between the loop's drain and the off
+// (shutdown_pull); the off is asked as soon as the detector counts it.
+static struct {bool armed=false,holding=false;uint32_t launches=0;} hilFlushPull;
 #endif
 static uint8_t pm1WakeFlags=0;
 static bool pm1WakeValid=false;
@@ -277,7 +307,7 @@ static BestEffectSpeaker soundPlayer(imuAcquisition);
 // constructors run): the internal heap keeps every byte for pulls and songs.
 static MicListener &micListener=*new(heap_caps_aligned_alloc(alignof(MicListener),sizeof(MicListener),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT)) MicListener(imuAcquisition);
 // A frame costs 22-43 ms at 80 MHz (the 0.20.5 gate's recaps) and the tracker
-// runs below the UI, so the Mic RPM page redraws at 5 Hz at most.
+// runs below the UI, so Analysis redraws at 5 Hz at most.
 static constexpr uint32_t MIC_PAGE_FRAME_MS=200;
 static uint32_t micPageChecked=0;static bool micPageWarm=false,micPageFresh=false;
 // Which sound is playing: a celebration stops when its recap goes, a Settings
@@ -337,6 +367,8 @@ static bool lastFault=false;
 using Action=StickS3Acquisition::Action;
 using Snapshot=StickS3Acquisition::Snapshot;
 enum class ShutdownFlush:uint8_t {Busy,NewPull,SaveFailed,Ready};
+// Why a shutdown flush runs (flushForShutdown): the inactivity sleep, the side key's power-off, the Bluetooth restart.
+enum class ShutdownWhy:uint8_t {Sleep,SideKey,Restart};
 
 static bool motionSensorPaired() {
   // isEnabled only establishes driver detection. Require an actual new paired
@@ -436,8 +468,12 @@ static bool savePowerLog(){
   // in Settling and prevent subsequent pulls from being measured.
   lastPowerSaveTry=millis();
   if(!powerLogReady)return false;powerLog.checksum=PowerDiagnostics::hash(powerLog);
+  const bool first=powerMirror==HistoryLog::NOT_MIRRORED;
   const bool ok=powerPrefs.putBytes("log",&powerLog,sizeof(powerLog))==sizeof(powerLog);
-  if(ok){powerLogDirty=false;powerMirror=powerLog.checksum;}return ok;
+  if(ok){powerLogDirty=false;powerMirror=powerLog.checksum;}
+  // NVS's first copy, logged at once (history_log.h): the log's record said NVS held none.
+  if(ok && first && powerMirror!=HistoryLog::NOT_MIRRORED && historyLog.isOpen())historyLog.savePower(powerLog,powerMirror);
+  return ok;
 }
 LOOP_HELPER static void exportPowerLog(){
   Serial.printf("POWER_LOG schema=1 boots=%lu power_button_wakes=%lu shake_wakes=%lu other_wakes=%lu sleeps=%lu awake_s=%llu known_sleep_s=%llu unknown_sleep_intervals=%lu charging_awake_s=%llu led_awake_s=%llu boost_awake_s=%llu display_awake_s=%llu records=%lu storage_ready=%d unsaved=%d current_ma=unavailable\n",
@@ -548,6 +584,14 @@ static void updateStartFloor() {
   const float floor=!soundPlayer.playing()?0:startMarks.profile==uint8_t(sensorProfile)?startMarks.floor(minMark):minMark;
   if(floor!=last){acquisition.setStartFloor(floor);last=floor;}
 }
+// Each loop pass: Min RPM, the slowest result the optical owner publishes.
+// String wear check measures the string's own retractions, which are slower
+// than a pull: it sees every result.
+static void updateLaunchFloor() {
+  static float last=-1;
+  const float floor=controls.page==Controls::Page::WearCheck?0:MinRpm::rpm(minRpmSteps);
+  if(floor!=last){acquisition.setLaunchFloor(floor);last=floor;}
+}
 LOOP_HELPER static void nvsStatus() {
   nvs_stats_t stats{};const esp_err_t error=nvs_get_stats(nullptr,&stats);
   Serial.printf("NVS_STATUS ok=%d used_entries=%u available_entries=%u total_entries=%u namespaces=%u history_save_entries=%u history_headroom=%d\n",
@@ -567,6 +611,7 @@ LOOP_HELPER static void status() {
   ++hilStatusRuns;
 #endif
   BleLink::status();
+  BattleFeed::status();
   RadioCalibration::status();
   Serial.printf("MOTION_RING psram=%d capture_max_us=%lu sizeof=%u\n",imuAcquisition.ringInPsram(),(unsigned long)imuAcquisition.maxCaptureUs,unsigned(sizeof(LaunchMotion::Ring)));
   const Snapshot s=acquisition.snapshot();
@@ -577,20 +622,20 @@ LOOP_HELPER static void status() {
     unsigned(M5.Display.getRotation()),
     (unsigned long long)s.samples,s.rate,s.mean,(unsigned long)s.minimum,(unsigned long)s.maximum,
     (unsigned long)s.last,(unsigned long)s.overflows,(unsigned long)s.readErrors,esp_err_to_name(s.error));
-  Serial.printf("RPM_STATUS state=%s valid=%d peak_rpm=%.1f live_peak=%.1f launches=%lu edges=%lu weak_rejected=%lu slow_rejected=%lu noise=%.1f amplitude=%.1f rearm_ms=%lu candidate_rpm=%.1f contrast=%.1f hysteresis=%.1f shape_rejected=%lu inconsistent=%lu rearm_extensions=%lu detector_us=%llu recorder_s=%lu min_mark=%.0f edge_fraction=%.2f start_floor=%.0f start_mark=%.0f sound_held=%lu ref_pulls=%u ref_median=%.0f\n",
+  Serial.printf("RPM_STATUS state=%s valid=%d peak_rpm=%.1f live_peak=%.1f launches=%lu edges=%lu weak_rejected=%lu slow_rejected=%lu noise=%.1f amplitude=%.1f rearm_ms=%lu candidate_rpm=%.1f contrast=%.1f hysteresis=%.1f shape_rejected=%lu inconsistent=%lu rearm_extensions=%lu detector_us=%llu recorder_s=%lu min_mark=%.0f edge_fraction=%.2f start_floor=%.0f start_mark=%.0f sound_held=%lu ref_pulls=%u ref_median=%.0f min_rpm=%.0f below_min=%lu\n",
     s.stateName(),s.valid,s.resultRpm,s.peakRpm,(unsigned long)s.launches,(unsigned long)s.edges,
     (unsigned long)s.weak,(unsigned long)s.slow,s.noise,s.amplitude,(unsigned long)s.rearmMs,
     s.candidateRpm,s.contrast,s.hysteresis,(unsigned long)s.shape,(unsigned long)s.inconsistent,
     (unsigned long)s.rearmExtensions,(unsigned long long)s.detectorUs,
     acquisition.storage()?60ul:0ul,StickS3SensorProfile::minMark(s.sensorProfile),StickS3SensorProfile::EDGE_SWING_FRACTION,
-    s.startFloor,s.startMark,(unsigned long)s.soundHeld,unsigned(startMarks.count),startMarks.median());
+    s.startFloor,s.startMark,(unsigned long)s.soundHeld,unsigned(startMarks.count),startMarks.median(),s.minRpm,(unsigned long)s.belowMin);
   soundPlayer.feedSong();
   Serial.printf("SENSOR_PROFILE_STATUS selected=%s min_mark=%.0f saved_setting=%s\n",
     StickS3SensorProfile::name(s.sensorProfile),StickS3SensorProfile::minMark(s.sensorProfile),StickS3SensorProfile::name(sensorProfile));
   Serial.printf("RPM_ESTIMATORS selected=%s units=rpm three_turn_peak_rpm=%.1f single_turn_peak_rpm=%.1f confirmation_turns=3 max_rpm=30000 single_updates=%lu single_rejected=%lu\n",
     RpmEstimator::name(s.estimator),s.sustainedPeakRpm,s.singlePeakRpm,
     (unsigned long)s.singlePeakUpdates,(unsigned long)s.singlePeakRejected);
-  Serial.printf("SETTINGS_SAVE_STATUS pending=0x%03x failed=%d saves=%lu errors=%lu refusals=%lu\n",unsigned(settingsSave.pending()),
+  Serial.printf("SETTINGS_SAVE_STATUS pending=0x%03lx failed=%d saves=%lu errors=%lu refusals=%lu\n",(unsigned long)settingsSave.pending(),
     settingsSave.failed(),(unsigned long)settingsSave.saves(),(unsigned long)settingsSave.errors(),(unsigned long)settingsSave.refusals());
   soundPlayer.feedSong();
   Serial.printf("TOURNAMENT_STATUS enabled=%d display=%s persistent=wake\n",tournamentMode,tournamentViewName());
@@ -764,7 +809,8 @@ LOOP_HELPER static void pollUsbAwake(uint32_t now,const Snapshot &s,bool force=f
 // it only while the unit charges (0.20.9), not over a recap or the demo.
 static ControlsUI::CornerBattery cornerBattery(uint32_t now) {
   const bool editing=controls.page==Controls::Page::Edit && controls.setting==unsigned(Controls::Setting::BatteryIcon);
-  const bool chargingMain=Controls::showsChargingBattery(controls.page) && battery.charging && !historyPage && !launchFeedback.shown();
+  const bool chargingMain=Controls::showsChargingBattery(controls.page) && battery.charging && !historyPage && !launchFeedback.shown() &&
+    !BattleFeed::cardShown();
   const bool shown=(editing?bool(controls.draft):batteryIcon) && !tournamentMode && !diagnostics &&
     (Controls::showsCornerBattery(controls.page) || chargingMain);
   return shown?ControlsUI::cornerBattery(battery.valid(now),battery.percent,battery.charging):ControlsUI::CornerBattery{};
@@ -874,6 +920,7 @@ static uint8_t settingValue(unsigned row) {
     case S::ShakeWake:return uint8_t(shakeToWake);
     case S::BatteryIcon:return uint8_t(batteryIcon);
     case S::Bluetooth:return uint8_t(bluetoothOn);
+    case S::MinRpm:return minRpmSteps;
     case S::WipeAll:case S::About:break;
   }
   return 0;
@@ -962,6 +1009,9 @@ LOOP_HELPER static void draw(const Snapshot &s) {
   const int cx=view.width()/2;
   view.setTextDatum(top_center);
   view.setTextColor(colors.text,colors.background);
+  // The battle card on the main screen, if one is up and its rival still has a record.
+  const Battle::Rival *battleRival=BattleFeed::cardShown()?battle.rival(rivals):nullptr;
+  const auto battleCard=battleRival?battle.view():Battle::Session::View::None;
   if(!tournamentMode && diagnostics)
     ScreensUI::diagnosticsHeader(view,colors,newSessionAt && millis()-newSessionAt<1500,s.stateName(),s.ready && !s.signalFault);
   view.setTextColor(colors.text,colors.background);
@@ -999,9 +1049,6 @@ LOOP_HELPER static void draw(const Snapshot &s) {
           plot.fit,plot.input,plot.curve,analysisResults.busy(),analysisResults.forecast(analysis.number()).seconds,analysisCapturePending());
         break;
       }
-      case Controls::Page::MicRpm:
-        MicView::draw(view,micListener.trace(),micPageState(),colors);
-        break;
       case Controls::Page::WearCheck: {
         const auto rawTilt=level.reading(millis());
         drawnLevel=StickS3Level::forDisplay(rawTilt,visibleDisplayFlipped());
@@ -1013,6 +1060,12 @@ LOOP_HELPER static void draw(const Snapshot &s) {
       case Controls::Page::Bluetooth:ControlsUI::bluetoothPage(view,controls.bluetoothRow,bluetoothOn,BleLink::connected(),BattlePass::NAME,BleLink::bondCount());break;
       case Controls::Page::ForgetPhones:ControlsUI::forgetPhones(view,controls.forgetChosen);break;
       case Controls::Page::EnableBluetooth:ControlsUI::enableBluetooth(view,controls.enableChosen);break;
+      case Controls::Page::Battles:BattleUI::battles(view,rivals,controls.battleRow,bluetoothOn,battlesOn,battleMatchTo);break;
+      case Controls::Page::Rival:
+        // A rival is only opened from its row; one replaced since shows the list.
+        if(const Battle::Rival *r=rivals.recent(controls.rival))BattleUI::rival(view,*r);
+        else BattleUI::battles(view,rivals,controls.battleRow,bluetoothOn,battlesOn,battleMatchTo);
+        break;
       case Controls::Page::BeybladeX:
         // After a pull, its result as Main shows it, until it closes by itself;
         // A held stays the pass's button throughout.
@@ -1055,21 +1108,33 @@ LOOP_HELPER static void draw(const Snapshot &s) {
 #endif
 #endif
     }
+  } else if(battleCard==Battle::Session::View::Pick) {
+    BattleUI::picker(view,colors,*battleRival,battle.pickOutcome(),battle.pickFinish());
+  } else if(battleCard==Battle::Session::View::Result) {
+    BattleUI::result(view,colors,*battleRival,battle.synced()?BattleUI::Told::Agreed:
+      battle.beacon(millis())?BattleUI::Told::Telling:BattleUI::Told::Later);
   } else {
     const bool sessionNotice=newSessionAt && millis()-newSessionAt<1500 &&
       s.ready && !s.signalFault && !s.suspended && s.phase==AnalogTachometer::Phase::Ready;
     const char *status=sessionNotice?"New session ready":s.stateName();
-    ScreensUI::live(view,colors,status,sessionNotice?ScreensUI::Tone::Text:s.ready && !s.signalFault?ScreensUI::Tone::Ready:ScreensUI::Tone::Warning,
-      s.valid,s.resultRpm);
+    const auto tone=sessionNotice?ScreensUI::Tone::Text:s.ready && !s.signalFault?ScreensUI::Tone::Ready:ScreensUI::Tone::Warning;
+    // An open battle shows both launches where the RPM readout is; the status
+    // and the level stay, for the next launch.
+    if(battleCard==Battle::Session::View::Versus)BattleUI::versus(view,colors,status,tone,*battleRival);
+    else ScreensUI::live(view,colors,status,tone,s.valid,s.resultRpm);
     drawLiveLevel(view,cx);
   }
-  if(!tournamentMode && (diagnostics || (!historyPage && !launchFeedback.shown()))) {
+  if(!tournamentMode && (diagnostics || (!historyPage && !launchFeedback.shown())) &&
+     battleCard!=Battle::Session::View::Pick && battleCard!=Battle::Session::View::Result) {
     view.setTextDatum(top_center);view.setTextColor(colors.muted,colors.background);
-    ControlsUI::footer(view,"A Recap  B Menu");
+    ControlsUI::footer(view,battleCard==Battle::Session::View::Versus?"A Won  B Lost":"A Recap  B Menu");
   }
   const uint32_t now=millis();
-  if(M5.BtnA.isPressed() && !gestureA.consumed && (tournamentMode || (controls.page==Controls::Page::Main && !launchFeedback.shown())))
+  if(M5.BtnA.isPressed() && !gestureA.consumed && battleCard==Battle::Session::View::None &&
+     (tournamentMode || (controls.page==Controls::Page::Main && !launchFeedback.shown())))
     ControlsUI::hold(view,tournamentMode?"Exit tournament":"Enter tournament",now-M5.BtnA.lastChange(),1000);
+  else if(M5.BtnB.isPressed() && !gestureB.consumed && battleCard!=Battle::Session::View::None)
+    ControlsUI::hold(view,battleCard==Battle::Session::View::Versus?"Skip battle":battleCard==Battle::Session::View::Pick?"Back":"OK",now-M5.BtnB.lastChange(),1000);
   else if(M5.BtnB.isPressed() && !gestureB.consumed && !tournamentMode)
     ControlsUI::hold(view,controls.page==Controls::Page::Analysis?"Exit analysis":controls.page==Controls::Page::Main?"Enter analysis":controls.page==Controls::Page::Edit?"Cancel change":"Back",now-M5.BtnB.lastChange(),1000);
   drawnCornerBattery=cornerBattery(now);ControlsUI::cornerBattery(view,drawnCornerBattery,controls.page==Controls::Page::Menu);
@@ -1194,7 +1259,8 @@ LOOP_HELPER static void takeCurve(const Snapshot &event) {
   Serial.printf("RPM_CURVE launch=%lu points=%u stride=%u peak_rpm=%u peak_ms=%u last_ms=%u\n",(unsigned long)practice.recent()->number,
     unsigned(c.count),unsigned(c.stride),c.count?unsigned(c.rpm[peak]):0u,c.count?unsigned(c.ms[peak]):0u,c.count?unsigned(c.ms[c.count-1]):0u);
 }
-LOOP_HELPER static void prepareMotion(const Snapshot &event) {
+// celebrate: false for a pull the shutdown flush takes (routeEvent).
+LOOP_HELPER static void prepareMotion(const Snapshot &event,bool celebrate=true) {
   lastAcceptedAt=millis();if(!historyPendingSince)historyPendingSince=lastAcceptedAt;
   if(motionPending)++motionDrops;
   latestMotion={};latestMotion.number=practice.recent()->number;latestMotion.rpm=event.resultRpm;
@@ -1202,7 +1268,7 @@ LOOP_HELPER static void prepareMotion(const Snapshot &event) {
   const bool beat=bestStore.ready() && personalBests.observe(unsigned(event.sensorProfile),unsigned(event.estimator),event.valid,event.resultRpm);
   // The selected estimator's RPM is the pull's RPM, for milestones as for bests.
   const bool visible=!tournamentMode && !historyPage && !diagnostics;
-  const auto decision=visible?Milestones::decide(milestones,event.valid,event.resultRpm,beat,
+  const auto decision=visible && celebrate?Milestones::decide(milestones,event.valid,event.resultRpm,beat,
     beat && milestones.mode()!=Milestones::Mode::Milestones?celebrationEffect():Appearance::Effect::Off,milestonePicks()):Milestones::Decision{};
   bestEffect.queue(decision.show,latestMotion.number,decision.effect,decision.best,decision.milestone);
   Serial.printf("CELEBRATION launch=%lu rpm=%.1f shown_rpm=%ld valid=%d mode=%s best=%d milestone=%u effect=%s celebrate=%d\n",(unsigned long)latestMotion.number,
@@ -1346,6 +1412,11 @@ LOOP_HELPER static void startSound(bool late) {
 }
 // Each B in the Sound editor plays the current effect at the draft level.
 LOOP_HELPER static void previewSound(){requestSound(soundTarget(),Appearance::Sound(controls.draft),false);}
+// A match won (Battles): the sound of the player's celebration, as a best launch has.
+LOOP_HELPER static void matchWonSound() {
+  const Appearance::Effect effect=soundTarget();
+  if(effect!=Appearance::Effect::Off)requestSound(effect,appearance.sound,false);
+}
 // Each B in the Best effect editor, and opening it, plays the draft around the
 // value card (with its sound when Sound is on); Random shows a random pick.
 LOOP_HELPER static void previewEffect() {
@@ -1627,11 +1698,13 @@ static void writeSettings() {
   if((items&SettingsSave::Flip) && DisplayFlipSetting::save(prefs,displayFlipped))saved|=SettingsSave::Flip;
   if((items&SettingsSave::ShakeWake) && ShakeWakeSetting::save(prefs,shakeToWake))saved|=SettingsSave::ShakeWake;
   if((items&SettingsSave::BatteryIcon) && BatteryIconSetting::save(prefs,batteryIcon))saved|=SettingsSave::BatteryIcon;
+  if((items&SettingsSave::MinRpm) && MinRpmSetting::save(prefs,minRpmSteps))saved|=SettingsSave::MinRpm;
   if((items&SettingsSave::Bluetooth) && BluetoothSetting::save(prefs,bluetoothOn))saved|=SettingsSave::Bluetooth;
   if((items&SettingsSave::Bonds) && BleLink::saveBonds(prefs))saved|=SettingsSave::Bonds;
   if((items&SettingsSave::Name) && BleLink::saveName(prefs))saved|=SettingsSave::Name;
   if((items&SettingsSave::PassConfirmed) && prefs.putBytes(PASS_CONFIRMED_KEY,&passConfirmed,sizeof(passConfirmed))==sizeof(passConfirmed))
     saved|=SettingsSave::PassConfirmed;
+  if((items&SettingsSave::Battles) && BattlesSetting::save(prefs,battlesOn,battleMatchTo))saved|=SettingsSave::Battles;
   if(items&SettingsSave::Mount) {
     bool current=liveMount==mountMode;
     if(!current && imuAcquisition.setMount(mountMode)) {
@@ -1650,7 +1723,7 @@ static void writeSettings() {
     if(saveCalibration() && fitSaved)saved|=SettingsSave::AnalysisResult;
   }
   settingsSave.wrote(saved);dirty=true;
-  Serial.printf("SETTINGS_SAVE items=0x%03x saved=0x%03x\n",unsigned(items),unsigned(saved));
+  Serial.printf("SETTINGS_SAVE items=0x%03lx saved=0x%03lx\n",(unsigned long)items,(unsigned long)saved);
 }
 // Pending settings reach flash in the first checkpoint the optical owner
 // grants: right away after Apply in the usual case, otherwise as soon as the
@@ -1683,6 +1756,8 @@ static bool applySetting(unsigned setting,uint8_t value,bool &changed) {
     case Controls::Setting::Flip:changed=bool(value)!=displayFlipped;displayFlipped=value;break;
     case Controls::Setting::ShakeWake:changed=bool(value)!=shakeToWake;shakeToWake=value;break;
     case Controls::Setting::BatteryIcon:changed=bool(value)!=batteryIcon;batteryIcon=value;break;
+    // The optical owner takes the new floor on the next loop pass.
+    case Controls::Setting::MinRpm:applied=MinRpm::valid(value);changed=applied && value!=minRpmSteps;if(changed)minRpmSteps=value;break;
     case Controls::Setting::Bluetooth:changed=bool(value)!=bluetoothOn;bluetoothOn=value;break;
     case Controls::Setting::Sensor:
       applied=StickS3SensorProfile::valid(value);changed=applied && StickS3SensorProfile::Mode(value)!=sensorProfile;
@@ -1816,10 +1891,93 @@ LOOP_HELPER static ControlsUI::PassView view() {
   return v;
 }
 }
+// Battles (docs/FIRMWARE_BATTLES.md): the sketch's side. A pull is told and
+// listened for when Auto battles is on, the radio is up and the stick is not
+// in tournament mode, which hides its launches. Nothing here renews the sleep
+// timer: a launch and a button press already do, and a battle left alone ends
+// by itself (battle_session.h).
+namespace BattleFeed {
+static bool allowed(){return battlesOn && !tournamentMode && !wipeBlocked && BattleRadio::available(bluetoothAtBoot);}
+// A battle card is on the main screen: A and B are the battle's.
+static bool cardShown() {
+  return controls.page==Controls::Page::Main && !launchFeedback.shown() && !diagnostics && !tournamentMode &&
+    battle.view()!=Battle::Session::View::None && battle.rival(rivals);
+}
+LOOP_HELPER static void report(uint8_t events) {
+  if(!events)return;
+  dirty=true;
+  const Battle::Rival *r=battle.rival(rivals);
+  if(!r)return;
+  char name[Battle::NAME_CHARS+1];Battle::displayName(*r,name,sizeof(name));
+  if(events&Battle::Session::Matched)
+    Serial.printf("BATTLE_MATCHED rival=%08lx my_rpm=%u their_rpm=%u launches_together=%u rssi_dbm=%d pulled_ms_after=%ld match=%u-%u match_to=%u name=%s\n",(unsigned long)r->id,
+      unsigned(r->myRpm),unsigned(r->theirRpm),unsigned(r->duels),battle.rivalRssi(),(long)battle.rivalOffset(),unsigned(r->matchMe),unsigned(r->matchThem),
+      unsigned(r->matchTo),name);
+  // The battle whose match win has been heard: a correction back and forth plays it once.
+  static uint16_t cheered=0;
+  if((events&Battle::Session::Settled) && r->matchEnded() && r->claim.outcome==Battle::Outcome::Won && r->myTag!=cheered) {
+    cheered=r->myTag;matchWonSound();
+  }
+  if(events&Battle::Session::Settled)
+    Serial.printf("BATTLE_RESULT rival=%08lx outcome=%s finish=%s rev=%u won=%u lost=%u points=%u-%u match=%u-%u match_to=%u matches=%u-%u\n",(unsigned long)r->id,
+      Battle::name(r->claim.outcome),Battle::label(r->claim.finish),unsigned(r->claim.rev),unsigned(r->wins),unsigned(r->losses),
+      unsigned(r->pointsFor),unsigned(r->pointsAgainst),unsigned(r->matchMe),unsigned(r->matchThem),unsigned(r->matchTo),unsigned(r->matchWins),unsigned(r->matchLosses));
+  if(events&Battle::Session::Synced)Serial.printf("BATTLE_SYNCED rival=%08lx rev=%u\n",(unsigned long)r->id,unsigned(r->claim.rev));
+}
+// After an accepted pull: tell it, and listen for one made with it.
+LOOP_HELPER static void launched(const Snapshot &s) {
+  if(!allowed())return;
+  const uint32_t now=millis(),ago=uint32_t(std::max<int64_t>(0,esp_timer_get_time()-int64_t(s.burstStartHostUs))/1000);
+  battle.launch(now,now-ago,BattlePass::shootPower(s.resultRpm),uint16_t(esp_random()|1),rivals);
+  Serial.printf("BATTLE_LAUNCH tag=%04x rpm=%u pull_began_ms_ago=%lu\n",unsigned(battle.tag()),unsigned(BattlePass::shootPower(s.resultRpm)),(unsigned long)ago);
+}
+// A or B (or hold B) while a card is up. True when the press was the battle's.
+static bool press(Battle::Button button) {
+  if(!cardShown() || !battle.press(millis(),button,rivals))return false;
+  report(battle.take());dirty=true;return true;
+}
+LOOP_HELPER static void tick(uint32_t now,const Snapshot &s) {
+  const bool on=allowed();
+  if(!on)battle.stop();
+  BattleRadio::Heard heard;
+  while(BattleRadio::take(heard)) {
+    if(!on)continue;
+    Battle::LaunchFrame frame;Battle::NameFrame who;
+    if(frame.decode(heard.bytes,heard.length)) {
+      // For the serial log: each launch frame whose content is new, its age
+      // aside, as BATTLE_TELL shows what this stick tells.
+      static uint8_t shown[Battle::LAUNCH_BYTES];
+      if(memcmp(shown,heard.bytes,8) || memcmp(shown+10,heard.bytes+10,Battle::LAUNCH_BYTES-10)) {
+        char text[2*Battle::LAUNCH_BYTES+1];size_t at=0;
+        for(size_t i=0;i<Battle::LAUNCH_BYTES;++i)at+=snprintf(text+at,sizeof(text)-at,"%02x",heard.bytes[i]);
+        Serial.printf("BATTLE_HEARD %s rssi_dbm=%d waited_ms=%lu\n",text,int(heard.rssi),(unsigned long)(now-heard.at));
+        memcpy(shown,heard.bytes,sizeof(shown));
+      }
+      battle.heard(heard.at,frame,heard.rssi,rivals);
+    }
+    else if(who.decode(heard.bytes,heard.length))battle.heard(who,rivals);
+  }
+  battle.tick(now);
+  if(cardShown())battle.presented(now);
+  BattleRadio::tick(now,on,s.phase==AnalogTachometer::Phase::Launch,battle,rivals,BleLink::chosenName);
+  report(battle.take());
+  controls.battlesOn=battlesOn;
+  battle.matchLength(battleMatchTo);
+  if(controls.rivals!=rivals.count()){controls.rivals=uint8_t(rivals.count());dirty=true;}
+}
+LOOP_HELPER static void status() {
+  Serial.printf("BATTLE_STATUS on=%d match_to=%u allowed=%d active=%d in_battle=%d view=%u rival=%08lx rivals=%u won=%lu lost=%lu points=%lu generation=%lu unsaved=%d\n",
+    battlesOn,unsigned(battleMatchTo),allowed(),battle.active(),battle.inBattle(),unsigned(battle.view()),(unsigned long)battle.rivalId(),rivals.count(),
+    (unsigned long)rivals.totalWins(),(unsigned long)rivals.totalLosses(),(unsigned long)rivals.totalPoints(),(unsigned long)rivals.generation(),
+    rivals.generation()!=loggedRivals);
+  BattleRadio::status();
+}
+}
 LOOP_HELPER static void logLaunchMetrics(const Snapshot &s) {
   const auto *record=practice.recent();if(!record)return;
   if(!tournamentMode)BleLink::publishLaunch(record->number,record->session,s.resultRpm);
   BattlePassFeed::launched();
+  BattleFeed::launched(s);
   Serial.printf("LAUNCH_METRICS number=%lu session=%lu selected_estimator=%s selected_rpm=%.1f three_turn_peak_rpm=%.1f single_turn_peak_rpm=%.1f units=rpm\n",
     (unsigned long)record->number,(unsigned long)record->session,RpmEstimator::name(s.estimator),
     s.resultRpm,s.sustainedPeakRpm,s.singlePeakRpm);
@@ -1828,13 +1986,13 @@ LOOP_HELPER static MicView::Mic micPageState() {
   if(micListener.state()==MicSession::State::Refused)return micListener.why()==MicSession::Why::Memory?MicView::Mic::NoMemory:MicView::Mic::Failed;
   return micListener.warm(millis())?MicView::Mic::On:MicView::Mic::Starting;
 }
-// Mic RPM and Analysis run the mic. Opening either mutes the speaker, which
+// Analysis runs the mic (through 0.20.11 the Mic RPM page did). Opening it mutes the speaker, which
 // powers down, and then the mic starts; leaving it, however the page changed,
 // stops the mic and gives the speaker back. An owner who never opens the page
 // stops at the first line.
 LOOP_HELPER static void tickMicPage() {
   micListener.setAnalysisMode(controls.page==Controls::Page::Analysis);
-  const bool open=controls.page==Controls::Page::MicRpm || controls.page==Controls::Page::Analysis;
+  const bool open=controls.page==Controls::Page::Analysis;
   if(!open && micListener.off())return;
   const uint32_t now=millis();
   const auto before=micListener.state();
@@ -1882,7 +2040,6 @@ LOOP_HELPER static void leaveMicPage() {
     if(!interruptAnalysis(esp_timer_get_time()))return;
     analysis.clear();controls.page=Controls::Page::Main;syncNavigation();dirty=true;
   }
-  if(controls.page==Controls::Page::MicRpm){controls.page=Controls::Page::Menu;syncNavigation();dirty=true;}
 }
 static void browseOlder() {
   if(tournamentMode || !historyPage)return;
@@ -1935,14 +2092,24 @@ static void navigate(Controls::Effect effect,Controls::Page previous) {
     case Controls::Effect::CancelWipe:cancelWipe();break;
     case Controls::Effect::ForgetPhones:BleLink::forget();settingsSave.mark(SettingsSave::Bonds);break;
     case Controls::Effect::ToggleBluetooth:bluetoothOn=!bluetoothOn;settingsSave.mark(SettingsSave::Bluetooth);dirty=true;break;
+    case Controls::Effect::ToggleBattles:
+      battlesOn=!battlesOn;settingsSave.mark(SettingsSave::Battles);dirty=true;
+      Serial.printf("BATTLES_SETTING on=%d match_to=%u\n",battlesOn,unsigned(battleMatchTo));
+      break;
+    case Controls::Effect::ToggleMatchLength:
+      battleMatchTo=battleMatchTo==Battle::MATCH_LONG?Battle::MATCH_SHORT:Battle::MATCH_LONG;settingsSave.mark(SettingsSave::Battles);dirty=true;
+      Serial.printf("BATTLES_SETTING on=%d match_to=%u\n",battlesOn,unsigned(battleMatchTo));
+      break;
     case Controls::Effect::None:break;
   }
   syncNavigation();
 }
-static void buttonA(){const auto p=controls.page;const auto e=controls.tapA();navigate(e,p);}
-static void buttonB(){const auto p=controls.page;const auto e=controls.tapB();navigate(e,p);}
-LOOP_HELPER static void holdA(){const auto p=controls.page;const auto e=controls.holdA(launchFeedback.shown());navigate(e,p);}
-LOOP_HELPER static void holdB(){const auto p=controls.page;const auto e=controls.holdB(launchFeedback.shown());navigate(e,p);}
+// While a battle card is up, A and B (and hold B) are the battle's, and hold
+// A does nothing: a battle is not the moment to enter tournament mode.
+static void buttonA(){if(BattleFeed::press(Battle::Button::A))return;const auto p=controls.page;const auto e=controls.tapA();navigate(e,p);}
+static void buttonB(){if(BattleFeed::press(Battle::Button::B))return;const auto p=controls.page;const auto e=controls.tapB();navigate(e,p);}
+LOOP_HELPER static void holdA(){if(BattleFeed::cardShown())return;const auto p=controls.page;const auto e=controls.holdA(launchFeedback.shown());navigate(e,p);}
+LOOP_HELPER static void holdB(){if(BattleFeed::press(Battle::Button::HoldB))return;const auto p=controls.page;const auto e=controls.holdB(launchFeedback.shown());navigate(e,p);}
 static void beginWipe() {
   restoreRx.cancel();
   wipeFailed=false;wipeConfirmation.begin(millis());
@@ -2071,6 +2238,60 @@ static bool logBests() {
 #endif
   if(!historyLog.saveBests(personalBests,bestStore.savedGeneration()))return false;
   loggedBests=personalBests.generation();return true;
+}
+// The battle records, kept in the log alone: without the log (another layout
+// in its partition) they last until the stick sleeps.
+static bool rivalsUnsaved(){return historyLog.isOpen() && rivals.generation()!=loggedRivals;}
+static bool logRivals() {
+#if LAUNCHLAB_HIL
+  if(Hil::nvsWrite("rivals",Battle::Book::IMAGE_BYTES))return false;
+#endif
+  if(!historyLog.saveRivals(rivals))return false;
+  loggedRivals=rivals.generation();return true;
+}
+// At boot, newest wins between the log and NVS (history_log.h); a copy only
+// in NVS is logged at the next save. A record NVS lost behind this firmware's
+// back (Wipe all on 0.15-0.17) is not loaded, and the empty one is logged over
+// it at once, so neither this firmware nor a rollback to 0.18-0.20.10 loads it.
+static struct {HistoryLog::Source history=HistoryLog::Source::None,bests=HistoryLog::Source::None,power=HistoryLog::Source::None;bool nvsLost=false;} bootFrom;
+// NVS without a single namespace: erased since anything used it, as the
+// Arduino core erases it at boot after NO_FREE_PAGES or NEW_VERSION_FOUND. An
+// old firmware's Wipe all leaves its namespaces (history_log.h).
+static bool nvsVirgin(){nvs_stats_t stats{};return nvs_get_stats(nullptr,&stats)==ESP_OK && stats.namespace_count==0;}
+// Lost, not wiped: the log's records stop saying NVS held their copies, so
+// they load. Before anything creates a namespace, so a power cut here leaves
+// NVS virgin and the next boot does it again.
+static void disownLostNvs(bool virgin) {
+  bootFrom.nvsLost=virgin;
+  if(virgin && historyLog.isOpen())Serial.printf("HISTORY_LOG_NVS_LOST disowned=%d\n",historyLog.disown());
+}
+static void pickLoggedPower(HistoryLog::Nvs nvs) {
+  std::unique_ptr<PowerDiagnostics::Image> logged(new(std::nothrow) PowerDiagnostics::Image);uint32_t mirrored=0;
+  const bool inLog=logged && historyLog.isOpen() && historyLog.loadPower(*logged,mirrored);
+  bootFrom.power=HistoryLog::pick(inLog,mirrored,nvs,powerMirror);
+  if(bootFrom.power==HistoryLog::Source::Log)powerLog=*logged;
+  else if(bootFrom.power==HistoryLog::Source::None && inLog){powerLog.checksum=PowerDiagnostics::hash(powerLog);historyLog.savePower(powerLog,powerMirror);}
+}
+static void pickLoggedBests(bool bestsInNvs) {
+  Appearance::Bests logged;uint32_t mirrored=0;const bool inLog=historyLog.isOpen() && historyLog.loadBests(logged,mirrored);
+  const auto nvs=bestsInNvs?HistoryLog::Nvs::Found:bestStore.ready() && !bestStore.present()?HistoryLog::Nvs::Absent:HistoryLog::Nvs::Unreadable;
+  const auto from=bootFrom.bests=HistoryLog::pick(inLog,mirrored,nvs,personalBests.generation());
+  if(from==HistoryLog::Source::Log)personalBests=logged;
+  loggedBests=from==HistoryLog::Source::Log?personalBests.generation():~personalBests.generation();
+  if(from==HistoryLog::Source::None && inLog && historyLog.saveBests(personalBests,bestStore.savedGeneration()))loggedBests=personalBests.generation();
+}
+static void pickLoggedHistory() {
+  if(!historyLog.isOpen())return;
+  std::unique_ptr<PracticeHistory> logged(new(std::nothrow) PracticeHistory);uint32_t mirrored=0;
+  const bool inLog=logged && historyLog.loadHistory(*logged,mirrored);
+  const auto nvs=practiceStore.found()?HistoryLog::Nvs::Found:practiceStore.ready()?HistoryLog::Nvs::Absent:HistoryLog::Nvs::Unreadable;
+  const auto from=bootFrom.history=HistoryLog::pick(inLog,mirrored,nvs,practiceStore.savedGeneration());
+  if(from==HistoryLog::Source::Log){practice=*logged;saveError=false;}
+  loggedHistory=from==HistoryLog::Source::Log?practice.generation():~practice.generation();
+  if(from==HistoryLog::Source::None && inLog && historyLog.saveHistory(practice,practiceStore.savedGeneration()))loggedHistory=practice.generation();
+  Serial.printf("HISTORY_LOG_LOAD from=%s log_generation=%lu mirrored=%lu nvs_generation=%lu nvs_found=%d bests_from=%s power_from=%s nvs_lost=%d\n",
+    HistoryLog::name(from),inLog?(unsigned long)logged->generation():0ul,(unsigned long)mirrored,(unsigned long)practiceStore.savedGeneration(),
+    practiceStore.found(),HistoryLog::name(bootFrom.bests),HistoryLog::name(bootFrom.power),bootFrom.nvsLost);
 }
 // At boot, before sampling starts: the first boot of 0.18 formats the
 // partition (blank, erased or another firmware's bytes) in under a second.
@@ -2219,16 +2440,96 @@ LOOP_HELPER static void saveHistory(uint32_t now,const Snapshot &s) {
   dirty=true;
 }
 
+// A changed battle record goes to the log in the same kind of pause history
+// waits for: no capture, no recap on screen, the detector ready, and a few
+// seconds since the pull. A program-only write of under a kilobyte: the ADC
+// keeps sampling, so a pull that starts now is measured.
+LOOP_HELPER static void saveRivals(uint32_t now,const Snapshot &s) {
+  static uint32_t lastTry=0;static bool tried=false;
+  if(!rivalsUnsaved() || (tried && now-lastTry<HISTORY_SAVE_RETRY_MS) ||
+     !HistoryCheckpoint::practiceIdle(now,lastAcceptedAt,HistoryCheckpoint::AGED_QUIET_MS,motionPending,launchFeedback.protects(now),s.phase))return;
+  tried=true;lastTry=now;
+  const int64_t started=esp_timer_get_time();
+  const bool saved=logRivals();
+  Serial.printf("BATTLE_SAVE ok=%d generation=%lu rivals=%u duration_us=%lu\n",saved,(unsigned long)rivals.generation(),rivals.count(),
+    (unsigned long)(esp_timer_get_time()-started));
+  if(saved)tried=false;
+}
+// Each launch event, from the loop or drained by the shutdown flush: one owner,
+// so the two cannot differ (through 0.20.10 the flush saved a Wear check
+// retraction as a practice pull, with no USB lines). A new result goes to Wear
+// check on its page, never to practice history, bests, motion capture or the
+// start-mark reference; elsewhere to practice history. Both print their USB
+// lines and reach the mic. celebrate: false only when the unit goes dark next
+// (the side key's off, the Bluetooth restart; flushForShutdown): the pull is
+// saved, captured and may set a best like any other, but starts no effect or
+// sound. A pull the inactivity sleep's flush takes abandons the sleep, so it
+// celebrates as in the loop. True: a new pull was taken.
+LOOP_HELPER static bool routeEvent(const Snapshot &event,uint32_t now,bool celebrate) {
+  bool taken=false;
+  // A result Min RPM kept back: no new revision, only its USB line.
+  if(event.belowMin!=lastBelowMin) {
+    lastBelowMin=event.belowMin;
+    Serial.printf("LAUNCH_BELOW_MIN rpm=%.1f min_rpm=%.0f count=%lu t_us=%llu\n",event.belowMinRpm,event.minRpm,
+      (unsigned long)event.belowMin,(unsigned long long)event.detectorUs);
+  }
+  if(event.revision!=lastRevision) {
+    lastRevision=event.revision;
+    Serial.printf("LAUNCH_RESULT valid=%d peak_rpm=%.1f revs=%lu amplitude=%.1f start_noise=%.1f launches=%lu end=%s t_us=%llu\n",
+      event.valid,event.resultRpm,(unsigned long)event.revolutions,event.amplitude,event.startNoise,
+      (unsigned long)event.launches,event.endName(),(unsigned long long)event.detectorUs);
+    followAnalysisLaunch(event);
+    if(controls.page==Controls::Page::WearCheck) {
+      const auto stageBefore=controls.wear.stage();
+      const auto stepBefore=controls.wear.step();
+      const auto outcome=controls.wear.observeBurst(event.launches,event.valid,event.resultRpm,level.reading(now));
+      if(outcome!=WearCheck::Outcome::None) {
+        taken=true;
+        logWearPull(stageBefore,outcome,event.resultRpm);
+        if(controls.wear.step()!=stepBefore)
+          Serial.printf("WEAR_CHECK_STEP step=%s t_us=%llu\n",WearCheck::stepName(controls.wear.step()),(unsigned long long)event.detectorUs);
+        if(outcome==WearCheck::Outcome::Completed) {
+          Serial.printf("WEAR_CHECK_RESULT rpm=%.1f median_rpm=%.1f level_rpm=%.1f pull_down_rpm=%.1f pull_up_rpm=%.1f pulls=%u tolerance_deg=%.0f baseline_rpm=%.1f\n",
+            controls.wear.overallMean(),controls.wear.overallMedianMean(),
+            controls.wear.stageMean(0),controls.wear.stageMean(1),controls.wear.stageMean(2),
+            controls.wear.totalAccepted(),WearCheck::TOLERANCE_DEG,WearCheck::FRESH_BASELINE_RPM);
+        }
+      }
+    } else if(practice.accept(event.launches,event.valid,event.resultRpm,now)) {
+      taken=true;
+      prepareMotion(event,celebrate);logLaunchMetrics(event);noteStartMark(event);
+      inactivity.touch(now);
+      Serial.printf("HISTORY_ADDED number=%lu session=%lu rpm=%.1f\n",(unsigned long)practice.recent()->number,
+        (unsigned long)practice.recent()->session,practice.recent()->rpm);
+    }
+    dirty=true;
+  }
+  if(event.phase!=lastPhase || event.signalFault!=lastFault) {
+    lastPhase=event.phase;lastFault=event.signalFault;dirty=true;
+    Serial.printf("RPM_STATE state=%s t_us=%llu contrast=%.1f noise=%.1f\n",event.stateName(),
+      (unsigned long long)event.detectorUs,event.contrast,event.noise);
+  }
+  return taken;
+}
+
 // Stops sampling, accepts queued pulls and saves history/bests before power
 // down. Only Ready leaves acquisition stopped; otherwise sampling continues
 // and the caller retries. A new pull is recorded but restarts the decision.
+// why: a sleep or side-key off is held back by a refused save only
+// ShutdownSaveGuard::LIMIT times in a row (a Bluetooth restart: always); a
+// pull taken here celebrates only on the way to a sleep, which it abandons
+// (the side key and the restart go dark next).
 // force: stop even with optical marks pending (OpticalSleepGuard).
-LOOP_HELPER static ShutdownFlush flushForShutdown(uint32_t now,const Snapshot &s,bool force=false) {
+LOOP_HELPER static ShutdownFlush flushForShutdown(uint32_t now,const Snapshot &s,ShutdownWhy why,bool force=false) {
+  const bool powerOff=why!=ShutdownWhy::Restart;
   if(!acquisition.request(force?Action::ShutdownForce:Action::ShutdownBegin,s.launches))return ShutdownFlush::Busy;
   // Finish any queued accepted result before saving; the owner is now stopped.
   Snapshot event;
   bool newPull=false;
-  while(acquisition.takeEvent(event))if(practice.accept(event.launches,event.valid,event.resultRpm,now)){prepareMotion(event);logLaunchMetrics(event);noteStartMark(event);newPull=true;}
+#if LAUNCHLAB_HIL
+  hilFlushPull.holding=false;  // what !flushpull held is drained here
+#endif
+  while(acquisition.takeEvent(event))if(routeEvent(event,now,why==ShutdownWhy::Sleep))newPull=true;
   if(newPull) {
     inactivity.touch(now);dirty=true;
     if(!acquisition.request(Action::CheckpointEnd))acquisition.request(Action::Pin,s.pin);
@@ -2238,8 +2539,14 @@ LOOP_HELPER static ShutdownFlush flushForShutdown(uint32_t now,const Snapshot &s
   // and is retried if the device stays on.
   writeSettings();
   saveStartMarks();
+  const bool historyFirst=practiceStore.savedGeneration()==HistoryLog::NOT_MIRRORED,bestFirst=bestStore.savedGeneration()==HistoryLog::NOT_MIRRORED;
   bool historyFailed=practiceStore.pending(practice) && (!practiceStore.ready() || !practiceStore.save(practice));
   bool bestFailed=bestStore.pending(personalBests) && (!bestStore.ready() || !bestStore.save(personalBests));
+  // NVS's first copy, logged at once (history_log.h): the log's record said NVS held none.
+  if(historyLog.isOpen()) {
+    if(historyFirst && practiceStore.savedGeneration()!=HistoryLog::NOT_MIRRORED)logHistory();
+    if(bestFirst && bestStore.savedGeneration()!=HistoryLog::NOT_MIRRORED)logBests();
+  }
   // With the history log open, NVS holds only a copy of what the log holds.
   // A copy NVS refuses (full, as one StickS3 was) is retried at the next
   // sleep once the log has it; through 0.20.5 it deferred every sleep, every
@@ -2254,13 +2561,25 @@ LOOP_HELPER static ShutdownFlush flushForShutdown(uint32_t now,const Snapshot &s
   }
   const bool calibrationFailed=calibrationNeedsSave();
   if(historyFailed || bestFailed || calibrationFailed) {
-    saveError=true;++saveErrors;dirty=true;
-    Serial.printf("POWER_OFF_DEFERRED %s_save_failed\n",calibrationFailed?"calibration":historyFailed?"history":"best");
+    saveError=true;++saveErrors;dirty=true;lastSaveTry=millis();
+    // No store takes it (the log closed, NVS refusing): through 0.20.10 every
+    // sleep and side-key off deferred, until flat. A flat battery loses RAM
+    // too, so the power-off goes ahead at the LIMIT-th refusal in a row, sampling stopped.
+    if(powerOff && shutdownSaves.refused()) {
+      Serial.printf("POWER_OFF_NOTICE %s_unsaved history=%d best=%d calibration=%d refusals=%u store=none\n",calibrationFailed?"calibration":historyFailed?"history":"best",
+        historyFailed,bestFailed,calibrationFailed,unsigned(shutdownSaves.refusals()));
+      return ShutdownFlush::Ready;
+    }
+    Serial.printf("POWER_OFF_DEFERRED %s_save_failed refusals=%u limit=%u\n",calibrationFailed?"calibration":historyFailed?"history":"best",
+      unsigned(shutdownSaves.refusals()),unsigned(powerOff?ShutdownSaveGuard::LIMIT:0));
     if(!acquisition.request(Action::CheckpointEnd))acquisition.request(Action::Pin,s.pin);
-    lastSaveTry=millis();
     return ShutdownFlush::SaveFailed;
   }
+  if(powerOff)shutdownSaves.clear();
   historyPendingSince=0;saveError=false;
+  // The battle records never hold up power-off: a failed write is logged and
+  // the record stays as last saved.
+  if(rivalsUnsaved() && !logRivals())Serial.println("POWER_OFF_NOTICE battle_save_failed");
   return ShutdownFlush::Ready;
 }
 
@@ -2312,7 +2631,7 @@ LOOP_HELPER static void autoPowerOff(uint32_t now,const Snapshot &s) {
   lastShutdownTry=now;
   // A failed save retries after 60 s; a new pull restarts the full timeout.
   const bool force=opticalGuard.force();
-  const auto flushed=flushForShutdown(now,s,force);
+  const auto flushed=flushForShutdown(now,s,ShutdownWhy::Sleep,force);
   if(flushed==ShutdownFlush::NewPull)lastShutdownTry=0;
   if(flushed==ShutdownFlush::Busy) {
     opticalGuard.refused();
@@ -2327,8 +2646,8 @@ LOOP_HELPER static void autoPowerOff(uint32_t now,const Snapshot &s) {
     if(!acquisition.request(Action::CheckpointEnd))acquisition.request(Action::Pin,s.pin);
     return;
   }
-  Serial.printf("POWER_OFF reason=inactivity idle_ms=%lu since_use_ms=%lu records=%u saved=1 forced=%d\n",
-    (unsigned long)inactivity.elapsed(now),(unsigned long)inactivity.sinceUse(now),practice.size(),force);
+  Serial.printf("POWER_OFF reason=inactivity idle_ms=%lu since_use_ms=%lu records=%u saved=%d forced=%d\n",
+    (unsigned long)inactivity.elapsed(now),(unsigned long)inactivity.sinceUse(now),practice.size(),!saveError,force);
   cancelSettingEdit(); // Wake into the settings list, never an unfinished edit.
   UsbTx::drain(200);
   soundPlayer.shutdown();  // Neither the amplifier nor the codec stays on through standby.
@@ -2404,11 +2723,15 @@ LOOP_HELPER static void autoPowerOff(uint32_t now,const Snapshot &s) {
 // The IRQ edge is latched by the ISR. The line level is rechecked at most
 // once a second in case an edge was missed, so a stuck line cannot keep PM1
 // out of its idle sleep with constant I2C reads.
-static void IRAM_ATTR onPowerKeyIrq(){powerKeyIrq=true;}
 LOOP_HELPER static void pollPowerKey(uint32_t now) {
-  if(!powerKeyIrq && (digitalRead(POWER_KEY_IRQ_PIN) || now-lastPowerKeyRead<1000))return;
+  // PM1 holds its IRQ line low until the click is read and cleared, so the
+  // level is enough; a line held low by anything else is read once a second.
+  // No GPIO interrupt: ESP-IDF installs the GPIO ISR service on the 1 KB IPC
+  // task, and an interrupt landing inside that allocation overflowed its stack
+  // (0.21.0 gate: "Stack canary watchpoint triggered (ipc1)" at boot).
+  if(digitalRead(POWER_KEY_IRQ_PIN) || now-lastPowerKeyRead<1000)return;
   if(!imuAcquisition.lock())return;
-  powerKeyIrq=false;lastPowerKeyRead=now;
+  lastPowerKeyRead=now;
   const bool click=powerKey().takeClick();
   imuAcquisition.unlock();
   if(!click || powerKeyRequested)return;
@@ -2433,7 +2756,7 @@ LOOP_HELPER static void powerKeyOff(uint32_t now,const Snapshot &s) {
   if(controls.page==Controls::Page::Analysis){leaveMicPage();if(controls.page==Controls::Page::Analysis)return;}
   if(micListener.holdsSleep(now)){leaveMicPage();return;}
   if(!micListener.off())Serial.println("POWER_OFF_NOTICE mic_stop_timeout");
-  const auto flushed=flushForShutdown(now,s,late);
+  const auto flushed=flushForShutdown(now,s,ShutdownWhy::SideKey,late);
   if(flushed==ShutdownFlush::Busy || flushed==ShutdownFlush::NewPull) {
     if(late){powerKeyRequested=false;Serial.println("POWER_KEY_OFF_DEFERRED acquisition_busy");}
     return;
@@ -2442,7 +2765,7 @@ LOOP_HELPER static void powerKeyOff(uint32_t now,const Snapshot &s) {
   if(flushed==ShutdownFlush::SaveFailed)return; // Stay on; the save error is shown.
   if(controls.page==Controls::Page::Wipe)cancelWipe();
   cancelSettingEdit();
-  Serial.printf("POWER_OFF reason=power_key records=%u saved=1 forced=%d\n",practice.size(),late);
+  Serial.printf("POWER_OFF reason=power_key records=%u saved=%d forced=%d\n",practice.size(),!saveError,late);
   ++powerLog.sleeps;powerLog.pendingSleep=1;powerRecord(PowerDiagnostics::Sleep);
   if(!savePowerLog())Serial.println("POWER_LOG_NOTICE sleep_checkpoint_failed");
   sleepReceipt={PowerDiagnostics::MAGIC,wallUs()};
@@ -2457,6 +2780,34 @@ LOOP_HELPER static void powerKeyOff(uint32_t now,const Snapshot &s) {
   if(!acquisition.request(Action::CheckpointEnd))acquisition.request(Action::Pin,s.pin);
 }
 
+// The blocked Wipe page's power-off (power_status.h WipeBlockedPower): the
+// side key, or IDLE_MS without a button. It writes nothing, neither history,
+// settings nor the power log, because after an erase attempt RAM from before
+// it must never be saved (docs/FIRMWARE_WIPE_ALL.md): it is the page's
+// restart, left off. The next boot resumes a valid marker or blocks again.
+static WipeBlockedPower wipePower;
+LOOP_HELPER static void wipeBlockedPowerOff(uint32_t now) {
+#if LAUNCHLAB_HIL
+  const bool dry=Hil::sleepDry.load(),allowed=Hil::allowSleep.load();  // The rig's host is attached.
+#else
+  constexpr bool dry=false,allowed=true;
+#endif
+  const auto off=wipePower.decide(now,powerKeyRequested,inactivity.sinceUse(now),!dry && HWCDC::isPlugged());
+  powerKeyRequested=false;
+  if(off==WipeBlockedPower::Off::Stay || (off==WipeBlockedPower::Off::Idle && !allowed))return;
+  wipePower.tried(now);
+  Serial.printf("POWER_OFF reason=%s wipe_blocked=1 boot_recovery=%d since_use_ms=%lu saved=0\n",WipeBlockedPower::name(off),
+    wipeBootRecovery,(unsigned long)inactivity.sinceUse(now));
+  if(dry){Serial.println("POWER_OFF_DEFERRED reason=sleep_dry_run wipe_blocked=1 retry_s=60");return;}
+  M5.Display.setBrightness(0);M5.Display.sleep();UsbTx::drain(200);
+  soundPlayer.shutdown();
+  // As the side key's own off: PM1 removes battery power; on USB the ESP32
+  // deep sleeps until the key (or the re-check). The IMU is not armed.
+  if(imuAcquisition.lock()){usbStandby={UsbStandby::MAGIC,true};shakeWake.sleep(standbyRecheckUs());usbStandby.magic=0;imuAcquisition.unlock();}
+  M5.Display.wakeup();frameRows.invalidate();M5.Display.setBrightness(backlightValue());dirty=true;
+  Serial.println("POWER_OFF_DEFERRED reason=pm1_power_off_refused wipe_blocked=1 retry_s=60");
+}
+
 // Bluetooth changed in Settings: apply it by restarting, after what a power-off
 // saves. Never in a pull or its capture, and not until the choice itself is saved.
 LOOP_HELPER static void restartForBluetooth(uint32_t now,const Snapshot &s) {
@@ -2469,7 +2820,7 @@ LOOP_HELPER static void restartForBluetooth(uint32_t now,const Snapshot &s) {
   // its unknown endpoint before shutdown checkpoints or mic buffer teardown.
   if(controls.page==Controls::Page::Analysis){leaveMicPage();if(controls.page==Controls::Page::Analysis)return;}
   if(micListener.holdsSleep(now)){leaveMicPage();return;}
-  if(flushForShutdown(now,s)!=ShutdownFlush::Ready)return;
+  if(flushForShutdown(now,s,ShutdownWhy::Restart)!=ShutdownFlush::Ready)return;
   if(settingsSave.pending()&SettingsSave::Bluetooth) {
     if(!acquisition.request(Action::CheckpointEnd))acquisition.request(Action::Pin,s.pin);
     return;
@@ -2505,7 +2856,7 @@ LOOP_HELPER static void exportBackup() {
   if(!contents){Serial.println("BACKUP_ERROR out_of_memory");return;}
   contents->practice=practice;contents->look=appearance;contents->bests=personalBests;
   contents->hasMotion=referenceMotion.valid();if(contents->hasMotion)contents->motion=referenceMotion;
-  contents->settings={inactivity.minutes(),brightnessPercent,rpmEstimator,sensorProfile,displayFlipped,mountMode,shakeToWake,batteryIcon};
+  contents->settings={inactivity.minutes(),brightnessPercent,rpmEstimator,sensorProfile,displayFlipped,mountMode,shakeToWake,batteryIcon,minRpmSteps};
   contents->hasThemes=!themeLibrary.empty();contents->themes=themeLibrary;
   contents->hasMilestones=!milestones.isDefault();contents->milestones=milestones;
   contents->hasEffectSet=!effectSet.isDefault();contents->effectSet=effectSet;
@@ -2528,29 +2879,37 @@ LOOP_HELPER static void startRestore() {
   restoreRx.start(restoreText,DeviceBackup::LOADED_TEXT_BYTES,millis());
   Serial.printf("RESTORE_READY max_chars=%u\n",unsigned(DeviceBackup::LOADED_TEXT_BYTES));
 }
-// A backup's loaded effects replace the device's (inside the restore's
-// checkpoint): the region formatted if it never was, then each file into the
-// slot the backup had it in. A backup without them leaves the device's.
-static bool restoreLoaded(const DeviceBackup::Contents &c) {
-  if(!c.loadedCount)return true;
-  if(!loadedEffects)return false;
-  auto &store=loadedEffects->store();
-  if(!store.isOpen()){bool failed=false;while(!store.prepareStep(failed) && !failed){}if(failed)return false;}
+// A backup's loaded effects (DeviceRestore::Device): before anything is
+// written the store is opened, formatted if it never was; last of all the
+// device's are replaced, each file into the slot the backup had it in. A
+// backup without them leaves the device's.
+struct RestoreEffects {
   using Result=LoadedEffects<SpiffsFlash>::Store::Result;
-  if(loadedEffects->clear()!=Result::Ok)return false;
-  for(unsigned i=0;i<c.loadedCount;++i) {
-    const auto &e=c.loaded[i];
-    if(loadedEffects->restore(e.slot,e.file,e.fileBytes,e.source,e.sourceBytes)!=Result::Ok)return false;
+  bool prepare(const DeviceBackup::Contents &c) {
+    if(!c.loadedCount)return true;
+    if(!loadedEffects)return false;
+    auto &store=loadedEffects->store();
+    if(!store.isOpen()){bool failed=false;while(!store.prepareStep(failed) && !failed){}if(failed)return false;}
+    return true;
   }
-  return true;
-}
-// Validate the whole backup first, write every record inside one ADC-owned
-// idle checkpoint with readback, then restart so each store loads normally.
-// Restored records supersede whatever generation the device holds.
+  bool replace(const DeviceBackup::Contents &c) {
+    if(!c.loadedCount)return true;
+    if(loadedEffects->clear()!=Result::Ok)return false;
+    for(unsigned i=0;i<c.loadedCount;++i) {
+      const auto &e=c.loaded[i];
+      if(loadedEffects->restore(e.slot,e.file,e.fileBytes,e.source,e.sourceBytes)!=Result::Ok)return false;
+    }
+    return true;
+  }
+};
+// Validate the whole backup first, then write it inside one ADC-owned idle
+// checkpoint (device_restore.h): restored, the device restarts so each store
+// loads normally; a failure puts the device's own records back and it runs
+// on; only a failure that cannot be put back restarts it on what storage holds.
 LOOP_HELPER static void finishRestore(const Snapshot &s) {
   if(analysis.running() || calibrationNeedsSave()){Serial.println("RESTORE_ERROR reason=analysis_pending written=0");return;}
   auto contents=std::unique_ptr<DeviceBackup::Contents>(new(std::nothrow) DeviceBackup::Contents);
-  if(!contents){Serial.println("RESTORE_ERROR reason=out_of_memory");return;}
+  if(!contents){Serial.println("RESTORE_ERROR reason=out_of_memory written=0");return;}
   // Decoded in place: base64's bytes never overtake its text.
   size_t n=0;uint8_t *bytes=reinterpret_cast<uint8_t *>(restoreText);
   if(!restoreRx.take(bytes,DeviceBackup::LOADED_TEXT_BYTES,n) || !DeviceBackup::decode(bytes,n,*contents)) {
@@ -2561,44 +2920,39 @@ LOOP_HELPER static void finishRestore(const Snapshot &s) {
   if(motionPending || s.phase==AnalogTachometer::Phase::Launch || !acquisition.request(Action::IdleCheckpointBegin,s.launches)) {
     Serial.println("RESTORE_ERROR reason=busy written=0");return;
   }
-  contents->practice.supersede(practice.generation());
-  contents->look.revision=appearance.revision+1;contents->bests.revision=personalBests.revision+1;
-  contents->themes.revision=themeLibrary.revision+1;contents->milestones.revision=milestones.revision+1;
-  contents->effectSet.revision=effectSet.revision+1;
-  const auto &settings=contents->settings;
-  // The effects first: records may name their slots.
-  const bool saved=restoreLoaded(*contents) && practiceStore.save(contents->practice) && appearanceStore.saveViewed(contents->look) &&
-    bestStore.save(contents->bests) && (!contents->hasMotion || motionStore.save(contents->motion)) &&
-    prefs.putUChar("sleep_min",settings.sleepMinutes)==1 && prefs.putUChar(Brightness::KEY,settings.brightness)==1 &&
-    RpmEstimatorSetting::save(prefs,settings.rpmMethod) && SensorProfileSetting::save(prefs,settings.sensorProfile) &&
-    DisplayFlipSetting::save(prefs,settings.flipped) && MountOrientationSetting::save(prefs,settings.mount) &&
-    ShakeWakeSetting::save(prefs,settings.shakeWake) && BatteryIconSetting::save(prefs,settings.batteryIcon) &&
-    (!contents->hasThemes || themeStore.save(contents->themes,true)) &&
-    (!contents->hasMilestones || milestoneStore.save(contents->milestones)) &&
-    (!contents->hasEffectSet || effectSetStore.saveViewed(contents->effectSet));
-  // The log gets the restored records too, mirrored to what NVS now holds,
-  // so the next boot loads them whichever copy it picks.
-  if(saved && historyLog.isOpen() && !(historyLog.saveHistory(contents->practice,contents->practice.generation()) &&
-     historyLog.saveBests(contents->bests,contents->bests.generation())))Serial.println("RESTORE_NOTICE history_log_write_failed");
-  if(!saved) {
-    if(!acquisition.request(Action::CheckpointEnd))Serial.println("RESTORE_ERROR ADC checkpoint resume failed");
-    // Earlier records may already hold the restored values; restoring again is safe.
-    Serial.println("RESTORE_ERROR reason=write_failed written=partial");dirty=true;return;
+  RestoreEffects effects;
+  DeviceRestore::Device<SpiffsFlash,RestoreEffects> device{practiceStore,appearanceStore,bestStore,motionStore,themeStore,milestoneStore,effectSetStore,
+    prefs,historyLog,effects,practice,appearance,personalBests,referenceMotion,themeLibrary,milestones,effectSet,
+    {inactivity.minutes(),brightnessPercent,rpmEstimator,sensorProfile,displayFlipped,mountMode,shakeToWake,batteryIcon,minRpmSteps},loggedHistory,loggedBests};
+  const auto r=DeviceRestore::run(device,*contents);
+  using DeviceRestore::Outcome;
+  if(r.outcome==Outcome::Restored || r.outcome==Outcome::Partial) {
+    if(r.outcome==Outcome::Restored) {
+      // A full NVS refused the mirror; the log holds the records (history_log.h).
+      if(!r.historyMirrored || !r.bestsMirrored)
+        Serial.printf("RESTORE_NOTICE nvs_copy_failed history=%d best=%d store=log\n",!r.historyMirrored,!r.bestsMirrored);
+      heapStatus();Serial.println("RESTORE_OK restarting=1");
+    } else Serial.printf("RESTORE_ERROR reason=write_failed record=%s written=partial restarting=1\n",DeviceRestore::name(r.failed));
+    UsbTx::drain(200);delay(200);ESP.restart();return;
   }
-  heapStatus();
-  Serial.println("RESTORE_OK restarting=1");UsbTx::drain(200);
-  delay(200);ESP.restart();
+  if(!acquisition.request(Action::CheckpointEnd))Serial.println("RESTORE_ERROR ADC checkpoint resume failed");
+  if(r.outcome==Outcome::Refused)Serial.println("RESTORE_ERROR reason=effects_unavailable written=0");
+  else Serial.printf("RESTORE_ERROR reason=write_failed record=%s written=0\n",DeviceRestore::name(r.failed));
+  dirty=true;
 }
 LOOP_HELPER static void pollRestore(const Snapshot &s) {
   const uint32_t now=millis();
-  if(restoreRx.timedOut(now)){restoreRx.cancel();Serial.println("RESTORE_ERROR reason=timeout written=0");return;}
+  if(restoreRx.timedOut(now)){restoreRx.cancel();usbCommands.refused(now,restoreRx.midLine());Serial.println("RESTORE_ERROR reason=timeout written=0");return;}
   // A transfer owns the USB input until it ends; bounded per loop like commands.
+  // One that ends without its "." line tells usbCommands.refused() whether it
+  // ended inside a line (a refused byte always does); the guard then drops
+  // what that host still sends of the upload.
   for(unsigned n=0;n<256 && restoreRx.active() && Serial.available();++n) {
     inactivity.touch(now);
     switch(restoreRx.feed(Serial.read(),now)) {
       case DeviceBackup::TransferEvent::Chunk:Serial.printf("RESTORE_CHUNK chars=%u\n",unsigned(restoreRx.received()));break;
       case DeviceBackup::TransferEvent::Complete:finishRestore(s);break;
-      case DeviceBackup::TransferEvent::Error:usbCommands.refused(now);Serial.printf("RESTORE_ERROR reason=%s written=0\n",restoreRx.error());break;
+      case DeviceBackup::TransferEvent::Error:usbCommands.refused(now,true);Serial.printf("RESTORE_ERROR reason=%s written=0\n",restoreRx.error());break;
       case DeviceBackup::TransferEvent::None:break;
     }
   }
@@ -2617,7 +2971,7 @@ LOOP_HELPER static void listThemes() {
     (unsigned long)themeLibrary.revision,known?int(available):-1,themeStore.neededEntries());
   for(unsigned i=0;i<Themes::SLOTS;++i) {
     char data[(Themes::SLOT_BYTES+2)/3*4+1]={};
-    DeviceBackup::base64Lines(themeLibrary.raw(i),Themes::SLOT_BYTES,96,[&](const char *line){strncpy(data,line,sizeof(data)-1);});
+    DeviceBackup::base64Text(themeLibrary.raw(i),Themes::SLOT_BYTES,data,sizeof(data));
     Palette::Custom theme;const bool valid=themeLibrary.get(i,theme);
     Serial.printf("THEME_SLOT slot=%u theme=%u state=%s data=%s name=%s\n",i,unsigned(Themes::slotTheme(i)),
       Themes::stateName(themeLibrary.state(i)),data,valid?theme.name:"");
@@ -2693,13 +3047,13 @@ LOOP_HELPER static void finishThemeRequest(const Snapshot &s) {
 }
 LOOP_HELPER static void pollThemeRequest(const Snapshot &s) {
   const uint32_t now=millis();
-  if(themeRx.timedOut(now)){themeRx.cancel();Serial.println("THEME_ERROR reason=timeout written=0");themeReply();return;}
+  if(themeRx.timedOut(now)){themeRx.cancel();usbCommands.refused(now,themeRx.midLine());Serial.println("THEME_ERROR reason=timeout written=0");themeReply();return;}
   for(unsigned n=0;n<256 && themeRx.active() && Serial.available();++n) {
     inactivity.touch(now);
     switch(themeRx.feed(Serial.read(),now)) {
       case DeviceBackup::Receiver::Event::Chunk:Serial.printf("THEME_CHUNK chars=%u\n",themeRx.received());themeReply();break;
       case DeviceBackup::Receiver::Event::Complete:finishThemeRequest(s);break;
-      case DeviceBackup::Receiver::Event::Error:usbCommands.refused(now);Serial.printf("THEME_ERROR reason=%s written=0\n",themeRx.error());themeReply();break;
+      case DeviceBackup::Receiver::Event::Error:usbCommands.refused(now,true);Serial.printf("THEME_ERROR reason=%s written=0\n",themeRx.error());themeReply();break;
       case DeviceBackup::Receiver::Event::None:break;
     }
   }
@@ -2716,7 +3070,7 @@ LOOP_HELPER static void listMilestones() {
   unsigned available=0;const bool known=nvsAvailable(available);
   Milestones::Config::Image image;milestones.encode(image);
   char data[(Milestones::Config::IMAGE_BYTES+2)/3*4+1]={};
-  DeviceBackup::base64Lines(image.data(),image.size(),96,[&](const char *line){strncpy(data,line,sizeof(data)-1);});
+  DeviceBackup::base64Text(image.data(),image.size(),data,sizeof(data));
   Serial.printf("MILESTONE_LIST version=3 mode=%s rows=%u max_rows=%u min_rpm=%u max_rpm=%u effects=%u revision=%lu store=%s default=%d nvs_available=%d nvs_needed=%u data=%s%s\n",
     Milestones::name(milestones.mode()),milestones.count(),Milestones::MAX_ROWS,unsigned(Milestones::MIN_RPM),unsigned(Milestones::MAX_RPM),Appearance::EFFECTS,
     (unsigned long)milestones.revision,milestoneStoreName(),milestones.isDefault(),known?int(available):-1,milestoneStore.neededEntries(milestones),data,effectSetFields());
@@ -2880,13 +3234,13 @@ LOOP_HELPER static void finishEffectRequest(const Snapshot &s) {
 }
 LOOP_HELPER static void pollEffectRequest(const Snapshot &s) {
   const uint32_t now=millis();
-  if(effectRx.timedOut(now)){effectRx.cancel();Serial.println("FX_ERROR reason=timeout written=0");effectReply();return;}
+  if(effectRx.timedOut(now)){effectRx.cancel();usbCommands.refused(now,effectRx.midLine());Serial.println("FX_ERROR reason=timeout written=0");effectReply();return;}
   for(unsigned n=0;n<256 && effectRx.active() && Serial.available();++n) {
     inactivity.touch(now);
     switch(effectRx.feed(Serial.read(),now)) {
       case FxTransfer::Event::Chunk:Serial.printf("FX_CHUNK chars=%u\n",effectRx.received());effectReply();break;
       case FxTransfer::Event::Complete:finishEffectRequest(s);break;
-      case FxTransfer::Event::Error:usbCommands.refused(now);Serial.printf("FX_ERROR reason=%s written=0\n",effectRx.error());effectReply();break;
+      case FxTransfer::Event::Error:usbCommands.refused(now,true);Serial.printf("FX_ERROR reason=%s written=0\n",effectRx.error());effectReply();break;
       case FxTransfer::Event::None:break;
     }
   }
@@ -2962,13 +3316,13 @@ LOOP_HELPER static bool finishEffectSetRequest(const Snapshot &s) {
 
 LOOP_HELPER static void pollMilestoneRequest(const Snapshot &s) {
   const uint32_t now=millis();
-  if(milestoneRx.timedOut(now)){milestoneRx.cancel();Serial.println("MILESTONE_ERROR reason=timeout written=0");milestoneReply();return;}
+  if(milestoneRx.timedOut(now)){milestoneRx.cancel();usbCommands.refused(now,milestoneRx.midLine());Serial.println("MILESTONE_ERROR reason=timeout written=0");milestoneReply();return;}
   for(unsigned n=0;n<256 && milestoneRx.active() && Serial.available();++n) {
     inactivity.touch(now);
     switch(milestoneRx.feed(Serial.read(),now)) {
       case DeviceBackup::TransferEvent::Chunk:Serial.printf("MILESTONE_CHUNK chars=%u\n",milestoneRx.received());milestoneReply();break;
       case DeviceBackup::TransferEvent::Complete:if(!finishEffectSetRequest(s))finishMilestoneRequest(s);break;
-      case DeviceBackup::TransferEvent::Error:usbCommands.refused(now);Serial.printf("MILESTONE_ERROR reason=%s written=0\n",milestoneRx.error());milestoneReply();break;
+      case DeviceBackup::TransferEvent::Error:usbCommands.refused(now,true);Serial.printf("MILESTONE_ERROR reason=%s written=0\n",milestoneRx.error());milestoneReply();break;
       case DeviceBackup::TransferEvent::None:break;
     }
   }
@@ -3095,6 +3449,7 @@ static void recheckUsbStandby(esp_sleep_wakeup_cause_t cause) {
 }
 
 void setup() {
+  const bool nvsWasVirgin=nvsVirgin();  // before anything opens a namespace
   const auto wakeCause=esp_sleep_get_wakeup_cause();
   const int64_t sleepEnded=wallUs();
   recheckUsbStandby(wakeCause);
@@ -3158,16 +3513,23 @@ void setup() {
   if(!pm1Idle().masked(0x06,0x01,0x01))Serial.println("PM1_NOTICE charge_enable_failed");
   if(!pm1Idle().run([](){return M5.Power.M5pm1.clearWakeSource();}))Serial.println("PM1_NOTICE wake_clear_failed");
   if(!shakeWake.clear())Serial.println("SHAKE_WAKE_NOTICE startup_disarm_failed");
-  pinMode(POWER_KEY_IRQ_PIN,INPUT_PULLUP);
-  attachInterrupt(POWER_KEY_IRQ_PIN,onPowerKeyIrq,FALLING);
+  pinMode(POWER_KEY_IRQ_PIN,INPUT_PULLUP);  // polled (pollPowerKey), never an interrupt
   // The value found at boot shows whether PM1 kept SINGLE_RST_DIS through power-off.
   uint8_t bootKeyConfig=0;
   const bool bootKeyConfigRead=pm1Idle().read(StickS3PowerKey::BUTTON_CONFIG,&bootKeyConfig,1);
   const bool keyConfigured=powerKey().configure();
   Serial.printf("POWER_KEY_BOOT btn_cfg_valid=%d btn_cfg=0x%02x configured=%d\n",bootKeyConfigRead,bootKeyConfig,keyConfigured);
-  if(!recoverWipe())return;
-  prefs.begin("launchlab-mini",false);
+  if(!recoverWipe()) {
+    // Unplugged in a standby the blocked page began: finish it (it writes nothing).
+    if(finishStandby)powerKeyRequested=true;
+#if LAUNCHLAB_HIL
+    hilBoot();
+#endif
+    return;
+  }
   openHistoryLog();
+  disownLostNvs(nvsWasVirgin);
+  prefs.begin("launchlab-mini",false);
   powerLogReady=powerPrefs.begin("ll-power",false);
   PowerDiagnostics::fresh(powerLog);
   bool powerInNvs=false;
@@ -3177,9 +3539,7 @@ void setup() {
       && PowerDiagnostics::valid(loaded)){powerLog=loaded;powerInNvs=true;powerMirror=loaded.checksum;}
     else {powerLogReady=false;Serial.println("POWER_LOG_NOTICE invalid_existing_log_retained");}
   }
-  {std::unique_ptr<PowerDiagnostics::Image> logged(new(std::nothrow) PowerDiagnostics::Image);uint32_t mirrored=0;
-   const bool inLog=logged && historyLog.isOpen() && historyLog.loadPower(*logged,mirrored);
-   if(HistoryLog::pick(inLog,mirrored,powerInNvs,powerMirror)==HistoryLog::Source::Log)powerLog=*logged;}
+  pickLoggedPower(powerInNvs?HistoryLog::Nvs::Found:powerLogReady && !powerPrefs.isKey("log")?HistoryLog::Nvs::Absent:HistoryLog::Nvs::Unreadable);
   ++powerLog.boots;
   const bool wakingFromStandby=powerLog.pendingSleep;
   uint8_t loggedWake=pm1WakeValid?pm1WakeFlags:0;
@@ -3237,16 +3597,15 @@ void setup() {
   if(!ShakeWakeSetting::load(prefs,shakeToWake))Serial.println("SHAKE_WAKE_SETTING_NOTICE invalid_saved_value_retained_using_on");
   unusedWakes=prefs.getUChar(UnusedWakes::KEY,0);
   if(!BatteryIconSetting::load(prefs,batteryIcon))Serial.println("BATTERY_ICON_SETTING_NOTICE invalid_saved_value_retained_using_on");
+  if(!MinRpmSetting::load(prefs,minRpmSteps))Serial.printf("MIN_RPM_SETTING_NOTICE invalid_saved_value_retained_using_%u\n",unsigned(MinRpm::rpm(minRpmSteps)));
+  if(!BattlesSetting::load(prefs,battlesOn,battleMatchTo))Serial.println("BATTLES_SETTING_NOTICE invalid_saved_value_retained_using_on");
   if(!DisplayFlipSetting::load(prefs,displayFlipped))Serial.println("DISPLAY_SETTING_NOTICE invalid_record_retained_using_flip_off_default");
   if(!MountOrientationSetting::load(prefs,mountMode))Serial.println("MOUNT_SETTING_NOTICE invalid_record_retained_using_top_default");
   liveMount=mountMode;
   if(!appearanceStore.begin(appearance,"ll-appearance","cfg0","cfg1"))Serial.println("APPEARANCE_NOTICE invalid_record_retained_using_defaults");
   const bool bestsInNvs=bestStore.begin(personalBests,"ll-bests","best0","best1") && bestStore.present();
   if(!bestStore.ready() || bestStore.damaged())Serial.println("BEST_NOTICE invalid_record_retained_celebration_disabled");
-  {Appearance::Bests logged;uint32_t mirrored=0;const bool inLog=historyLog.isOpen() && historyLog.loadBests(logged,mirrored);
-   const auto from=HistoryLog::pick(inLog,mirrored,bestsInNvs,personalBests.generation());
-   if(from==HistoryLog::Source::Log)personalBests=logged;
-   loggedBests=from==HistoryLog::Source::Log?personalBests.generation():~personalBests.generation();}
+  pickLoggedBests(bestsInNvs);
   if(themeStore.begin(themeLibrary)==ThemeStore::Status::Unreadable)Serial.println("THEME_NOTICE invalid_record_retained_using_default_colors");
   // 0.17's slots, a packed record for a wider table, else 0.15's carried over (milestone_store.h).
   milestoneStore.begin(milestones);
@@ -3261,16 +3620,15 @@ void setup() {
   if(pin<1 || pin>10)pin=1;
   extPower=prefs.getBool("ext5v",false);
   saveError=!practiceStore.begin(practice);
-  // Newest wins between the log and NVS (history_log.h); a copy only in NVS is logged at the next save.
-  if(historyLog.isOpen()) {
-    std::unique_ptr<PracticeHistory> logged(new(std::nothrow) PracticeHistory);uint32_t mirrored=0;
-    const bool inLog=logged && historyLog.loadHistory(*logged,mirrored);
-    const auto from=HistoryLog::pick(inLog,mirrored,practiceStore.found(),practiceStore.savedGeneration());
-    if(from==HistoryLog::Source::Log){practice=*logged;saveError=false;}
-    loggedHistory=from==HistoryLog::Source::Log?practice.generation():~practice.generation();
-    Serial.printf("HISTORY_LOG_LOAD from=%s log_generation=%lu mirrored=%lu nvs_generation=%lu nvs_found=%d\n",
-      from==HistoryLog::Source::Log?"log":from==HistoryLog::Source::Nvs?"nvs":"none",inLog?(unsigned long)logged->generation():0ul,
-      (unsigned long)mirrored,(unsigned long)practiceStore.savedGeneration(),practiceStore.found());
+  pickLoggedHistory();
+  // The battle records, from the log alone. This stick's ID in a battle is the
+  // end of its Bluetooth address, as its default name is.
+  {
+    const bool found=historyLog.isOpen() && historyLog.loadRivals(rivals);
+    loggedRivals=rivals.generation();
+    uint8_t mac[6]={};esp_read_mac(mac,ESP_MAC_BT);
+    battle.begin(uint32_t(mac[2])<<24|uint32_t(mac[3])<<16|uint32_t(mac[4])<<8|mac[5]);
+    Serial.printf("BATTLE_LOAD found=%d rivals=%u on=%d\n",found,rivals.count(),battlesOn);
   }
   // Reclaim the orphaned RF calibration blob found in ll-practice; the history
   // save it would otherwise crowd out matters far more. Boot only, before ADC.
@@ -3366,7 +3724,7 @@ LOOP_HELPER static void tickSound(const Snapshot &s) {
 #if LAUNCHLAB_HIL
   hilFeedProbe(soundPlayer.streaming(),hilStatusRuns,saveCount,lastDraw);
 #endif
-  updateStartFloor();
+  updateStartFloor();updateLaunchFloor();
   if(measuring || motionPending || soundPlayer.muted)return;
   // Render a slice per idle pass (1/64 s of audio, a few ms): a waiting
   // request first, else the chosen effect, ready before the next best or the
@@ -3515,11 +3873,13 @@ LOOP_HELPER static void runUsbCommand(const char *command,const Snapshot &s) {
   else if(c=='F')listEffects();
   else if(c=='X')startEffectRequest();
   else if(c=='m') {
-    // The Mic RPM page from the Main screen or the Menu, and back: firmware/tools/mic_capture.py.
-    if(controls.page==Controls::Page::MicRpm)controls.page=Controls::Page::Menu;
-    else if(controls.page==Controls::Page::Main || controls.page==Controls::Page::Menu){controls.page=Controls::Page::MicRpm;controls.menu=Controls::MIC_ROW;}
+    // Analysis from the Main screen or the Menu, and back, as its menu row and a
+    // hold of B would: firmware/tools/mic_capture.py, HIL.
+    const auto previous=controls.page;
+    if(controls.page==Controls::Page::Analysis)controls.page=Controls::Page::Main;
+    else if(controls.page==Controls::Page::Main || controls.page==Controls::Page::Menu){controls.page=Controls::Page::Analysis;controls.menu=Controls::ANALYSIS_ROW;}
     else {Serial.println("MIC_STATE error=busy_page");return;}
-    syncNavigation();dirty=true;
+    navigate(Controls::Effect::None,previous);syncNavigation();dirty=true;
   }
   else if(c=='J')exportCalibration();
   else if(c=='Z')exportCalibrationBatch();
@@ -3571,7 +3931,7 @@ LOOP_HELPER static void pollCommands(const Snapshot &s) {
       if(c=='p')status();else if(c=='b' && !wipeBlocked)cancelWipe();
       continue;
     }
-    if(guard.drop(c,now))continue;  // the rest of a refused transfer line
+    if(guard.drop(c,now))continue;  // the rest of a line whose transfer was refused or timed out
 #if LAUNCHLAB_HIL
     if(hilFeed(c)){guard.consumed(c,now);continue;}
 #endif
@@ -3645,6 +4005,7 @@ static bool validValue(unsigned id,uint8_t v) {
     case S::Theme:return v<Appearance::ALL_THEMES;
     case S::Celebrate:case S::Sound:return v<3;
     case S::Mount:return MountOrientation::valid(v);
+    case S::MinRpm:return MinRpm::valid(v);
     default:return Controls::editable(id); // applySetting checks the rest.
   }
 }
@@ -3679,14 +4040,13 @@ LOOP_HELPER static size_t options(unsigned id,uint8_t *out,size_t capacity) {
     case S::Rpm:case S::Flip:case S::Sensor:case S::Mount:case S::ShakeWake:case S::BatteryIcon:case S::Bluetooth:
       for(unsigned v=0;v<2;++v)at=putOption(out,at,capacity,id,v);break;
     case S::Celebrate:case S::Sound:for(unsigned v=0;v<3;++v)at=putOption(out,at,capacity,id,v);break;
+    case S::MinRpm:for(unsigned v=MinRpm::MIN_STEPS;v<=MinRpm::MAX_STEPS;++v)at=putOption(out,at,capacity,id,v);break;
     case S::Theme:
       for(unsigned v=0;v<Appearance::ALL_THEMES;++v)if(themeLibrary.available(Appearance::Theme(v)))at=putOption(out,at,capacity,id,v);
       break;
-    case S::BestEffect: {
-      const auto first=appearance.effect;auto e=first;
-      do {at=putOption(out,at,capacity,id,uint8_t(e));e=EffectSet::next(e,effectSet.mask());} while(e!=first);
+    case S::BestEffect:
+      EffectSet::choices(appearance.effect,effectSet.mask(),[&](Appearance::Effect e){at=putOption(out,at,capacity,id,uint8_t(e));});
       break;
-    }
     case S::WipeAll:case S::About:break;
   }
   return at;
@@ -3808,6 +4168,7 @@ LOOP_HELPER static int32_t run(uint8_t op,const uint8_t *args,size_t length,uint
       if(!replay)return -BUSY;
       return int32_t(BleMotion::encodeReplay(latestMotion,*replay,out,capacity));
     }
+    case 16:return int32_t(Battle::report(rivals,out,capacity));
     // 14 Set level reference is in the protocol but not in this firmware:
     // unknown command, which an app reads as not supported.
     default:return -UNKNOWN;
@@ -3829,6 +4190,7 @@ void loop() {
   if(BleLink::takeBondsChanged()){settingsSave.mark(SettingsSave::Bonds);dirty=true;}
   BattlePassFeed::tick(millis());
   BattlePassFeed::tickButton(buttonsFresh,controls.page==Controls::Page::BeybladeX);
+  BattleFeed::tick(millis(),s);
   BleCommands::tickLiveOrientation(millis(),s);
   restartForBluetooth(millis(),s);
   if(buttonsFresh && heldButtons.use(millis(),M5.BtnA.isPressed() || M5.BtnB.isPressed(),M5.BtnA.wasReleased() || M5.BtnB.wasReleased()))
@@ -3843,6 +4205,13 @@ void loop() {
 #endif
   if(wipeBlocked) {
     pollWipe(millis(),buttonsFresh,s);
+    // Nothing saves here, but the side key and the timer still power off.
+    pollPowerKey(millis());
+    wipeBlockedPowerOff(millis());
+#if LAUNCHLAB_HIL
+    // Only the HIL commands a blocked unit allows (hil.h, Hil::blockedCommand).
+    for(unsigned n=0;n<32 && Serial.available();++n)hilFeed(char(Serial.read()));
+#endif
     tickDisplayPower(millis(),s);
     if(dirty){draw(s);lastDraw=millis();dirty=false;}
     clock.release();delay(IdlePowerPolicy::UI_POLL_MS);return;
@@ -3911,42 +4280,14 @@ void loop() {
   if(analysisResults.recordPending())settingsSave.mark(SettingsSave::AnalysisResult);
   pollPowerKey(millis());
   Snapshot event;
-  while(acquisition.takeEvent(event)) {
-    if(event.revision!=lastRevision) {
-      lastRevision=event.revision;
-      Serial.printf("LAUNCH_RESULT valid=%d peak_rpm=%.1f revs=%lu amplitude=%.1f start_noise=%.1f launches=%lu end=%s t_us=%llu\n",
-        event.valid,event.resultRpm,(unsigned long)event.revolutions,event.amplitude,event.startNoise,
-        (unsigned long)event.launches,event.endName(),(unsigned long long)event.detectorUs);
-      followAnalysisLaunch(event);
-      if(controls.page==Controls::Page::WearCheck) {
-        const auto stageBefore=controls.wear.stage();
-        const auto stepBefore=controls.wear.step();
-        const auto outcome=controls.wear.observeBurst(event.launches,event.valid,event.resultRpm,level.reading(millis()));
-        if(outcome!=WearCheck::Outcome::None) {
-          logWearPull(stageBefore,outcome,event.resultRpm);
-          if(controls.wear.step()!=stepBefore)
-            Serial.printf("WEAR_CHECK_STEP step=%s t_us=%llu\n",WearCheck::stepName(controls.wear.step()),(unsigned long long)event.detectorUs);
-          if(outcome==WearCheck::Outcome::Completed) {
-            Serial.printf("WEAR_CHECK_RESULT rpm=%.1f median_rpm=%.1f level_rpm=%.1f pull_down_rpm=%.1f pull_up_rpm=%.1f pulls=%u tolerance_deg=%.0f baseline_rpm=%.1f\n",
-              controls.wear.overallMean(),controls.wear.overallMedianMean(),
-              controls.wear.stageMean(0),controls.wear.stageMean(1),controls.wear.stageMean(2),
-              controls.wear.totalAccepted(),WearCheck::TOLERANCE_DEG,WearCheck::FRESH_BASELINE_RPM);
-          }
-        }
-      } else if(practice.accept(event.launches,event.valid,event.resultRpm,millis())) {
-        prepareMotion(event);logLaunchMetrics(event);noteStartMark(event);
-        inactivity.touch(millis());
-        Serial.printf("HISTORY_ADDED number=%lu session=%lu rpm=%.1f\n",(unsigned long)practice.recent()->number,
-          (unsigned long)practice.recent()->session,practice.recent()->rpm);
-      }
-      dirty=true;
-    }
-    if(event.phase!=lastPhase || event.signalFault!=lastFault) {
-      lastPhase=event.phase;lastFault=event.signalFault;dirty=true;
-      Serial.printf("RPM_STATE state=%s t_us=%llu contrast=%.1f noise=%.1f\n",event.stateName(),
-        (unsigned long long)event.detectorUs,event.contrast,event.noise);
-    }
+#if LAUNCHLAB_HIL
+  if(hilFlushPull.armed && s.launches!=hilFlushPull.launches) {
+    hilFlushPull.armed=false;hilFlushPull.holding=true;powerKeyRequested=true;powerKeyRequestedAt=millis();
+    Serial.printf("HIL_FLUSH_PULL off_requested launches=%lu\n",(unsigned long)s.launches);
   }
+  if(!hilFlushPull.holding)
+#endif
+  while(acquisition.takeEvent(event))routeEvent(event,millis(),true);
   s=acquisition.snapshot();
   const uint32_t now=millis();
   if(s.phase==AnalogTachometer::Phase::Launch || motionDemo || tournamentMode || historyPage || diagnostics){
@@ -3964,6 +4305,7 @@ void loop() {
   finishMotion();
   retryMotion(now,s);
   saveHistory(now,s);s=acquisition.snapshot();
+  saveRivals(now,s);
   saveSettings(now,s);s=acquisition.snapshot();
   releaseOrphanCheckpoint(now,s);
   pollBattery(now,s);

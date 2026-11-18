@@ -44,6 +44,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from hil_device import Device  # noqa: E402
+import port_guard  # noqa: E402
 from port_guard import require_free  # noqa: E402
 import milestones  # noqa: E402
 from rig import Rig as PullRig  # noqa: E402
@@ -120,6 +121,11 @@ def plain_status(dev, timeout=6):
     start = dev.mark()
     dev.write('p')
     first = dev.wait(lambda l: l.tag == 'STATUS', timeout, since=start)
+    if first is None and not dev.since(start) and getattr(dev, 'reenumerate', None) and dev.reenumerate('p'):
+        # Not a line since the request: the USB restart wedge (hil_device.py). Ask once more.
+        start = dev.mark()
+        dev.write('p')
+        first = dev.wait(lambda l: l.tag == 'STATUS', timeout, since=start)
     if first is not None:
         start = first.index
         dev.wait('MOTION_CLIP', timeout, since=start)
@@ -157,7 +163,9 @@ def main():
     p.add_argument('--esptool', default='esptool')
     p.add_argument('--rollback', nargs=3, action='append', default=[], metavar=('VERSION', 'FROZEN', 'HIL'),
                    help='an older release (0.15.0, 0.17.0) to roll back to: its frozen image and a HIL build of its source')
+    port_guard.add_arguments(p)
     a = p.parse_args()
+    port_guard.apply(a, a.port)
     a.out.mkdir(parents=True, exist_ok=True)
     log = a.out / 'serial.log'
     checks = []

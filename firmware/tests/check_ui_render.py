@@ -49,7 +49,8 @@ CUSTOM = ['--custom', '0006ffff5aeb2d7f2d7ffda007e0f800', 'Dragoon Storm']
 LIGHT_FIXTURE = ROOT / 'firmware/tests/fixtures/ui_render_light.txt'
 # Paper from fixtures/theme_vectors.json: white background, every role readable.
 LIGHT = ['--custom', 'ffff0000738e001f00009a000400c000', 'Paper']
-MIC_FIXTURE = ROOT / 'firmware/tests/fixtures/ui_render_mic.txt'
+# The battle cards and the Battles pages, in both flips (the open battle's card keeps the level).
+BATTLE_FIXTURE = ROOT / 'firmware/tests/fixtures/ui_render_battle.txt'
 ANALYSIS_FIXTURE = ROOT / 'firmware/tests/fixtures/ui_render_analysis.txt'
 MIN_READABLE_HEADER = 0.90
 DEVICE_FRAMES = ROOT / 'firmware/tests/fixtures/effect_device_frames.txt'
@@ -240,8 +241,8 @@ def main():
                                             text=True).stdout for theme in ([], CUSTOM, LIGHT))
         settled = ''.join(subprocess.run([str(build / 'ui_render'), '--settled', *theme], check=True, capture_output=True,
                                          text=True).stdout for theme in ([], CUSTOM, LIGHT))
-        mic = ''.join(subprocess.run([str(build / 'ui_render'), '--mic', *theme], check=True, capture_output=True,
-                                     text=True).stdout for theme in ([], CUSTOM, LIGHT))
+        battle = ''.join(subprocess.run([str(build / 'ui_render'), '--battle', *theme], check=True, capture_output=True,
+                                        text=True).stdout for theme in ([], LIGHT))
         analysis = ''.join(subprocess.run([str(build / 'ui_render'), '--analysis', *theme], check=True, capture_output=True,
                                           text=True).stdout for theme in ([], CUSTOM, LIGHT))
         costs = cost_rows(build, DEVICE_FRAMES)
@@ -279,13 +280,14 @@ def main():
     if illegible:
         print(f'FAIL: {len(illegible)} celebration frames change UI ink or hide the header: ' + ', '.join(illegible[:8]))
         failed += 1
-    for fixture, rendered in ((FIXTURE, frames), (CELEBRATIONS, effects), (LIGHT_FIXTURE, light), (MIC_FIXTURE, mic),
-                             (ANALYSIS_FIXTURE, analysis)):
+    for fixture, rendered in ((FIXTURE, frames), (CELEBRATIONS, effects), (LIGHT_FIXTURE, light),
+                              (BATTLE_FIXTURE, battle),
+                              (ANALYSIS_FIXTURE, analysis)):
         if update:
             fixture.write_text(rendered)
             print(f'Wrote {len(rendered.splitlines())} frame hashes to {fixture.relative_to(ROOT)}')
             continue
-        expected = dict(line.split() for line in fixture.read_text().splitlines())
+        expected = dict(line.split() for line in fixture.read_text().splitlines()) if fixture.exists() else {}
         actual = dict(line.split() for line in rendered.splitlines())
         changed = sorted(name for name in expected if actual.get(name) != expected[name])
         extra = sorted(set(actual) - set(expected))
@@ -297,7 +299,7 @@ def main():
         return int(bool(failed))
     print(f'PASS: {len(frames.splitlines())} screen frames (every screen x 10 built-in themes x both flips, and a custom theme), '
           f'{len(effects.splitlines())} celebration frames, {len(light.splitlines())} light-theme frames and '
-          f'{len(mic.splitlines())} Mic RPM frames and {len(analysis.splitlines())} Analysis frames match the pinned renders; '
+          f'{len(battle.splitlines())} battle frames and {len(analysis.splitlines())} Analysis frames match the pinned renders; '
           f'{len(legibility.splitlines())} celebration frames (default, dark and light theme) keep the UI legible, and '
           f'{len(settled.splitlines())} frames from each effect\'s end through the next second equal the recap without it; '
           f'the cost model is at most {MEDIAN_SLACK_US / 1000:g} ms (median frame) and {PEAK_UNDER_US / 1000:g} ms (slowest frame) '

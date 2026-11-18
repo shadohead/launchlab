@@ -53,7 +53,7 @@ struct SerialFake {
   void println(const char *s){output.emplace_back(s);}
   template<class... T>void printf(const char *f,T...){output.emplace_back(f);}
 }Serial;
-namespace Controls {enum class Page:uint8_t{Main,History,Settings,Edit,Wipe,Battery,Tournament,Menu,MicRpm,Analysis};constexpr uint8_t MIC_ROW=4;}
+namespace Controls {enum class Page:uint8_t{Main,History,Settings,Edit,Wipe,Battery,Tournament,Menu,Analysis};constexpr uint8_t ANALYSIS_ROW=4;enum class Effect:uint8_t{None};}
 static struct {Controls::Page page=Controls::Page::Main;uint8_t menu=0;}controls;
 static bool captureBlocked=false;
 static void leaveMicPage(){act("analysis_capture");if(!captureBlocked)controls.page=Controls::Page::Main;}
@@ -73,75 +73,53 @@ static void noteMotionRestoreFailure(){}
 struct IdleFake {template<class F>bool run(F fn){return fn();}};
 static IdleFake &pm1Idle(){static IdleFake idle;return idle;}
 static struct {struct {void setExtOutput(bool){act("ext_power");}}Power;}M5;
-// Restore: the real receiver takes base64 lines and '.'; any other byte ends it.
-static struct Receiver {
-  bool receiving=false;std::string text;unsigned received=0,errors=0;
+// The four line transfers run the sketch's own poll functions (their
+// timeouts and refusals included) over a receiver with the real framing:
+// base64 lines, then a "." line; any other byte refuses the transfer, and
+// 15 s without a byte times it out.
+namespace DeviceBackup {constexpr unsigned TEXT_BYTES=5248;enum class TransferEvent {None,Chunk,Complete,Error};struct Receiver {using Event=TransferEvent;};}
+namespace FxTransfer {using Event=DeviceBackup::TransferEvent;}
+struct LineRx {
+  const char *name;bool receiving=false,dot=false;std::string text;unsigned completed=0,errors=0;uint32_t last=0;
   bool active()const{return receiving;}void cancel(){receiving=false;}
-  void start(uint32_t){receiving=true;text.clear();act("restore_start");}
-}restoreRx;
-static void startRestore(){restoreRx.start(0);}
-// Theme requests: the same framing as a restore.
+  void start(uint32_t now){receiving=true;dot=false;text.clear();last=now;act(name);}
+  bool timedOut(uint32_t now)const{return receiving && now-last>=15000;}
+  bool midLine()const{return dot || !(text.empty() || text.back()=='\n');}
+  unsigned received()const{return unsigned(text.size());}
+  const char *error()const{return "bad_character";}
+  DeviceBackup::TransferEvent feed(char c,uint32_t now) {
+    using E=DeviceBackup::TransferEvent;
+    last=now;
+    const bool lineStart=text.empty() || text.back()=='\n';
+    if(c=='\r')return E::None;
+    if(c=='\n') {
+      if(dot){receiving=dot=false;++completed;return E::Complete;}
+      if(lineStart)return E::None;
+      text+=c;return E::Chunk;
+    }
+    if(c=='.' && lineStart && !dot){dot=true;return E::None;}
+    const bool b64=(c>='A' && c<='Z')||(c>='a' && c<='z')||(c>='0' && c<='9')||c=='+'||c=='/'||c=='=';
+    if(dot || !b64){receiving=false;++errors;return E::Error;}
+    text+=c;return E::None;
+  }
+  void clear(){*this=LineRx{name};}
+};
+static LineRx restoreRx{"restore_start"},themeRx{"theme_start"},milestoneRx{"milestone_start"},effectRx{"effect_start"};
+static void startRestore(){restoreRx.start(millis());}
+static void finishRestore(const Snapshot &){act("restore_done");}
 namespace Themes {struct Request {static constexpr unsigned BYTES=44;};}
-static struct ThemeReceiver {
-  bool receiving=false;std::string text;unsigned received=0,errors=0;
-  bool active()const{return receiving;}void cancel(){receiving=false;}
-  void start(uint32_t){receiving=true;text.clear();act("theme_start");}
-}themeRx;
 static void themeReply(){}
 static void listThemes(){act("theme_list");}
-static void pollThemeRequest(const Snapshot &) {
-  while(themeRx.active() && Serial.available()) {
-    const char c=Serial.read();
-    const bool b64=(c>='A' && c<='Z')||(c>='a' && c<='z')||(c>='0' && c<='9')||c=='+'||c=='/'||c=='=';
-    if(c=='.'){themeRx.receiving=false;++themeRx.received;continue;}
-    if(b64 || c=='\n'){themeRx.text+=c;continue;}
-    themeRx.receiving=false;++themeRx.errors;
-  }
-}
-// Milestone requests: the same framing again.
+static void finishThemeRequest(const Snapshot &){act("theme_done");}
 namespace Milestones {struct Request {static constexpr unsigned BYTES=40;};}
-static struct MilestoneReceiver {
-  bool receiving=false;std::string text;unsigned received=0,errors=0;
-  bool active()const{return receiving;}void cancel(){receiving=false;}
-  void start(uint32_t){receiving=true;text.clear();act("milestone_start");}
-}milestoneRx;
 static void milestoneReply(){}
 static void listMilestones(){act("milestone_list");}
-static void pollMilestoneRequest(const Snapshot &) {
-  while(milestoneRx.active() && Serial.available()) {
-    const char c=Serial.read();
-    const bool b64=(c>='A' && c<='Z')||(c>='a' && c<='z')||(c>='0' && c<='9')||c=='+'||c=='/'||c=='=';
-    if(c=='.'){milestoneRx.receiving=false;++milestoneRx.received;continue;}
-    if(b64 || c=='\n'){milestoneRx.text+=c;continue;}
-    milestoneRx.receiving=false;++milestoneRx.errors;
-  }
-}
-// Loaded-effect requests: the same framing again.
-static struct EffectReceiver {
-  bool receiving=false;std::string text;unsigned received=0,errors=0;
-  bool active()const{return receiving;}void cancel(){receiving=false;}
-}effectRx;
+static bool finishEffectSetRequest(const Snapshot &){return false;}
+static void finishMilestoneRequest(const Snapshot &){act("milestone_done");}
+static void effectReply(){}
 static void listEffects(){act("effect_list");}
-static void startEffectRequest(){effectRx.receiving=true;effectRx.text.clear();act("effect_start");}
-static void pollEffectRequest(const Snapshot &) {
-  while(effectRx.active() && Serial.available()) {
-    const char c=Serial.read();
-    const bool b64=(c>='A' && c<='Z')||(c>='a' && c<='z')||(c>='0' && c<='9')||c=='+'||c=='/'||c=='=';
-    if(c=='.'){effectRx.receiving=false;++effectRx.received;continue;}
-    if(b64 || c=='\n'){effectRx.text+=c;continue;}
-    effectRx.receiving=false;++effectRx.errors;
-  }
-}
-static void pollRestore(const Snapshot &) {
-  while(restoreRx.active() && Serial.available()) {
-    const char c=Serial.read();
-    const bool b64=(c>='A' && c<='Z')||(c>='a' && c<='z')||(c>='0' && c<='9')||c=='+'||c=='/'||c=='=';
-    if(c=='.'){restoreRx.receiving=false;++restoreRx.received;continue;}
-    if(b64 || c=='\n'){restoreRx.text+=c;continue;}
-    restoreRx.receiving=false;++restoreRx.errors;
-  }
-}
-namespace DeviceBackup {constexpr unsigned TEXT_BYTES=5248;}
+static void startEffectRequest(){effectRx.start(millis());}
+static void finishEffectRequest(const Snapshot &){act("effect_done");}
 namespace Appearance {enum class Effect:uint8_t{Orbit};inline bool drawn(unsigned d){return d<6;}inline bool celebrates(unsigned d){return drawn(d);}}
 static Appearance::Effect celebrationEffect(){return Appearance::Effect::Orbit;}
 static void previewBestEffect(Appearance::Effect){act("effect");}
@@ -157,7 +135,7 @@ static void exportBackup(){act("backup");clockMs+=60;}static void cancelWipe(){a
 static void buttonA(){act("button");}static void holdA(){act("button");}static void holdB(){act("button");}
 static void noteWearTap(const char *){}
 static void toggleHistory(){act("history");}static void nextView(){act("view");}static void exportMotion(){act("export");}
-static void cancelSettingEdit(){}static void syncNavigation(){}static void newSession(){act("session");}
+static void cancelSettingEdit(){}static void syncNavigation(){}static void navigate(Controls::Effect,Controls::Page){act("navigate");}static void newSession(){act("session");}
 static void exportHistory(){act("export");}static void previewHistory(){act("view");}
 static void checkStorage(){act("storage");}static void checkMotionStorage(){act("storage");}
 static void exportLaunchWavs(){}
@@ -180,11 +158,11 @@ static uint32_t loopRng=11;
 static void pass(){pollCommands(Snapshot{});loopRng=loopRng*1664525u+1013904223u;clockMs+=5+(loopRng>>24)%31;}
 static void send(const std::string &bytes){for(char c:bytes)Serial.input.push_back(c);while(Serial.available())pass();}
 static void idle(unsigned ms){for(unsigned t=0;t<ms;t+=5)pass();}
-static void reset(){acted.clear();Serial.input.clear();Serial.output.clear();restoreRx={};themeRx={};milestoneRx={};effectRx={};controls.page=Controls::Page::Main;captureBlocked=false;idle(100);}
+static void reset(){acted.clear();Serial.input.clear();Serial.output.clear();restoreRx.clear();themeRx.clear();milestoneRx.clear();effectRx.clear();controls.page=Controls::Page::Main;captureBlocked=false;idle(100);}
 static unsigned harmful() {
   unsigned n=0;
   for(auto &[what,count]:acted)
-    if(what!="status" && what!="power_log" && what!="cpu_power" && what!="backup" && what!="restore_start")n+=count;
+    if(what!="status" && what!="power_log" && what!="cpu_power" && what!="backup" && what!="restore_start" && what!="restore_done")n+=count; // a restore validates its container
   return n;
 }
 int main() {
@@ -212,24 +190,71 @@ int main() {
   // The beywatch updater: K, then R + base64 lines + '.'.
   reset();send("K");idle(100);assert(acted["backup"]==1 && !harmful());
   send("R");send("QUJDRA==\nRUZHSA==\n.\n");idle(50);
-  assert(acted["restore_start"]==1 && restoreRx.received==1 && restoreRx.text=="QUJDRA==\nRUZHSA==\n" && !harmful());
+  assert(acted["restore_start"]==1 && restoreRx.completed==1 && restoreRx.text=="QUJDRA==\nRUZHSA==\n" && !harmful());
   // The theme editor: L lists, T takes one framed request, each sent standalone.
   reset();send("L\n");idle(50);assert(acted["theme_list"]==1);
   reset();send("T\n");idle(50);assert(acted["theme_start"]==1 && themeRx.active());
-  send("TExRAQEA\n.\n");idle(50);assert(!themeRx.active() && themeRx.received==1 && themeRx.text=="TExRAQEA\n" && !themeRx.errors);
+  send("TExRAQEA\n.\n");idle(50);assert(!themeRx.active() && themeRx.completed==1 && themeRx.text=="TExRAQEA\n" && !themeRx.errors);
   // Inside a burst neither runs.
   reset();send("xxLxxTxx");idle(50);assert(!acted.count("theme_list") && !acted.count("theme_start"));
   // The milestone editor: M lists, U takes one framed request, the same way.
   reset();send("M\n");idle(50);assert(acted["milestone_list"]==1);
   reset();send("U\n");idle(50);assert(acted["milestone_start"]==1 && milestoneRx.active());
-  send("TExVAQAA\n.\n");idle(50);assert(!milestoneRx.active() && milestoneRx.received==1 && milestoneRx.text=="TExVAQAA\n" && !milestoneRx.errors);
+  send("TExVAQAA\n.\n");idle(50);assert(!milestoneRx.active() && milestoneRx.completed==1 && milestoneRx.text=="TExVAQAA\n" && !milestoneRx.errors);
   reset();send("xxMxxUxx");idle(50);assert(!acted.count("milestone_list") && !acted.count("milestone_start"));
   // Loaded effects: F lists, X takes one framed request, the same way.
   reset();send("F\n");idle(50);assert(acted["effect_list"]==1);
   reset();send("X\n");idle(50);assert(acted["effect_start"]==1 && effectRx.active());
-  send("TExYAQAA\n.\n");idle(50);assert(!effectRx.active() && effectRx.received==1 && effectRx.text=="TExYAQAA\n" && !effectRx.errors);
+  send("TExYAQAA\n.\n");idle(50);assert(!effectRx.active() && effectRx.completed==1 && effectRx.text=="TExYAQAA\n" && !effectRx.errors);
   reset();send("xxFxxXxx");idle(50);assert(!acted.count("effect_list") && !acted.count("effect_start"));
   std::cout<<"updater: K backup and R restore lines intact\n";
+  // A host that stalls past a transfer's 15 s timeout (a throttled tab), then
+  // sends the rest: its next base64 line, the same line in the site's 64-byte
+  // pieces 30 ms apart, or the rest of a line it stopped in. On 0.20.10 the
+  // timeout left that line to the command parser: each K exported a full
+  // backup and each R started a restore. Nothing may run; then the host's next
+  // request does.
+  {
+    const std::string line=std::string("KRCpPQUJDRA0KRCpPQUJDRA0KRCpPQUJDRA0KRCpPQUJDRA0")+"KRCpPQUJDRA0KRCpPQUJDRA0KRCpPQUJDRA0KRCpPQUJDRA0";
+    struct Transfer {const char *opener;LineRx *rx;};
+    for(const Transfer &t:{Transfer{"R",&restoreRx},Transfer{"T\n",&themeRx},Transfer{"U\n",&milestoneRx},Transfer{"X\n",&effectRx}}) {
+      // Shapes 0-3 stall between lines (the receiver holds no partial line),
+      // 4-5 inside one. After the timeout the host sends: 0 its next line,
+      // 1 that line in pieces of 64 and 33, 2 several lines and ".", 3 several
+      // lines in pieces without "." (a host that does not wait per line),
+      // 4 the rest of its line and more lines, 5 a one-character rest "K\n".
+      for(unsigned shape=0;shape<6;++shape) {
+        reset();send(t.opener);send(shape>=4?"QUJDRA==\nQUJD":"QUJDRA==\n");
+        assert(t.rx->active());idle(15000);assert(!t.rx->active());
+        const std::map<std::string,unsigned> opened=acted;
+        idle(1000);
+        if(shape==0)send(line+"\n");
+        else if(shape==1){send(line.substr(0,64));idle(30);send(line.substr(64)+"\n");}
+        else if(shape==2)send(line+"\n"+line+"\r\n"+line.substr(0,40)+"\n.\n");
+        else if(shape==3){send(line.substr(0,64));idle(30);send(line.substr(64)+"\n"+line.substr(0,31));idle(30);send(line.substr(31)+"\nE123\n");}
+        else if(shape==4)send("RKpC\nKRCpKRCp\n");
+        else send("K\n");
+        idle(100);
+        if(acted!=opened){std::cerr<<t.opener[0]<<" shape "<<shape<<" after a timeout:";for(auto &[w,n]:acted)std::cerr<<" "<<w<<"="<<n;std::cerr<<"\n";}
+        assert(acted==opened);
+        send("K");idle(50);assert(acted["backup"]==1);
+        send("L\n");idle(50);assert(acted["theme_list"]==1);
+      }
+      // Between lines, a newline-ended command is the first thing after the timeout: it runs.
+      for(const char *command:{"L\n","T\n","p\n"}) {
+        reset();send(t.opener);send("QUJDRA==\n");idle(15000);assert(!t.rx->active());
+        idle(500);send(command);idle(50);
+        const char *what=command[0]=='L'?"theme_list":command[0]=='T'?"theme_start":"status";
+        if(acted[what]!=(command[0]=='T' && t.rx==&themeRx?2u:1u))std::cerr<<t.opener[0]<<": "<<command[0]<<" right after a timeout did not run\n";
+        assert(acted[what]==(command[0]=='T' && t.rx==&themeRx?2u:1u));
+      }
+    }
+    // A refused line written in pieces: the rest of it after the pause runs nothing either.
+    reset();send("T\n");send("QUJD*KRCp");idle(30);send("KRCpPQUJD\n");idle(100);
+    assert(themeRx.errors==1 && !acted.count("backup") && !acted.count("status") && !acted.count("cpu_power") && acted["restore_start"]==0);
+    send("L\n");idle(50);assert(acted["theme_list"]==1);
+  }
+  std::cout<<"transfers that time out or refuse a line: the rest of the host's line runs nothing, then commands run\n";
   // Tools: a bare letter after a pause, scripted lines, typed keys.
   reset();send("w");idle(30);assert(acted["export"]==1);
   reset();send("h\nh\n");assert(acted["history"]==2);
@@ -259,7 +284,9 @@ int main() {
 
 def main():
     source = SOURCE.read_text()
-    bodies = function(source, "runUsbCommand") + "\n" + function(source, "pollCommands")
+    bodies = "\n".join(function(source, name) for name in
+                       ("pollRestore", "pollThemeRequest", "pollMilestoneRequest", "pollEffectRequest",
+                        "runUsbCommand", "pollCommands"))
     with tempfile.TemporaryDirectory(prefix="launchlab-usb-commands-") as temp:
         for hil in (0, 1):
             cpp = Path(temp) / f"test{hil}.cpp"

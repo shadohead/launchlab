@@ -117,6 +117,8 @@ static void tickSound(const Snapshot&){}
 // Settings saves and orphaned-checkpoint release have their own production
 // harness with the actual ADC owner (check_save_paths.py).
 static void saveSettings(uint32_t,const Snapshot&){}static void releaseOrphanCheckpoint(uint32_t,const Snapshot&){}
+// The battle records' save has its own check (check_save_paths).
+static void saveRivals(uint32_t,const Snapshot&){}
 static int actualSourceTime(const LaunchMotion::Trace&,float);
 static float actualProgress(uint32_t);
 struct Frame {uint64_t drawnUs,presentedUs;int sourceMs;bool replay,pending,unavailable;std::string reason;std::vector<int> body;std::string label;};
@@ -265,6 +267,16 @@ int main() {
     reboot.rpm[unsigned(StickS3SensorProfile::DEFAULT_MODE)*2+unsigned(RpmEstimator::DEFAULT_MODE)]==8200,"verified record survives reboot");
   require(!reboot.observe(unsigned(StickS3SensorProfile::DEFAULT_MODE),unsigned(RpmEstimator::DEFAULT_MODE),true,8200),"restored tie stays silent after reboot");
   ++cases;
+  // A pull the shutdown flush drains (routeEvent with shutdown) keeps its best
+  // and its recap and capture, but celebrates nothing: the unit is powering off.
+  reset();Preferences::data.clear();assert(bestStore.begin(personalBests,"pipeline-quiet","best0","best1"));readyAfter(300,false);
+  {
+    const unsigned slot=unsigned(StickS3SensorProfile::DEFAULT_MODE)*2+unsigned(RpmEstimator::DEFAULT_MODE);
+    auto quiet=event();quiet.resultRpm=9100;prepareMotion(quiet,false);
+    require(personalBests.rpm[slot]==9100 && bestStore.pending(personalBests) && motionPending && launchFeedback.shown(),"a shutdown pull still records its best, recap and capture");
+    advance(300000);productionStep();require(!motionPending && !bestEffect.badge(),"a shutdown pull starts no celebration");
+    ++cases;
+  }
   reset();Preferences::data.clear();assert(bestStore.begin(personalBests,"pipeline-retry","best0","best1"));readyAfter(300,false);
   launchFeedback.clear();lastAcceptedAt=millis()-10000;Preferences::failWrite=true;saveHistory(millis(),acquisition.snapshot());
   const auto failedAt=lastSaveTry;require(saveError && bestStore.pending(personalBests),"PB write failure retains pending RAM best");
