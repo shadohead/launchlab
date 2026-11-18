@@ -106,14 +106,16 @@ static IdleFake &pm1Idle(){static IdleFake idle;return idle;}
 struct {bool available=true;bool lock(){return available;}void unlock(){}bool quiet(uint32_t){return true;}}imuAcquisition;
 static Controls::State controls;static Controls::Gesture gestureA,gestureB;
 // The mic is off unless a test says otherwise: leaving its page stops it.
-static struct {void freezeTrace(){} const void *trace()const{return nullptr;}bool running=false;bool off()const{return !running;}bool holdsSleep(uint32_t)const{return running;}void dump(){}void askBench(){}void armTape(){}void sendTape(){}void launch(uint32_t,bool,float,uint64_t,uint64_t){}}micListener;
+static struct {void freezeTrace(){} const void *trace()const{return nullptr;}
+  const void *audioMetadata(uint32_t)const{return nullptr;}
+  bool running=false;bool off()const{return !running;}bool holdsSleep(uint32_t)const{return running;}void dump(){}void askBench(){}void armTape(){}void sendTape(){}void launch(uint32_t,bool,float,uint64_t,uint64_t){}}micListener;
 static unsigned micPageLeaves=0;static void leaveMicPage(){++micPageLeaves;micListener.running=false;}
 static void tickMicPage(){}
 static struct {
   bool busy() const {return false;}
   bool ready() const {return false;}
   bool recordPending() const {return false;}
-  bool tick(bool,const AnalysisMode::Session &,const void *) {return false;}
+  bool tick(bool,const AnalysisMode::Session &,const void *,uint64_t,const void *) {return false;}
 } analysisResults;
 static void logAnalysisResults(){}
 static void captureCalibration(bool){}
