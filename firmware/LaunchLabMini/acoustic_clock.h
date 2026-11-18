@@ -4,11 +4,12 @@
 #include <cmath>
 namespace AcousticClock {
 struct Scratch { std::array<double,190> slopes; };
-inline double middle(double* values, unsigned size) {
+template<class T>
+inline T middle(T* values, unsigned size) {
     const unsigned mid=size/2;
     std::nth_element(values,values+mid,values+size);
     if (size%2) return values[mid];
-    return (values[mid]+*std::max_element(values,values+mid))*.5;
+    return (values[mid]+*std::max_element(values,values+mid))*T(.5);
 }
 inline double q() { return std::sqrt(4.*.00360*.00589-.00380*.00380); }
 inline double angle(double rpm) { return std::atan((2.*.00589*rpm/1000.+.00380)/q()); }

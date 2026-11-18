@@ -20,7 +20,7 @@ int main() {
   std::vector<Arrival> arrivals;
   StaminaFinish::Publications published;
   StaminaFinish::EarlyReference early;
-  static AcousticClock::Scratch scratch;
+  static StaminaFinish::Scratch scratch;
   const auto get = [&](unsigned j) {
     const auto &s = session.samples[j];
     return StaminaFinish::Observation{s.ms, s.rpm, s.recovered, s.rejected};

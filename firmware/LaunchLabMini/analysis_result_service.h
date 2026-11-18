@@ -49,7 +49,7 @@ class Service {
   uint32_t publishedLaunch_ = 0;
   StaminaFinish::Publications publications_;
   StaminaFinish::EarlyReference earlyReference_;
-  AcousticClock::Scratch forecastScratch_;
+  StaminaFinish::Scratch forecastScratch_;
   EarlySpin::Forecast forecast_;
   Decay::RiccatiSupport publishedSupport_{};
   bool needsRecord_ = false;

@@ -26,7 +26,7 @@ Then inspect the offline plan:
 .\scripts\device-local.cmd plan
 ```
 
-If compilation fails, stop and share `build.log` for diagnosis. Do not use the archived stable application as if it contained Analysis Mode. The release-candidate runtime should be `0.20.11-analysis-1.0-rc.3-pm`; see the [Analysis RC notes](ANALYSIS_1.0_RC.md).
+If compilation fails, stop and share `build.log` for diagnosis. Do not use the archived stable application as if it contained Analysis Mode. The release-candidate runtime should be `0.20.11-analysis-1.0-rc.4-pm`; see the [Analysis RC notes](ANALYSIS_1.0_RC.md).
 
 ## Identify the device
 

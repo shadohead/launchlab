@@ -37,8 +37,10 @@ class ReplayTests(unittest.TestCase):
             sparse = replay(run, 10000, helper)
         for ms in sparse:
             self.assertEqual(sparse[ms][1], dense[ms][1])
-        # At 30 s this trace reaches the 12-second adjustment cap.
-        self.assertAlmostEqual(sparse[30000][1][0], 155.44, places=2)
+        # Reference values from the offline candidate before, at, and after full blend weight.
+        self.assertAlmostEqual(dense[10000][1][0], 168.5415, places=3)
+        self.assertAlmostEqual(dense[15000][1][0], 170.8457, places=3)
+        self.assertAlmostEqual(sparse[30000][1][0], 153.0722, places=3)
 
     def test_recovery_provenance_reaches_both_helpers(self):
         with tempfile.TemporaryDirectory() as tmp:

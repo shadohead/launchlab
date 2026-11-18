@@ -29,8 +29,47 @@ static void testEarlyReference() {
   assert(ref.adjust(16000, 80, true) == 80);  // The last early estimate breaks agreement.
 }
 
+static void testPaceWindows() {
+  using namespace StaminaFinish;
+  Scratch scratch{};
+  auto sampleWindow = [&](bool falling) -> Paces {
+    PaceSampler sampler(3);
+    for (unsigned i = 0; i < 3; ++i) {
+      const float rpm = falling ? 5000 - 1000 * i : 3000 + 1000 * i;
+      sampler.add(scratch.live, i, 2000 + 3000 * i, rpm);
+    }
+    return scratch.live.measurements(sampler.size(), scratch.clock);
+  };
+  const auto falling = sampleWindow(true);
+  for (const auto &p : falling) {
+    assert(p.secondsPerUnit > 0);
+    assert(std::abs(p.timeAt3k - 8.f) < .001f);
+  }
+  // Revising a trace in place can remove or restore a measurable decline.
+  for (const auto &p : sampleWindow(false)) assert(!std::isfinite(p.secondsPerUnit));
+  assert(sampleWindow(true)[0].secondsPerUnit == falling[0].secondsPerUnit);
+  for (const auto &p : scratch.live.measurements(0, scratch.clock))
+    assert(!std::isfinite(p.secondsPerUnit));
+
+  auto model = WEIGHTS;
+  for (auto &r : model.pace) {
+    r.beta = {};
+    r.beta[0] = 140.;
+  }
+  auto finish = [&](unsigned ms, const Paces &live, const Paces &opening) {
+    return blendFinish({ms, 7000, 0, 0}, 100., live, opening, model);
+  };
+  assert(finish(10999, falling, falling) == 100.);
+  assert(std::abs(finish(11000, falling, falling) - 104.) < .001);
+  assert(std::abs(finish(14999, falling, falling) - 116.) < .001);
+  assert(std::abs(finish(15000, falling, falling) - 120.) < .001);
+  assert(std::abs(finish(20000, Paces{}, falling) - 120.) < .001);
+  assert(finish(20000, Paces{}, Paces{}) == 100.);
+}
+
 int main(){
   testEarlyReference();
+  testPaceWindows();
   // The frozen stamina fallback starts at ten seconds with no mic. It keeps
   // ticking through silence and the last live snapshot survives manual stop.
   {
