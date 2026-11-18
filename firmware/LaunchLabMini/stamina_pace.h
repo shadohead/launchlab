@@ -43,6 +43,9 @@ class PaceWindow {
     }
 
 public:
+    Pace offsetOne(unsigned size, AcousticClock::Scratch &scratch) const {
+        return size >= 3 ? measure(1.f, size, scratch) : Pace{};
+    }
     void set(unsigned i, unsigned ms, float rpm) {
         auto &sample = samples_[i];
         if (sample.ms != ms || sample.rpm != rpm) {

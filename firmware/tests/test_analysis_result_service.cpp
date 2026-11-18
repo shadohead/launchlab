@@ -67,7 +67,29 @@ static void testPaceWindows() {
   assert(finish(20000, Paces{}, Paces{}) == 100.);
 }
 
+static void testLiveAudioForecast() {
+  AnalysisResult::Service service;
+  AnalysisMode::Session spin;
+  AudioMetadata::Recorder audio;
+  audio.reset(17);
+  AudioMetadata::Measurement frame{180, 0, 98, 127, 20, 132, 64, 3,
+                                   73, 80, 77, 76, 72, 62, 61, 60};
+  for (unsigned ms : {1000, 2000, 3000, 4000}) audio.add(ms, ms, frame);
+  audio.add(9800, 10020, frame);
+  spin.begin(17, true, 4300, 1000000);
+  service.tick(true, spin, nullptr, 11000000, &audio);
+  assert(std::abs(service.forecast(17).seconds - 129.80848f) < .001f); // Fifth bin still in flight.
+  service.tick(true, spin, nullptr, 12000000, &audio);
+  assert(std::abs(service.forecast(17).seconds - 41.78203f) < .001f); // Frozen model reference.
+  service.tick(true, spin, nullptr, 31000000, &audio);
+  assert(std::abs(service.forecast(17).seconds - 43.61843f) < .001f);
+  spin.begin(18, true, 4300, 32000000);
+  service.tick(true, spin, nullptr, 42000000, &audio);
+  assert(std::abs(service.forecast(18).seconds - 129.80848f) < .001f); // Previous launch's recorder.
+}
+
 int main(){
+  testLiveAudioForecast();
   testEarlyReference();
   testPaceWindows();
   // The frozen stamina fallback starts at ten seconds with no mic. It keeps

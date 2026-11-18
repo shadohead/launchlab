@@ -3,7 +3,9 @@
 #include "fixed_riccati.h"
 #include "early_spin.h"
 #include "stamina_finish.h"
+#include "audio_finish.h"
 #include <vector>
+#include <string>
 #include <iomanip>
 #include <iostream>
 
@@ -13,6 +15,20 @@ int main() {
   unsigned ticks;
   if (!(std::cin >> session.launcherRpm >> ticks))
     return 1;
+  std::vector<std::array<uint8_t,AudioMetadata::RECORD_BYTES>> audio;
+  if ((std::cin >> std::ws).peek() == 'A') {
+    std::string tag, hex;
+    unsigned rows;
+    if (!(std::cin >> tag >> rows) || tag != "AUDIO" || rows > AudioMetadata::DENSE_RECORDS) return 1;
+    audio.resize(rows);
+    for (auto &row : audio) {
+      if (!(std::cin >> hex) || hex.size() != 2 * row.size() || hex.find_first_not_of("0123456789abcdef") != std::string::npos)
+        return 1;
+      for (unsigned i = 0; i < row.size(); ++i)
+        row[i] = uint8_t(std::stoul(hex.substr(i*2, 2), nullptr, 16));
+    }
+  }
+  AudioFinish::Predictor audioPredictor;
   std::cout << std::setprecision(10);
   // Each block adds the observations newly available at this tick.
   Decay::Results fits;
@@ -69,6 +85,9 @@ int main() {
       if (nextMs >= EarlySpin::FIRST_MS && nextMs % 1000 == 0) {
         const StaminaFinish::LiveFit input{nextMs, session.launcherRpm, fits.support.original, fits.support.accepted};
         finish = StaminaFinish::predict(input, published, session.count, get, scratch, early);
+        if (!audio.empty())
+          finish = audioPredictor.predict(nextMs, session.launcherRpm, finish, session.count, get,
+              [&](unsigned i) { return i < audio.size() ? audio[i].data() : nullptr; }, scratch.clock);
       }
     }
     session.stopMs = ms;

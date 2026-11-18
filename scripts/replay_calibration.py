@@ -17,6 +17,34 @@ ROOT = Path(__file__).resolve().parents[1]
 FEATURE_FLOORS = (300, 200, 25, 5)  # launch RPM, retained RPM, RPM/s, silence seconds
 
 
+def forecast_audio(data):
+    """Reconstruct the dense metadata fields the live model reads."""
+    meta = data.get("audio_metadata") or {}
+    if not meta.get("collector_available"):
+        return []
+    packed = []
+    for i, r in enumerate(meta.get("records", [])[:150]):
+        row = bytearray(19)
+        end = 200 * (i + 1)
+        at = r.get("available_by_ms")
+        if not r["missing"] and at is not None and r["end_ms"] == end:
+            lag = at - end
+            if lag < 0 or lag % 20 or lag >= 5100:
+                raise ValueError("Invalid audio delivery bound")
+            row[0] = int(bool(r["candidate_hz"]))
+            level = r["peak_level_db"]
+            row[2] = 0 if level is None else level + 128
+            flat = r["mean_spectral_flatness"]
+            row[3] = 255 if flat is None else round(flat * 254)
+            margin = r["candidate_margin_db"]
+            row[5] = 255 if margin is None else margin + 128
+            row[7] = r["candidate_harmonics"] or 0
+            row[8:16] = bytes(0 if db is None else db + 128 for db in r["band_peak_db"])
+            row[16:19] = bytes((r["frame_count"], r["broadband_frames"], lag // 20))
+        packed.append(row.hex())
+    return packed if any(bytes.fromhex(row)[16] for row in packed) else []
+
+
 def load_runs(folder):
     runs = {}
     skipped = {}
@@ -67,6 +95,7 @@ def load_runs(folder):
         # Ignore unrelated export metadata; recovery provenance changes the fit.
         provenance = [(t in rejected, t in recovered, pitch_confidence.get(t, 0)) for t, _ in samples]
         key = hashlib.sha256(json.dumps([launch, stop, samples, provenance]).encode()).digest()
+        audio = forecast_audio(data)
         if key not in runs:
             runs[key] = {
                 "name": path.stem,
@@ -77,7 +106,10 @@ def load_runs(folder):
                 "recovered": recovered,
                 "rejected": rejected,
                 "pitch_confidence": pitch_confidence,
+                "audio": audio,
             }
+        elif audio and not runs[key]["audio"]:
+            runs[key]["audio"] = audio
     return sorted(runs.values(), key=lambda r: r["order"]), skipped
 
 
@@ -143,6 +175,9 @@ def replay(run, step, helper):
     samples = sorted((t + (600 if t in run["recovered"] and not run.get("pitch_confidence", {}).get(t) else 200),
                       t, rpm) for t, rpm in run["samples"])
     lines = [f"{run['launch']} {len(ticks)}"]
+    if run.get("audio"):
+        lines.append(f"AUDIO {len(run['audio'])}")
+        lines.extend(run["audio"])
     i = 0
     for ms in ticks:
         start = i

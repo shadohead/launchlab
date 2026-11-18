@@ -1,4 +1,4 @@
-"""Check the RC identity and keep offline model candidates out of the sketch."""
+"""Check the RC identity and keep offline training dependencies out of the sketch."""
 import re
 import sys
 from pathlib import Path
@@ -8,8 +8,8 @@ sys.path.insert(0, str(root / "scripts"))
 from local_firmware import release_identity
 
 identity = release_identity()
-assert identity["analysis_version"] == "1.0-rc.4"
-assert identity["runtime"] == "0.20.11-analysis-1.0-rc.4-pm"
+assert identity["analysis_version"] == "1.0-rc.5"
+assert identity["runtime"] == "0.20.11-analysis-1.0-rc.5-pm"
 assert len(identity["runtime"].encode()) < 32  # USB backup runtime field.
 
 sketch = root / "firmware/LaunchLabMini"
@@ -32,5 +32,6 @@ while pending:
 
 names = {path.name for path in visited}
 assert {"fixed_riccati.h", "stamina_finish.h", "stamina_pace.h", "stamina_weights.h", "firmware_version.h"} <= names
-assert not any("candidate" in name or "offline" in name or "audio_finish" in name for name in names)
+assert {"audio_finish.h", "audio_finish_weights.h", "audio_finish_features.h"} <= names
+assert not any("candidate" in name or "offline" in name for name in names)
 print("PASS: Analysis RC identity, current predictor, and offline model isolation")

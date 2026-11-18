@@ -4,6 +4,7 @@
 #include "analysis_details.h"
 #include "mic_trace.h"
 #include "stamina_finish.h"
+#include "audio_finish.h"
 #include "decay_record.h"
 #include <atomic>
 #include <new>
@@ -50,6 +51,7 @@ class Service {
   StaminaFinish::Publications publications_;
   StaminaFinish::EarlyReference earlyReference_;
   StaminaFinish::Scratch forecastScratch_;
+  AudioFinish::Predictor audioForecast_;
   EarlySpin::Forecast forecast_;
   Decay::RiccatiSupport publishedSupport_{};
   bool needsRecord_ = false;
@@ -196,7 +198,8 @@ public:
   const Decay::Record::Image &record() const { return record_; }
   void recordHandled() { recordPending_ = false; }
   // Called on every loop, including outside Analysis, so cancelled workers are reaped.
-  bool tick(bool open, const AnalysisMode::Session &s, const MicTrace::Trace *trace, uint64_t now = 0) {
+  bool tick(bool open, const AnalysisMode::Session &s, const MicTrace::Trace *trace, uint64_t now = 0,
+            const AudioMetadata::Recorder *audio = nullptr) {
     bool changed = false;
     const bool live = s.running();
     const bool currentTrace = trace && trace->launch() == s.number();
@@ -208,6 +211,7 @@ public:
       publishedSupport_ = {};
       publications_ = {};
       earlyReference_ = {};
+      audioForecast_ = {};
     }
     if (!open || !live)
       publications_ = {};
@@ -258,8 +262,12 @@ public:
                                           float(rpm), trace->recovered(i), trace->rejectedRpm(i) != 0};
       };
       const StaminaFinish::LiveFit fit{ms, s.rpm(), publishedSupport_.original, publishedSupport_.accepted};
-      forecast_ = {ms, rawCount, float(StaminaFinish::predict(fit, publications_,
-                         currentTrace ? trace->count() : 0, reading, forecastScratch_, earlyReference_))};
+      const unsigned count = currentTrace ? trace->count() : 0;
+      double finish = StaminaFinish::predict(fit, publications_, count, reading, forecastScratch_, earlyReference_);
+      if (audio && audio->launch() == s.number())
+        finish = audioForecast_.predict(ms, s.rpm(), finish, count, reading,
+            [&](unsigned i) { return audio->row(i); }, forecastScratch_.clock);
+      forecast_ = {ms, rawCount, float(finish)};
     }
     if (ready_ && s.results() && needsRecord_) {
       const unsigned model = unsigned(std::max(0, results()->best));

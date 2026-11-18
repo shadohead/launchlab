@@ -3900,7 +3900,8 @@ void loop() {
   }
   tickMicPage();
   const bool resultsWereReady=analysisResults.ready();
-  if(analysisResults.tick(analysisOpen && !calibrationCapturePending,analysis,micListener.trace())) {
+  if(analysisResults.tick(analysisOpen && !calibrationCapturePending,analysis,micListener.trace(),0,
+                          micListener.audioMetadata(analysis.number()))) {
     dirty=true;
     const bool completed=!resultsWereReady && analysisResults.ready();
     captureCalibration(completed);

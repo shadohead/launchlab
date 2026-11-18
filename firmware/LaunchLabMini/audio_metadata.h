@@ -112,6 +112,7 @@ public:
     current_ = MAX_RECORDS;
   }
   uint32_t launch() const { return launch_; }
+  const uint8_t *row(unsigned i) const { return i < rows_.size() ? rows_[i].data() : nullptr; }
   void add(unsigned endMs, unsigned observedMs, const Measurement &m) {
     if (frozen_ || !endMs || endMs > LIMIT_MS)
       return;

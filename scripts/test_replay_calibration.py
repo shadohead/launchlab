@@ -5,10 +5,30 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from replay_calibration import build_helper, compare_models, empirical, evaluate, load_runs, replay
+from replay_calibration import build_helper, compare_models, empirical, evaluate, forecast_audio, load_runs, replay
 
 
 class ReplayTests(unittest.TestCase):
+    def test_metadata_forecast_uses_delivered_intervals(self):
+        records = [dict(missing=True) for _ in range(49)]
+        for end in (1000, 2000, 3000, 4000, 9800):
+            records[end // 200 - 1] = dict(
+                missing=False, end_ms=end, available_by_ms=10020 if end == 9800 else end,
+                frame_count=1, peak_level_db=-30, mean_spectral_flatness=.5,
+                candidate_hz=90, candidate_margin_db=4, candidate_harmonics=3,
+                band_peak_db=[-55, -48, -51, -52, -56, -66, -67, -68], broadband_frames=0,
+            )
+        audio = forecast_audio({"audio_metadata": {"collector_available": True, "records": records}})
+        run = {"launch": 4300, "stop": 31000, "samples": [], "recovered": set(), "audio": audio}
+        with tempfile.TemporaryDirectory() as tmp:
+            helper = build_helper(Path(tmp))
+            dense = replay(run, 1000, helper)
+            sparse = replay(run, 10000, helper)
+        self.assertAlmostEqual(dense[10000][1][0], 129.80848, places=4)
+        self.assertAlmostEqual(dense[11000][1][0], 41.78203, places=4)
+        self.assertAlmostEqual(sparse[30000][1][0], 43.61843, places=4)
+        self.assertEqual(sparse[30000][1], dense[30000][1])
+
     def test_compiled_replay_counts_only_original_locks(self):
         run = {
             "launch": 4300, "stop": 11000,

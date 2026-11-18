@@ -1,23 +1,26 @@
-# Analysis 1.0-rc.4
+# Analysis 1.0-rc.5
 
-Runtime: `0.20.11-analysis-1.0-rc.4-pm` · M5StickS3 K150 · based on firmware 0.20.11.
+Runtime: `0.20.11-analysis-1.0-rc.5-pm` · M5StickS3 K150 · based on firmware 0.20.11.
 
-This candidate activates the stamina-trained finish predictor and the updated Stamina Analysis screen for hardware acceptance. It has not been published or promoted to stable. The analysis feature version is separate from the base firmware version.
+This candidate adds acoustic features to the live finish prediction on the Stamina Analysis screen. The analysis feature version is separate from the base firmware version.
 
 ## Included
 
 - Hold B on Main to enter Analysis; launch to start recording. Tap B when the physical spin finishes. A toggles replay while recording, and B after stopping opens Analysis Details. Hold B exits.
 - The live stamina forecast updates once per second starting at ten seconds. It blends the accepted-mic curve with Fixed Riccati according to fit support and stability. A regression supplies the finish when both curves lack support. A second, bounded regression adjusts the estimate. Both regressions were trained on manual-stop FB and stamina pulls.
 - From seconds 10 through 15, Analysis remembers the finish estimates supported by either acoustic curve. If it has at least three and their full spread is at most ten seconds, it uses their median as a reference. From second 16, when the estimate drops below that reference, it restores half the difference, up to 12 seconds.
-- RC.4 also measures the decline in accepted, original microphone RPM readings over two windows: the first 15 seconds and the trace so far. Three small regressions use those measurements to estimate finish time. Their average receives 10% weight at second 11, increasing to 50% at second 15 and staying there. When neither window has a measurable decline, the original predictor supplies the entire forecast.
+- The RPM baseline also measures decline over the first 15 seconds and over the trace so far. Three regressions use accepted original readings. Their average receives 10% weight at second 11, increasing to 50% at second 15.
+- RC.5 uses the first 30 seconds of audio metadata to refine that baseline. The model uses opening noise, spectral flatness, frequency-band balance, tonal support, and level changes alongside RPM decline. When original locks are sparse it can consult up to seven reference spins that lasted past the current second. The weights and numeric reference tables are fixed in the firmware. Only data available by the current forecast tick contributes. Missing metadata, fewer than five populated intervals, or no opening audio keeps the RPM baseline active.
 - The graph and finish label use the same estimate. The axis extends ten seconds beyond the prediction, then follows elapsed time plus ten seconds if the spin continues. Current time and expected finish have dotted markers; the expected finish uses the warning color.
 - Post-stop Fixed Riccati fitting, Free Riccati fallback, and a gray endpoint-only estimate when neither acoustic fit succeeds. The manual endpoint and optical launch anchor are preserved; the fitted tail uses monotone cubic Hermite interpolation.
 - Immediate raw capture at stop, independent fit/metadata attachments, retryable flash saves, and the newest 32 recordings retained across restarts. Full-session audio metadata replaces on-device WAV storage. Existing export formats remain readable.
 - Device page with battery and flash information, plus a battery percentage on the main menu.
 
-The experimental audio ML candidate stays offline and is excluded from the default firmware and this release bundle. The active regressions use optical and microphone RPM features. The other physics models remain available in the offline comparison tools.
+The release uses the frozen audio model. The later stadium-matching experiment remains offline.
 
 ## Interpretation and limits
+
+Across 29 archived manual-stop launches with audio, weighting each launch equally and holding labeled setups out of training, the share of live predictions within ten seconds rose from 69.21% on RC.4 to 84.29% on RC.5. Across the 15 stamina launches it rose from 83.74% to 98.79%. This archive informed model selection. On four subsequent Wizard Rod launches in two stadiums the rate was essentially tied (25.00% and 25.09%), while mean absolute error fell from 20.14 to 15.84 seconds. Accuracy across stadiums remains an open field test.
 
 With each setup group held out of training, the percentage of forecasts within ten seconds of manual stop rose from 73.90% on RC.3 to 77.34% on RC.4. Mean absolute error fell from 8.13 to 7.76 seconds. The largest error was 29.62 seconds on both versions. Each of the 34 FB/stamina pulls received equal weight across 4,314 forecasts. Eight pulls gained hits, three lost hits, and 23 kept the same hit rate.
 
@@ -25,7 +28,7 @@ Training on the earliest 18 pulls and replaying the later 16 raised the ten-seco
 
 Manual spin time is measured. Predicted finish, the RPM curve, revolutions, RPM-band times and battle stamina are estimates. The optical reading measures launcher-shaft speed. The gray endpoint-only curve is an assumed shape, not a validated acoustic fit.
 
-Predictions remain available after ten seconds even with sparse readings. They can be inaccurate for aggressive bits, rail impacts, background noise or late wobble, and can be earlier than the actual stop. Press B at the real finish regardless of the prediction. The experimental audio model is not yet consistently better across the available combinations.
+Predictions remain available after ten seconds even with sparse readings. They can be inaccurate for aggressive bits, rail impacts, background noise or late wobble, and can be earlier than the actual stop. Press B at the real finish regardless of the prediction.
 
 Recording ends at five minutes. Timeout, leaving Analysis, the side power key, or a replacement launch records an unknown physical endpoint unless B already recorded the finish. These sessions must not be treated as manual-stop training labels. Starting the next pull does not require waiting for the final fit; raw data and metadata are captured first, but an unfinished optional fit may be cancelled.
 
@@ -42,6 +45,8 @@ cmd /c ".\scripts\build-local.cmd && .\scripts\device-local.cmd flash --port COM
 Substitute the actual Stick port. Do not flash an arbitrary COM port. For a previous firmware, use a deliberately selected archived release through its documented repair/rollback workflow; older firmware may not expose Analysis records or understand the metadata region. Export the records before any wipe or full-image restore.
 
 ## Acceptance before stable
+
+The RC.5 C++ replay and the frozen offline estimator agreed within 0.000001 seconds on 3,041 held-out one-second forecasts. The production coefficients also matched on all 3,606 forecasts from the 33 manual-stop recordings with audio. Both comparisons use the same delivered readings and simulated fit completion times. Hardware acceptance is pending.
 
 For RC.4, all 7,122 one-second forecasts from the firmware service on 83 archived manual launches matched the offline candidate within 0.000008 seconds under simulated worker timing. The replay tool also matched when reporting every second and every ten seconds. The Stick S3 PM build produced a 2,282,304-byte application image. The two sample caches added 320 bytes of static internal RAM, bringing the total to 93,020 bytes. The loop stack frame used 912 bytes. The offline flash plan verified the image and partition checksums.
 
