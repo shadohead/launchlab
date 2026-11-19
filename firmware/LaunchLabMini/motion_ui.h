@@ -1,4 +1,5 @@
 #pragma once
+#include "ui_draw.h"
 #include "analog_tachometer.h"
 #include "launch_motion.h"
 #include "level_indicator.h"
@@ -97,7 +98,7 @@ inline void curve(lgfx::LGFXBase &g,const AnalogTachometer::Curve &curve,
                   int left,int top,int right,int bottom,const Palette::Colors &c) {
   g.drawFastHLine(left,bottom,right-left+1,c.faint);
   if(curve.count<2) {
-    g.setTextColor(c.muted,c.background);g.drawString("No RPM curve",g.width()/2,(top+bottom)/2-4,1);return;
+    g.setTextColor(c.muted,c.background);UiDraw::text(g,"No RPM curve",g.width()/2,(top+bottom)/2-4,1);return;
   }
   const float peak=curve.peak();
   const unsigned span=std::max<unsigned>(1,curve.ms[curve.count-1]);
@@ -106,7 +107,7 @@ inline void curve(lgfx::LGFXBase &g,const AnalogTachometer::Curve &curve,
   char text[12];g.setTextDatum(top_right);g.setTextColor(c.muted,c.background);
   auto scaleLine=[&](float value){
     const int ly=y(value);for(int dx=left;dx<=right;dx+=4)g.drawFastHLine(dx,ly,2,c.faint);
-    thousands(text,sizeof(text),value);g.drawString(text,left-3,ly-3,1);
+    thousands(text,sizeof(text),value);UiDraw::text(g,text,left-3,ly-3,1);
   };
   scaleLine(peak);
   // Lines at least GAP px apart, and as far below the peak's: a label is 8 px.
@@ -142,14 +143,14 @@ inline void feedback(lgfx::LGFXBase &g,const LaunchMotion::Trace &trial,
   const int cx=g.width()/2;char text[64];
   g.setTextDatum(top_center);
   // A celebrated pull's label: NEW BEST, or the milestone it reached.
-  g.setTextColor(demo?c.warning:badge?c.accent:c.muted,c.background);g.drawString(demo?"DEMO":badge?badge:"Last launch",cx,2,1);
+  g.setTextColor(demo?c.warning:badge?c.accent:c.muted,c.background);UiDraw::text(g,demo?"DEMO":badge?badge:"Last launch",cx,2,1);
   snprintf(text,sizeof(text),"%.0f RPM",trial.rpm);g.setTextColor(c.accent,c.background);
-  g.drawString(text,cx,17,g.textWidth(text,&fonts::Font4)<=g.width()-6?4:2);
+  UiDraw::text(g,text,cx,17,g.textWidth(text,&fonts::Font4)<=g.width()-6?4:2);
   if(trial.valid() && trial.fused && !capturing) {
     spatial(g,trial,49,112,c,progress,flipEnabled);
     // A full-scale reading or a bridged short gap is approximate: still show it, marked.
     g.setTextColor(trial.approximate()?c.warning:c.muted,c.background);
-    g.drawString(trial.approximate()?"Tilt approx.":"Tilt replay",cx,164,1);
+    UiDraw::text(g,trial.approximate()?"Tilt approx.":"Tilt replay",cx,164,1);
     // The replay's progress runs down the right edge, clear of the RPM curve.
     const int track=g.width()-4;
     g.drawFastVLine(track,53,105,c.faint);
@@ -157,7 +158,7 @@ inline void feedback(lgfx::LGFXBase &g,const LaunchMotion::Trace &trial,
   } else {
     // Keep the graph area quiet when capture is pending or unavailable.
     g.drawRect(cx-39,71,79,79,c.muted);
-    g.setTextColor(c.muted,c.background);g.drawString(capturing?"Capturing":unavailableTilt(trial.quality),cx,104,1);
+    g.setTextColor(c.muted,c.background);UiDraw::text(g,capturing?"Capturing":unavailableTilt(trial.quality),cx,104,1);
   }
   curve(g,rpmCurve,34,184,126,226,c);
 }

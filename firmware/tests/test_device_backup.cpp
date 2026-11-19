@@ -32,7 +32,7 @@ static bool same(const DeviceBackup::Contents &a,const DeviceBackup::Contents &b
   if(a.hasMotion!=b.hasMotion || (a.hasMotion && (a.motion.number!=b.motion.number || a.motion.rpm!=b.motion.rpm || a.motion.count!=b.motion.count)))return false;
   const auto &s=a.settings,&t=b.settings;
   return s.sleepMinutes==t.sleepMinutes && s.brightness==t.brightness && s.rpmMethod==t.rpmMethod && s.sensorProfile==t.sensorProfile && s.flipped==t.flipped && s.mount==t.mount &&
-    s.shakeWake==t.shakeWake && s.batteryIcon==t.batteryIcon && s.minRpmSteps==t.minRpmSteps;
+    s.shakeWake==t.shakeWake && s.batteryIcon==t.batteryIcon && s.minRpmSteps==t.minRpmSteps && s.language==t.language;
 }
 static Palette::Custom custom(const char *name,uint16_t accent) {
   Palette::Custom t;std::strncpy(t.name,name,Palette::Custom::MAX_NAME);
@@ -311,6 +311,27 @@ int main() {
       Buffer broken=encoded;broken[body+8]=bad;put32(broken.data()+length-4,checksum(broken.data(),length-4));
       auto retained=decoded;assert(!decode(broken.data(),length,decoded) && same(decoded,retained));
     }
+  }
+  // Language: a tenth settings byte (with Min RPM's before it) only when it
+  // is not English, so an English backup is byte for byte as before.
+  {
+    Buffer plain;const auto plainLength=encode(original,"0.21.0-sticks3-test",plain);
+    for(uint8_t steps:{MinRpm::DEFAULT_STEPS,uint8_t(12)})for(uint8_t language=1;language<UiText::LANGS;++language) {
+      auto trial=original;trial.settings.minRpmSteps=steps;trial.settings.language=language;
+      Buffer encoded;const auto length=encode(trial,"0.21.0-sticks3-test",encoded);
+      assert(length==plainLength+2);
+      const size_t body=length-4-LANGUAGE_SETTINGS_BYTES;assert(encoded[body+8]==steps && encoded[body+9]==language);
+      Contents restored;assert(decode(encoded.data(),length,restored) && same(trial,restored));
+      // English, a language this build lacks or a bad Min RPM byte beside
+      // it is refused before anything is taken.
+      for(auto [at,bad]:{std::pair<unsigned,uint8_t>{9,0},{9,uint8_t(UiText::LANGS)},{9,255},{8,0},{8,255}}) {
+        Buffer broken=encoded;broken[body+at]=bad;put32(broken.data()+length-4,checksum(broken.data(),length-4));
+        auto retained=decoded;assert(!decode(broken.data(),length,decoded) && same(decoded,retained));
+      }
+    }
+    // A backup without the byte restores English, whatever the unit had.
+    Contents restored;restored.settings.language=1;
+    assert(decode(plain.data(),plainLength,restored) && restored.settings.language==0);
   }
   // The original reserved bytes are zero, so every legacy backup loads Top,
   // Shake to wake On and Battery icon On regardless of the destination's

@@ -3,7 +3,7 @@
 // custom theme), and prints one FNV-1a 64 hash per frame. With an output
 // directory it also writes each frame as a PPM.
 //
-//   ui_render [--out DIR] [--custom HEX16x8 NAME] [--celebrations] [--legibility] [--settled] [--costs FILE]
+//   ui_render [--lang de|it] [--out DIR] [--custom HEX16x8 NAME] [--celebrations] [--legibility] [--settled] [--costs FILE]
 //             [--bench-hashes STEP_MS]
 //   ui_render --fx FILE.fx...
 //   ui_render --fx-sound FILE.fx...
@@ -67,6 +67,7 @@ int main(int argc,char **argv) {
       std::strncpy(custom.name,argv[++i],Palette::Custom::MAX_NAME);
     } else if(arg=="--celebrations")celebrations=true;
     else if(arg=="--battle")battle=true;
+    else if(arg=="--lang" && i+1<argc){const std::string l=argv[++i];UiText::current()=l=="de"?UiText::Lang::German:l=="it"?UiText::Lang::Italian:UiText::Lang::English;}
     else if(arg=="--analysis")analysis=true;
     else if(arg=="--legibility")legibility=true;
     else if(arg=="--settled")settled=true;
@@ -94,6 +95,12 @@ int main(int argc,char **argv) {
     const auto *pixels=static_cast<const uint8_t *>(canvas.getBuffer());
     const size_t bytes=size_t(UiCatalog::WIDTH)*UiCatalog::HEIGHT*2;
     std::printf("%s %016llx\n",name.c_str(),(unsigned long long)fnv64(pixels,bytes));
+    // Another language: name each frame with a text that did not fit.
+    if(UiDraw::fallbacks) {
+      const auto &o=UiDraw::lastOverflow;
+      std::fprintf(stderr,"%s: %u text(s) did not fit, last \"%s\" font %d, %d > %d px\n",name.c_str(),UiDraw::fallbacks,o.text?o.text:"",o.font,o.width,o.room);
+      UiDraw::fallbacks=0;
+    }
     if(out.empty())return true;
     FILE *f=std::fopen((out+"/"+name+".ppm").c_str(),"wb");if(!f){std::perror("ppm");return false;}
     std::fprintf(f,"P6\n%d %d\n255\n",UiCatalog::WIDTH,UiCatalog::HEIGHT);

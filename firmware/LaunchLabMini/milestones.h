@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include "ui_text.h"
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -426,5 +427,5 @@ inline void rpmText(char *out,size_t n,uint16_t rpm) {
   else snprintf(out,n,"%u",unsigned(rpm));
 }
 // The recap's label for a milestone that is not a personal best.
-inline void milestoneText(char *out,size_t n,uint16_t rpm){char v[12];rpmText(v,sizeof(v),rpm);snprintf(out,n,"MILESTONE %s",v);}
+inline void milestoneText(char *out,size_t n,uint16_t rpm){char v[12];rpmText(v,sizeof(v),rpm);snprintf(out,n,UiText::t(UiText::Text::RecapMilestone),v);}
 }

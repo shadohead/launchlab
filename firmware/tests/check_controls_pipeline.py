@@ -45,6 +45,7 @@ static uint32_t clockMs=10000;static int64_t esp_timer_get_time(){return int64_t
 #include "shake_wake_setting.h"
 #include "battery_icon_setting.h"
 #include "min_rpm_setting.h"
+#include "language_setting.h"
 #include "display_orientation.h"
 #include "sensor_profile_setting.h"
 #include "start_mark_reference.h"

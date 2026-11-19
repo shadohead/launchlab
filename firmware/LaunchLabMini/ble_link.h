@@ -1,4 +1,5 @@
 #pragma once
+#include "ui_draw.h"
 #include <Arduino.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -485,7 +486,7 @@ inline void drawIcon(Canvas &g,uint16_t readyColor,uint16_t connectedColor,uint1
     g.fillRoundRect(6,2,g.width()-12,22,5,background);
     g.drawRoundRect(6,2,g.width()-12,22,5,bannerConnected?connectedColor:readyColor);
     g.setTextDatum(top_center);g.setTextColor(text,background);
-    g.drawString(bannerConnected?"Phone connected":"Phone left",g.width()/2,5,2);
+    UiDraw::text(g,bannerConnected?"Phone connected":"Phone left",g.width()/2,5,2);
     return;
   }
   const uint16_t c=shown==State::Connected?connectedColor:readyColor;

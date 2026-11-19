@@ -21,7 +21,7 @@ theme0-menu-wear-check 51ba1ea701f629c5
 theme0-history-menu 82c8ae8fb83daf25
 theme0-settings 20f9441a5b3dc8fb
 theme0-settings-appearance cfca6dac0413d2d1
-theme0-settings-more 90aaa8a529a2a983
+theme0-settings-more cc946be21e32166d
 theme0-about 280bf9048440df37
 theme0-menu-bluetooth e9ea1a35815b70fd
 theme0-bluetooth ca1d56aaedf4bb77
@@ -84,7 +84,7 @@ theme0-flip-menu-wear-check 51ba1ea701f629c5
 theme0-flip-history-menu 82c8ae8fb83daf25
 theme0-flip-settings 20f9441a5b3dc8fb
 theme0-flip-settings-appearance cfca6dac0413d2d1
-theme0-flip-settings-more 29ef797685e85683
+theme0-flip-settings-more fda42f6570c1756d
 theme0-flip-about 280bf9048440df37
 theme0-flip-menu-bluetooth e9ea1a35815b70fd
 theme0-flip-bluetooth ca1d56aaedf4bb77
@@ -147,7 +147,7 @@ theme1-menu-wear-check d79df95a81a4a10d
 theme1-history-menu fc530165bea72157
 theme1-settings bda9c394dcdae169
 theme1-settings-appearance 3ff9a1b42ba7e3c1
-theme1-settings-more b916317bfdd1e2c3
+theme1-settings-more 4999b85700f5760d
 theme1-about 50baa705b7858d6b
 theme1-menu-bluetooth 031384150be70143
 theme1-bluetooth ace9fdb4a1034d91
@@ -210,7 +210,7 @@ theme1-flip-menu-wear-check d79df95a81a4a10d
 theme1-flip-history-menu fc530165bea72157
 theme1-flip-settings bda9c394dcdae169
 theme1-flip-settings-appearance 3ff9a1b42ba7e3c1
-theme1-flip-settings-more 525b024d5a178fc3
+theme1-flip-settings-more 7aa97bda5384d50d
 theme1-flip-about 50baa705b7858d6b
 theme1-flip-menu-bluetooth 031384150be70143
 theme1-flip-bluetooth ace9fdb4a1034d91
@@ -273,7 +273,7 @@ theme2-menu-wear-check 58af1019ca2085f5
 theme2-history-menu 45838faf8c3fc5d4
 theme2-settings b384ef23f578877e
 theme2-settings-appearance 73a335ff61617352
-theme2-settings-more 0bbe0d6ad3e8107b
+theme2-settings-more 2eb8bbf1d9e71ba5
 theme2-about b808221525a58cdb
 theme2-menu-bluetooth fa8a6515c1b7f438
 theme2-bluetooth e7c5b0f344d285ee
@@ -336,7 +336,7 @@ theme2-flip-menu-wear-check 58af1019ca2085f5
 theme2-flip-history-menu 45838faf8c3fc5d4
 theme2-flip-settings b384ef23f578877e
 theme2-flip-settings-appearance 73a335ff61617352
-theme2-flip-settings-more a502de3c302dbd7b
+theme2-flip-settings-more 5fc87f752c767aa5
 theme2-flip-about b808221525a58cdb
 theme2-flip-menu-bluetooth fa8a6515c1b7f438
 theme2-flip-bluetooth e7c5b0f344d285ee
@@ -399,7 +399,7 @@ theme3-menu-wear-check baaf03228e493dcd
 theme3-history-menu 31edd1a453744b97
 theme3-settings 2355dfe6313acf81
 theme3-settings-appearance 9b80c8f7bb6217e7
-theme3-settings-more bed69dd0b3173433
+theme3-settings-more 7ac57834d5021c3d
 theme3-about 18b1e06cbf626b73
 theme3-menu-bluetooth e7e78d185ef68363
 theme3-bluetooth a13c92a5ce20c5c9
@@ -462,7 +462,7 @@ theme3-flip-menu-wear-check baaf03228e493dcd
 theme3-flip-history-menu 31edd1a453744b97
 theme3-flip-settings 2355dfe6313acf81
 theme3-flip-settings-appearance 9b80c8f7bb6217e7
-theme3-flip-settings-more 581b6ea20f5ce133
+theme3-flip-settings-more abd53bb827917b3d
 theme3-flip-about 18b1e06cbf626b73
 theme3-flip-menu-bluetooth e7e78d185ef68363
 theme3-flip-bluetooth a13c92a5ce20c5c9
@@ -525,7 +525,7 @@ theme4-menu-wear-check 94cbb4c5b739555d
 theme4-history-menu 75b9e3042fed6922
 theme4-settings ae49d80565723fd8
 theme4-settings-appearance cdd737719cd9042e
-theme4-settings-more 50cb10c44be4c18b
+theme4-settings-more fec4062ce9193575
 theme4-about 8d49ff8aab860f47
 theme4-menu-bluetooth 0b1ace0f6c675cc2
 theme4-bluetooth 041ebca3d53b85d4
@@ -588,7 +588,7 @@ theme4-flip-menu-wear-check 94cbb4c5b739555d
 theme4-flip-history-menu 75b9e3042fed6922
 theme4-flip-settings ae49d80565723fd8
 theme4-flip-settings-appearance cdd737719cd9042e
-theme4-flip-settings-more ea0fe195a82a6e8b
+theme4-flip-settings-more 2fd3c9b03ba89475
 theme4-flip-about 8d49ff8aab860f47
 theme4-flip-menu-bluetooth 0b1ace0f6c675cc2
 theme4-flip-bluetooth 041ebca3d53b85d4
@@ -651,7 +651,7 @@ theme5-menu-wear-check f5712febdfc2428d
 theme5-history-menu e54007a510c943cb
 theme5-settings d2b535e8c36819c9
 theme5-settings-appearance 8ad4cb42d129b401
-theme5-settings-more 2bbed015fadd5cc3
+theme5-settings-more 8131b71ad023b0ad
 theme5-about 6a9c90a4f69d96db
 theme5-menu-bluetooth 568a82d4f61f987f
 theme5-bluetooth a8092b98356eeb4d
@@ -714,7 +714,7 @@ theme5-flip-menu-wear-check f5712febdfc2428d
 theme5-flip-history-menu e54007a510c943cb
 theme5-flip-settings d2b535e8c36819c9
 theme5-flip-settings-appearance 8ad4cb42d129b401
-theme5-flip-settings-more c503a0e7572309c3
+theme5-flip-settings-more b2417a9e22b30fad
 theme5-flip-about 6a9c90a4f69d96db
 theme5-flip-menu-bluetooth 568a82d4f61f987f
 theme5-flip-bluetooth a8092b98356eeb4d
@@ -777,7 +777,7 @@ theme6-menu-wear-check 99de2c2157020d95
 theme6-history-menu 02350ffa3048902e
 theme6-settings 4eb858645bb4a8c0
 theme6-settings-appearance 7bb60fb87d400694
-theme6-settings-more 379e0fd977c8b22b
+theme6-settings-more c60134c80110f5d5
 theme6-about 6f4637e302035293
 theme6-menu-bluetooth 8232b3d09fe679b2
 theme6-bluetooth 60e263327dee3540
@@ -840,7 +840,7 @@ theme6-flip-menu-wear-check 99de2c2157020d95
 theme6-flip-history-menu 02350ffa3048902e
 theme6-flip-settings 4eb858645bb4a8c0
 theme6-flip-settings-appearance 7bb60fb87d400694
-theme6-flip-settings-more d0e2e0aad40e5f2b
+theme6-flip-settings-more f710f84b53a054d5
 theme6-flip-about 6f4637e302035293
 theme6-flip-menu-bluetooth 8232b3d09fe679b2
 theme6-flip-bluetooth 60e263327dee3540
@@ -903,7 +903,7 @@ theme7-menu-wear-check 9a275257f6b1a995
 theme7-history-menu 856c2740c92add91
 theme7-settings 857fc1642f838127
 theme7-settings-appearance 20dacb2def9230c5
-theme7-settings-more 7f86aab3b9cc2a13
+theme7-settings-more 9a418ef8f61d761d
 theme7-about 008658b679fc94a7
 theme7-menu-bluetooth 09823a2f043fe119
 theme7-bluetooth c8f0c60c4d4e063b
@@ -966,7 +966,7 @@ theme7-flip-menu-wear-check 9a275257f6b1a995
 theme7-flip-history-menu 856c2740c92add91
 theme7-flip-settings 857fc1642f838127
 theme7-flip-settings-appearance 20dacb2def9230c5
-theme7-flip-settings-more 18cb7b851611d713
+theme7-flip-settings-more cb51527c48acd51d
 theme7-flip-about 008658b679fc94a7
 theme7-flip-menu-bluetooth 09823a2f043fe119
 theme7-flip-bluetooth c8f0c60c4d4e063b
@@ -1029,7 +1029,7 @@ theme8-menu-wear-check 30fb4fc32bf203f5
 theme8-history-menu 4bcb8d6043b30e0d
 theme8-settings 34dd27155a132d13
 theme8-settings-appearance c9c1db1a318ca487
-theme8-settings-more f1a63c295d1c3973
+theme8-settings-more ccd945ee41b9dd3d
 theme8-about 200eecd096815a67
 theme8-menu-bluetooth e867702c21a759f5
 theme8-bluetooth ff0bff6a5762750f
@@ -1092,7 +1092,7 @@ theme8-flip-menu-wear-check 30fb4fc32bf203f5
 theme8-flip-history-menu 4bcb8d6043b30e0d
 theme8-flip-settings 34dd27155a132d13
 theme8-flip-settings-appearance c9c1db1a318ca487
-theme8-flip-settings-more 8aeb0cfab961e673
+theme8-flip-settings-more fde9097194493c3d
 theme8-flip-about 200eecd096815a67
 theme8-flip-menu-bluetooth e867702c21a759f5
 theme8-flip-bluetooth ff0bff6a5762750f
@@ -1155,7 +1155,7 @@ theme9-menu-wear-check 82ee274bd64ddf65
 theme9-history-menu 2b26a505d9c2e026
 theme9-settings aa1682737181ad04
 theme9-settings-appearance d33498917267a338
-theme9-settings-more 4a280c0f28a2e20b
+theme9-settings-more ad332d4c51100d35
 theme9-about a24b26ab38dc561b
 theme9-menu-bluetooth 31c26a0624bd90da
 theme9-bluetooth 4261689c63adecc0
@@ -1218,7 +1218,7 @@ theme9-flip-menu-wear-check 82ee274bd64ddf65
 theme9-flip-history-menu 2b26a505d9c2e026
 theme9-flip-settings aa1682737181ad04
 theme9-flip-settings-appearance d33498917267a338
-theme9-flip-settings-more e36cdce084e88f0b
+theme9-flip-settings-more de42f0cfa39f6c35
 theme9-flip-about a24b26ab38dc561b
 theme9-flip-menu-bluetooth 31c26a0624bd90da
 theme9-flip-bluetooth 4261689c63adecc0
@@ -1281,7 +1281,7 @@ custom-menu-wear-check 6393af2970237021
 custom-history-menu 8c8c0628e6b92917
 custom-settings 70e6870af09265aa
 custom-settings-appearance 4cd75279f4a04e26
-custom-settings-more ee7be7262d816e91
+custom-settings-more 5349d7b4a40c4a8d
 custom-about 112bb42a73fe8298
 custom-menu-bluetooth e02b7e05f700cc6f
 custom-bluetooth 22b46e677966977f
@@ -1344,7 +1344,7 @@ custom-flip-menu-wear-check 6393af2970237021
 custom-flip-history-menu 8c8c0628e6b92917
 custom-flip-settings 70e6870af09265aa
 custom-flip-settings-appearance 4cd75279f4a04e26
-custom-flip-settings-more 502accd9fa402415
+custom-flip-settings-more 7e964cb9899df789
 custom-flip-about 112bb42a73fe8298
 custom-flip-menu-bluetooth e02b7e05f700cc6f
 custom-flip-bluetooth 22b46e677966977f

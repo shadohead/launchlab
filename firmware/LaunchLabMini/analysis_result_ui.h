@@ -1,4 +1,5 @@
 #pragma once
+#include "ui_draw.h"
 #include "analysis_details.h"
 #include "analysis_mode.h"
 #include "controls_ui.h"
@@ -18,10 +19,10 @@ inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session,
   auto row = [&](const char *label, const char *value, uint16_t ink) {
     g.setTextDatum(top_left);
     g.setTextColor(c.muted, c.background);
-    g.drawString(label, 4, y, 2);
+    UiDraw::text(g,label, 4, y, 2);
     g.setTextDatum(top_right);
     g.setTextColor(ink, c.background);
-    g.drawString(value, g.width() - 4, y, 2);
+    UiDraw::text(g,value, g.width() - 4, y, 2);
     y += ROW_PITCH;
   };
   const bool manual = session.hasManualStop();
@@ -54,13 +55,13 @@ inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session,
   g.setTextDatum(top_center);
   if (details && details->endpointEstimate) {
     g.setTextColor(c.muted, c.background);
-    g.drawString("Estimated curve", cx, NOTE_Y, 1);
+    UiDraw::text(g,"Estimated curve", cx, NOTE_Y, 1);
   }
   g.setTextColor(c.muted, c.background);
   g.setTextDatum(top_left);
-  g.drawString("RPM", 4, TABLE_Y, 1);
+  UiDraw::text(g,"RPM", 4, TABLE_Y, 1);
   g.setTextDatum(top_right);
-  g.drawString("Time", g.width() - 4, TABLE_Y, 1);
+  UiDraw::text(g,"Time", g.width() - 4, TABLE_Y, 1);
   g.drawFastHLine(4, TABLE_Y + 11, g.width() - 8, c.faint);
   unsigned pages = 1;
   if (details && details->count) {
@@ -77,18 +78,18 @@ inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session,
       snprintf(label, sizeof(label), "%u-%uK", band, band - 1);
       g.setTextColor(c.text, c.background);
       g.setTextDatum(top_left);
-      g.drawString(label, 4, by, 1);
+      UiDraw::text(g,label, 4, by, 1);
       const int width = longest > 0 ? std::max(1, int(std::lround(details->seconds[i] / longest *
                                                                    (BAR_RIGHT - BAR_LEFT)))) : 0;
       g.fillRect(BAR_LEFT, by + 2, width, BAR_HEIGHT, c.accent);
       snprintf(text, sizeof(text), "%.1f s", details->seconds[i]);
       g.setTextDatum(top_right);
-      g.drawString(text, g.width() - 4, by, 1);
+      UiDraw::text(g,text, g.width() - 4, by, 1);
     }
   } else {
     g.setTextDatum(top_center);
     g.setTextColor(c.muted, c.background);
-    g.drawString(fitting   ? "Fitting curve"
+    UiDraw::text(g,fitting   ? "Fitting curve"
                  : failed  ? "Fit unavailable"
                  : details ? "No complete bands"
                            : "No winning model",
