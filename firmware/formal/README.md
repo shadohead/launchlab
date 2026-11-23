@@ -2,7 +2,7 @@
 
 This gate checks the factory-reset contract, without touching hardware or changing firmware images.
 
-- **TLA+/TLC** checks the bounded reset/interruption model for invariant, temporal-property and deadlock failures, with up to three power cuts and three storage faults. A separate deliberate persist-first violation must produce the named counterexample. Six reachability checks require the model to actually exercise valid intent, partial erase, completion, resumption, blocked invalid intent and ordinary boot after wipe.
+- **TLA+/TLC** checks the bounded reset/interruption model for invariant, temporal-property and deadlock failures, with up to three power cuts and three storage faults. The gate rejects reduced fault or reset bounds, missing checked properties, or a baseline with fewer than 1,000 distinct states. A separate deliberate persist-first violation must produce the named counterexample. Six reachability checks require the model to actually exercise valid intent, partial erase, completion, resumption, blocked invalid intent and ordinary boot after wipe.
 - **Lean 4.30.0** checks 14 timing and cancellation theorems for the modeled UInt32 clock/gesture. Warnings fail the gate; the audited theorems may depend only on Lean’s standard logical axioms.
 - **Production C++ on the host** compiles a contract bridge for timing constants and erase scope, and runs the actual confirmation, storage fault and sketch/loop/USB wipe suites with fakes. It is not a replacement for the broader host, target-build or hardware release gates.
 

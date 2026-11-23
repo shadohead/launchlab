@@ -27,6 +27,11 @@ WITNESSES = (
     'W_NeverBlockedInvalid', 'W_NeverFreshNormal',
 )
 HOST_SUITES = {'test_device_wipe', 'test_wipe_confirmation', 'check_wipe_pipeline'}
+INVARIANTS = {
+    'TypeOK', 'ControlOK', 'IntentDurableBeforeErase', 'TornOnlyUnderIntent',
+    'NormalRunsOnCleanStore', 'CompleteMeansWiped', 'ScopeRespected', 'AuthorityBacksErase',
+}
+PROPERTIES = {'LocalInitiationOnly', 'FailClosed', 'TransactionsSettle', 'IntentIsHonoured'}
 
 
 class Failure(Exception):
@@ -74,8 +79,18 @@ def check_tlc(java, jar, tmp):
     require(baseline.count('PersistIntentFirst = TRUE') == 1 and
             baseline.replace('PersistIntentFirst = TRUE', 'PersistIntentFirst = FALSE') == mutation,
             'The expected-failure configuration must differ only by PersistIntentFirst')
-    match = re.search(r'^NumOwned\s*=\s*([1-9][0-9]*)$', baseline, re.M)
-    require(match is not None, 'TLC baseline does not define the modeled storage-scope size')
+    match = re.fullmatch(
+        r'SPECIFICATION Spec\nCONSTANTS\n(.+?)\nINVARIANTS\n(.+?)\nPROPERTIES\n(.+)',
+        baseline, re.S)
+    require(match is not None, 'TLC must use the complete Spec and leave deadlock checking enabled')
+    constants, invariants, properties = match.groups()
+    require(set(invariants.splitlines()) == INVARIANTS and set(properties.splitlines()) == PROPERTIES,
+            'TLC baseline must check all required invariants and temporal properties')
+    model = re.search(r'^NumOwned = ([1-9][0-9]*)$', constants, re.M)
+    require(model is not None and set(constants.splitlines()) == {
+        f'NumOwned = {model[1]}', 'ExtraTargets = 0', 'AdapterEnforcesAllowlist = TRUE',
+        'PersistIntentFirst = TRUE', 'EnforceBudgets = TRUE', 'MaxPowerCuts = 3', 'MaxFaults = 3',
+    }, 'TLC must keep storage scope and three enabled power cuts and faults')
     shutil.copyfile(HERE / 'WipeContract.tla', tmp / 'WipeContract.tla')
 
     def tlc(cfg, name):
@@ -85,8 +100,9 @@ def check_tlc(java, jar, tmp):
                      '-metadir', str(tmp / name), '-config', f'{name}.cfg', 'WipeContract'], tmp)
 
     status, out = tlc(baseline, 'Baseline')
+    counts = re.findall(r'\b([0-9][0-9,]*) distinct states found, 0 states left on queue\.', out)
     require(status == 0 and 'Model checking completed. No error has been found.' in out and
-            re.search(r'\b[1-9][0-9]* distinct states found, 0 states left on queue\.', out) and
+            counts and int(counts[-1].replace(',', '')) >= 1000 and
             not re.search(r'^Error:', out, re.M),
             'TLC baseline did not complete successfully', out)
     print(next(line for line in reversed(out.splitlines()) if 'states found, 0 states left on queue.' in line))
@@ -95,7 +111,7 @@ def check_tlc(java, jar, tmp):
     for witness in WITNESSES:
         expect_violation(*tlc(baseline + f'\nINVARIANT {witness}', witness), witness)
     print(f'TLC reachability: {len(WITNESSES)} expected witnesses reached')
-    return int(match[1])
+    return int(model[1])
 
 
 def check_lean(lean):
@@ -106,6 +122,8 @@ def check_lean(lean):
     require(len(rows) == len(THEOREMS) and {name for name, _ in rows} == THEOREMS and
             all(set(raw.split(', ')) - {''} <= AXIOMS for _, raw in rows),
             'Expected all printed Lean theorems and only standard logical axioms', output)
+    # Warnings-as-errors intentionally rejects sorry/admit. Lean's axiom
+    # dependency report is a second check, including for custom axioms.
     print(f'Lean: {len(rows)} theorems checked with warnings as errors and axioms audited')
 
 
