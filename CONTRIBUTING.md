@@ -6,7 +6,7 @@ The maintained browser updater lives at https://launchlab.beywatch.gg/update; br
 ## Where the firmware here comes from
 
 `firmware/LaunchLabMini` is the source of the latest firmware release.
-The maintainer develops the firmware in a private repository and, at each release, syncs the source, its host test suite and the hardware-in-the-loop (HIL) tools here; `firmware/SYNC.json` lists the synced files.
+The maintainer develops the firmware in a private repository and, at each release, syncs the source, its host and formal checks, and the hardware-in-the-loop (HIL) tools here; `firmware/SYNC.json` lists the synced files.
 Pull requests against these files are welcome.
 When one is merged, the maintainer brings it into the private repository, so the next release carries it.
 
@@ -56,11 +56,13 @@ Changes outside what the suite reads (`site/`, `docs/`, `hardware/`) need no pro
 
 - **Firmware test proof** (on every push and every edit of the description): the pull request changes what the suite reads, so its description holds exactly one proof, for the pushed head tree (same git objects and fingerprint), showing this tree's whole public suite passed (the same count and names) with nothing failed or changed during the run.
   The check runs the base branch's copy of `scripts/firmware_proof.py`, so a pull request cannot change how it is judged, and it flags changes to the test runner or the workflows for the maintainer to review.
-- **Firmware host suite**: CI runs the whole public suite again on Linux with clang.
+- **LaunchLab firmware gate**: CI runs the formal wipe checks and the whole public host suite again on Linux with clang. The check is reported on every PR. GitHub Pages only deploys from main after both the firmware gate and the site build pass.
   This run is the one that counts: your proof shows you ran it, CI shows it passes.
 - **build**: the site's tests, the published artifacts' checksums and the redirect build.
 - A HIL result is shown as contributor-reported: CI has no device, so it cannot check it.
   The check fails if your HIL report says the run did not pass, and warns when it is for another tree.
+
+The [formal checks](firmware/formal/) cover the factory-reset state model (including a known-bad mutation) and its clock arithmetic. The C++ host tests exercise the actual firmware code; the models do not prove C++ equivalence or hardware persistence.
 
 ## Optional: the HIL scenarios on your own M5StickS3
 
