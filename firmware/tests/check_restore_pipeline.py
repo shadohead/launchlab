@@ -164,7 +164,7 @@ static void boot() {
   uint8_t minutes=prefs.getUChar("sleep_min",InactivityTimer::DEFAULT_MINUTES);if(!inactivity.setMinutes(minutes))std::abort();
   Brightness::load(prefs,brightnessPercent);RpmEstimatorSetting::load(prefs,rpmEstimator);SensorProfileSetting::load(prefs,sensorProfile);
   DisplayFlipSetting::load(prefs,displayFlipped);MountOrientationSetting::load(prefs,mountMode);
-  shakeToWake=true;ShakeWakeSetting::load(prefs,shakeToWake);batteryIcon=true;BatteryIconSetting::load(prefs,batteryIcon);MinRpmSetting::load(prefs,minRpmSteps);
+  shakeToWake=true;ShakeWakeSetting::load(prefs,shakeToWake);batteryIcon=true;BatteryIconSetting::load(prefs,batteryIcon);MinRpmSetting::load(prefs,minRpmSteps);{uint8_t l=0;LanguageSetting::load(prefs,l);UiText::current()=UiText::Lang(l);}
   appearance={};fresh(appearanceStore);appearanceStore.begin(appearance,"ll-appearance","cfg0","cfg1");
   personalBests={};fresh(bestStore);
   const bool bestsInNvs=bestStore.begin(personalBests,"ll-bests","best0","best1") && bestStore.present();

@@ -64,7 +64,9 @@ struct LGFXBase {
   }
   void drawString(const char *text,int x,int y,int font) {
     const int glyph=font==4?18:6,height=font==6?48:font==4?26:font==2?16:8;
-    const int width=font==6?font6Width(text):font==4?font4Width(text):font==2?font2Width(text):int(std::strlen(text))*glyph;
+    // Glyphs, not bytes: German passes Font 1 its umlauts as two-byte UTF-8.
+    int glyphs=0;for(const char *c=text;*c;++c)glyphs+=(uint8_t(*c)&0xC0)!=0x80;
+    const int width=font==6?font6Width(text):font==4?font4Width(text):font==2?font2Width(text):glyphs*glyph;
     const int left=datum==top_left?x:datum==top_right?x-width:x-width/2;
     const int right=datum==top_left?x+width:datum==top_right?x:x+(width+1)/2;
     assert(left>=0 && right<=135 && y>=0 && y+height<=240);
@@ -401,6 +403,44 @@ int main(){
                    "READY",true,nullptr,&ranked,samples,&winner,false);
   assert(finalFrame.drew("50s") && !finalFrame.drew("600s"));checkOverlap(finalFrame);
   for(const auto &point:finalFrame.pixels)assert(point[2]!=finishInk && point[2]!=colors.text);
+  // Each other language (ui_text_de.h, ui_text_it.h): the screens above again, every text on screen,
+  // none on another and none needing a smaller font, English or a cut.
+  for(UiText::Lang language:{UiText::Lang::German,UiText::Lang::Italian}) {
+    UiText::current()=language;UiDraw::fallbacks=0;unsigned german=0;
+    auto fits=[&](const lgfx::LGFXBase &g){
+      checkOverlap(g);
+      if(UiDraw::fallbacks)std::fprintf(stderr,"German: \"%s\" font %d, %d > %d px\n",UiDraw::lastOverflow.text,UiDraw::lastOverflow.font,UiDraw::lastOverflow.width,UiDraw::lastOverflow.room);
+      assert(UiDraw::fallbacks==0);++german;
+    };
+    for(auto mic:{MicView::Mic::Starting,MicView::Mic::On,MicView::Mic::Failed,MicView::Mic::NoMemory}) {
+      AnalysisMode::Session fresh;lgfx::LGFXBase g;AnalysisUI::draw(g,fresh,0,nullptr,mic,motion,false,false,colors,curve);fits(g);
+    }
+    for(const char *state:{"READY","STARTING","MEASURING","CHECK SENSOR","PAUSED","REARM"}) {
+      AnalysisMode::Session fresh;lgfx::LGFXBase g;AnalysisUI::draw(g,fresh,0,nullptr,MicView::Mic::On,motion,false,false,colors,curve,state,true);fits(g);
+    }
+    {
+      AnalysisMode::Session s;s.begin(1,true,15000,1000000);
+      for(bool stopped:{false,true}){if(stopped)s.stop(83456000);lgfx::LGFXBase g;AnalysisUI::draw(g,s,83456000,&trace,MicView::Mic::On,motion,false,false,colors,curve);fits(g);}
+      s.toggleReplay(83456000);lgfx::LGFXBase replay;AnalysisUI::draw(replay,s,84456000,&trace,MicView::Mic::On,motion,false,false,colors,curve);fits(replay);
+    }
+    {AnalysisMode::Session s;s.begin(2,true,6000,1000000);s.tick(301000000);lgfx::LGFXBase g;AnalysisUI::draw(g,s,999000000,nullptr,MicView::Mic::On,motion,false,false,colors,curve);fits(g);}
+    {AnalysisMode::Session s;s.begin(7,true,6000,1000000);s.interrupt(21000000);lgfx::LGFXBase g;AnalysisUI::draw(g,s,22000000,nullptr,MicView::Mic::On,motion,false,false,colors,curve);fits(g);}
+    {lgfx::LGFXBase g;AnalysisUI::draw(g,live,52000000,nullptr,MicView::Mic::On,motion,false,false,colors,curve,"READY",true,nullptr,&ranked,samples,&winner,false);fits(g);}
+    {
+      AnalysisMode::Session s;s.begin(1,true,7300,1000000);s.stop(74000000);
+      Decay::Curve spin;spin.end=73;
+      for(unsigned i=0;i<Decay::CURVE_POINTS;++i)spin.rpm[i]=7300-100*spin.seconds(i);
+      auto summary=AnalysisDetails::summarize(spin,7300,73);s.nextResult();
+      for(unsigned page=0;page<2;++page){lgfx::LGFXBase g;AnalysisResultUI::draw(g,s,&summary,false,false,colors);fits(g);s.nextResult();}
+      summary.endpointEstimate=true;
+      {lgfx::LGFXBase g;AnalysisResultUI::draw(g,s,&summary,false,false,colors);fits(g);}
+      summary.count=3;
+      {lgfx::LGFXBase g;AnalysisResultUI::draw(g,s,&summary,false,false,colors);fits(g);}
+      for(bool fitting:{false,true})for(bool failed:{false,true}){lgfx::LGFXBase g;AnalysisResultUI::draw(g,s,nullptr,fitting,failed,colors);fits(g);}
+    }
+    UiText::current()=UiText::Lang::English;
+    std::cout<<"PASS: "<<german<<" "<<UiText::name(language)<<" analysis screens fit\n";
+  }
   delete samples;
   marked.freeze();bad.index=3;marked.add(bad);assert(marked.count()==3);
   marked.begin(13,7000);assert(marked.count()==0 && marked.rejectedPeakRpm()==0);

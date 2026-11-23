@@ -158,7 +158,7 @@ inline void battleScreen(lgfx::LGFX_Sprite &g,unsigned index,const Look &look,bo
   auto is=[&](const char *name){return !std::strcmp(id,name);};
   auto prefix=[&](const char *name){return !std::strncmp(id,name,std::strlen(name));};
   g.fillScreen(c.background);g.setTextDatum(top_center);g.setTextColor(c.text,c.background);
-  if(is("menu-battles")){ControlsUI::list(g,"Menu",ControlsUI::MENU,Controls::MENU_COUNT,Controls::BATTLES_ROW,Controls::MENU_GROUPS);ControlsUI::cornerBattery(g,detail::corner(),true);return;}
+  if(is("menu-battles")){ControlsUI::list(g,UiText::t(UiText::Text::Menu),ControlsUI::MENU,Controls::MENU_COUNT,Controls::BATTLES_ROW,Controls::MENU_GROUPS);ControlsUI::cornerBattery(g,detail::corner(),true);return;}
   // A stick with some history: Kai most of all, the others in passing.
   const uint32_t KAI=0xd5d21001,MAX=0x9fd52002,LONG=0x1d043003,NEW=0xb1e23c11;
   Battle::Book book;uint16_t tag=0;
@@ -359,7 +359,7 @@ inline void draw(lgfx::LGFX_Sprite &g,unsigned index,const Look &look,bool flip)
     Controls::State state;
     // A new unit's settings: every value is its default.
     const uint8_t values[]={InactivityTimer::DEFAULT_MINUTES,uint8_t(RpmEstimator::DEFAULT_MODE),Brightness::DEFAULT_PERCENT,uint8_t(flip),0,uint8_t(look.theme),uint8_t(Appearance::Effect::Random),uint8_t(Milestones::DEFAULT_MODE),0,0,uint8_t(InactivityTimer::SHAKE_WAKE_DEFAULT),
-      0,0,uint8_t(Controls::BATTERY_ICON_DEFAULT),0,MinRpm::DEFAULT_STEPS};  // Wipe all and About have no value; Bluetooth is Off
+      0,0,uint8_t(Controls::BATTERY_ICON_DEFAULT),0,MinRpm::DEFAULT_STEPS,uint8_t(UiText::current())};  // Wipe all and About have no value; Bluetooth is Off
     static_assert(sizeof(values)==Controls::SETTING_COUNT,"a default for every setting");
     static const Milestones::Config defaults;ControlsUI::milestones=&defaults;
     ControlsUI::runtime="0.20.8-sticks3-songs-pm";  // fixed, so a release number never moves a pinned frame
@@ -372,8 +372,8 @@ inline void draw(lgfx::LGFX_Sprite &g,unsigned index,const Look &look,bool flip)
       ControlsUI::PassView v;v.on=v.app=v.phone=true;v.button=is("bluetooth-beyblade-x-held");v.waiting=3;v.synced=2;
       ControlsUI::beybladeX(g,v);
     }
-    else if(prefix("menu")){state.menu=is("menu-settings")?Controls::SETTINGS_ROW:is("menu-wear-check")?Controls::WEAR_ROW:is("menu-bluetooth")?Controls::BLUETOOTH_ROW:0;ControlsUI::list(g,"Menu",ControlsUI::MENU,Controls::MENU_COUNT,state.menu,Controls::MENU_GROUPS);}
-    else if(is("history-menu"))ControlsUI::list(g,"History",ControlsUI::HISTORY,4,0);
+    else if(prefix("menu")){state.menu=is("menu-settings")?Controls::SETTINGS_ROW:is("menu-wear-check")?Controls::WEAR_ROW:is("menu-bluetooth")?Controls::BLUETOOTH_ROW:0;ControlsUI::list(g,UiText::t(UiText::Text::Menu),ControlsUI::MENU,Controls::MENU_COUNT,state.menu,Controls::MENU_GROUPS);}
+    else if(is("history-menu"))ControlsUI::list(g,UiText::t(UiText::Text::MenuHistory),ControlsUI::HISTORY,4,0);
     else if(is("settings")){state.setting=0;ControlsUI::settings(g,state,values);}
     else if(is("settings-appearance")){state.setting=uint8_t(Controls::rowAt(5));ControlsUI::settings(g,state,values);}
     else if(is("settings-more")){state.setting=unsigned(Controls::Setting::WipeAll);ControlsUI::settings(g,state,values);}

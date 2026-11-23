@@ -55,12 +55,18 @@ int main() {
   // before Back, it opens a page that edits nothing; A or hold B returns to its
   // row, B does nothing there.
   assert(nextRow(unsigned(Setting::Rpm))==unsigned(Setting::MinRpm) && nextRow(unsigned(Setting::MinRpm))==unsigned(Setting::Sensor));
-  assert(position(unsigned(Setting::MinRpm))==3 && position(unsigned(Setting::Brightness))==PAGE_ROWS && position(unsigned(Setting::Mount))==LAST_PAGE);
+  assert(position(unsigned(Setting::MinRpm))==3 && position(unsigned(Setting::Brightness))==PAGE_ROWS && position(unsigned(Setting::Language))==LAST_PAGE && position(unsigned(Setting::Mount))==LAST_PAGE+1);
   assert(nextRow(unsigned(Setting::Mount))==unsigned(Setting::Flip) && nextRow(unsigned(Setting::Flip))==unsigned(Setting::BatteryIcon));
   assert(nextRow(unsigned(Setting::BatteryIcon))==unsigned(Setting::WipeAll));
   assert(nextRow(unsigned(Setting::WipeAll))==unsigned(Setting::About) && nextRow(unsigned(Setting::About))==SETTING_COUNT);
-  assert(nextRow(SETTING_COUNT)==unsigned(Setting::Sleep) && position(unsigned(Setting::BatteryIcon))==12);
-  assert(position(unsigned(Setting::WipeAll))==13 && position(unsigned(Setting::About))==14 && position(SETTING_COUNT)==ROWS);
+  assert(nextRow(SETTING_COUNT)==unsigned(Setting::Sleep) && position(unsigned(Setting::BatteryIcon))==13);
+  assert(position(unsigned(Setting::WipeAll))==14 && position(unsigned(Setting::About))==15 && position(SETTING_COUNT)==ROWS);
+  // Language: first on the unit's page after Sound; B cycles every language.
+  assert(nextRow(unsigned(Setting::Sound))==unsigned(Setting::Language) && nextRow(unsigned(Setting::Language))==unsigned(Setting::Mount));
+  {State l;l.page=Page::Settings;l.setting=unsigned(Setting::Language);
+   assert(editable(l.setting) && l.tapA()==Effect::BeginEdit && l.page==Page::Edit);
+   l.draft=0;for(unsigned i=1;i<=LANGUAGES;++i){assert(l.tapB()==Effect::Preview && l.draft==i%LANGUAGES);}
+   assert(l.tapA()==Effect::Apply);}
   s.setting=unsigned(Setting::About);
   assert(s.tapA()==Effect::None && s.page==Page::About && !s.autoRecap());
   assert(s.tapB()==Effect::None && s.holdA()==Effect::None && s.page==Page::About);
@@ -86,7 +92,7 @@ int main() {
     const bool minRpm=row==unsigned(Setting::MinRpm);
     s.page=Page::Edit;s.setting=row;s.draft=row==0?3:row==2?40:minRpm?MinRpm::DEFAULT_STEPS:0;
     const unsigned original=s.draft,cycle=row==0 || row==2?10:row==5?Appearance::THEMES:row==6?EffectSet::count(s.offeredEffects)+2:row==7 || row==8?3:
-      minRpm?MinRpm::MAX_STEPS-MinRpm::MIN_STEPS+1:2;
+      minRpm?MinRpm::MAX_STEPS-MinRpm::MIN_STEPS+1:row==unsigned(Setting::Language)?LANGUAGES:2;
     for(unsigned i=0;i<cycle;++i)assert(s.tapB()==Effect::Preview);
     assert(s.draft==original);
   }
@@ -157,8 +163,17 @@ int main() {
     assert(decodeWake(WAKE19_MAGIC|uint32_t(Page::Settings)|(15u<<9),out,view) && out.setting==unsigned(Setting::MinRpm));
     assert(decodeWake(WAKE19_MAGIC|uint32_t(Page::Settings)|0x8000u,out,view) && out.setting==SETTING_COUNT);
     assert(!decodeWake(WAKE19_MAGIC|0x8000u|(1u<<9)|uint32_t(Page::Settings),out,view));
-    static_assert(WAKE18_MAGIC==0x4e620000 && WAKE19_MAGIC==0x4e630000 && WAKE_MAGIC==0x4e640000);
+    static_assert(WAKE18_MAGIC==0x4e620000 && WAKE19_MAGIC==0x4e630000 && WAKE20_MAGIC==0x4e640000 && WAKE_MAGIC==0x4e650000);
   }
+  // 0.21.0 with Battles (WAKE20): the same layout, Back at 16, where Language is now.
+  assert(decodeWake(WAKE20_MAGIC|uint32_t(Page::Settings)|(15u<<9),out,view) && out.setting==unsigned(Setting::MinRpm));
+  assert(decodeWake(WAKE20_MAGIC|uint32_t(Page::Settings)|0x8000u,out,view) && out.setting==SETTING_COUNT);
+  assert(!decodeWake(WAKE20_MAGIC|uint32_t(Page::Settings)|0x8000u|(1u<<9),out,view));
+  assert(decodeWake(WAKE20_MAGIC|uint32_t(Page::Menu)|(1u<<14)|(1u<<4),out,view) && out.menu==9);
+  // Language (16) wakes on its row, Back (17) on Back.
+  {State s;s.page=Page::Settings;s.setting=uint8_t(Setting::Language);
+   assert(decodeWake(encodeWake(s,0),out,view) && out.page==Page::Settings && out.setting==unsigned(Setting::Language));
+   s.setting=SETTING_COUNT;assert(decodeWake(encodeWake(s,0),out,view) && out.setting==SETTING_COUNT);}
   // Today's own rows are saved as they are.
   for(unsigned row=0;row<8;++row)assert(decodeWake(WAKE_MAGIC|uint32_t(Page::Menu)|(row<<4),out,view) && out.menu==row);
   // 0.20.7 (WAKE14): Settings Back at 12, where About is now: it still opens Back.
@@ -177,14 +192,15 @@ int main() {
   assert(decodeWake(WAKE18_MAGIC|uint32_t(Page::Settings)|(15u<<9),out,view) && out.setting==SETTING_COUNT);
   assert(decodeWake(WAKE18_MAGIC|0x4000u|uint32_t(Page::Menu),out,view) && out.menu==BACK_ROW);
   assert(!decodeWake(WAKE18_MAGIC|0x8000u,out,view));  // its magic's own bit
-  // 0.21.0: Min RPM is 15 and Back 16, its fifth bit bit 15; 17 does not exist.
+  // 0.21.0: Min RPM is 15, its fifth bit bit 15. Language is 16 and Back
+  // 17; 18 does not exist.
   {
     State row;row.page=Page::Settings;row.setting=unsigned(Setting::MinRpm);
     const uint32_t code=encodeWake(row,0);assert(!(code&0x8000u) && ((code>>9)&15)==15);
     assert(decodeWake(code,out,view) && out.setting==unsigned(Setting::MinRpm));
     row.setting=SETTING_COUNT;assert(encodeWake(row,0)&0x8000u);
     assert(decodeWake(encodeWake(row,0),out,view) && out.setting==SETTING_COUNT);
-    assert(!decodeWake(WAKE_MAGIC|0x8000u|(1u<<9)|uint32_t(Page::Settings),out,view));
+    assert(!decodeWake(WAKE_MAGIC|0x8000u|(2u<<9)|uint32_t(Page::Settings),out,view));
   }
   // Ten menu rows: Settings and Back, rows 8 and 9, take bit 14.
   {

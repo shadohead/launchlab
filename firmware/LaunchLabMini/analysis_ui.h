@@ -1,4 +1,5 @@
 #pragma once
+#include "ui_draw.h"
 #include "analysis_mode.h"
 #include "decay_types.h"
 #include "firmware_version.h"
@@ -136,7 +137,7 @@ inline void computing(lgfx::LGFXBase &g, const Palette::Colors &c, uint64_t now,
       const bool settled = i < resolved;
       one[0] = settled ? word[i] : GLYPHS[scramble(now / DECODE_CHAR_US, i) % (sizeof(GLYPHS) - 1)];
       g.setTextColor(settled ? c.muted : c.accent, c.background);
-      g.drawString(one, left + int(i) * pitch, CAPTION_Y, 1);
+      UiDraw::text(g,one, left + int(i) * pitch, CAPTION_Y, 1);
     }
     g.setTextDatum(top_center);
     return;
@@ -167,14 +168,14 @@ inline void label(lgfx::LGFXBase &g, const Palette::Colors &c, int y, const char
   g.fillRect(4, y + 6, 3, 3, key);
   g.setTextDatum(top_left);
   g.setTextColor(c.muted, c.background);
-  g.drawString(text, 12, y, 2);
+  UiDraw::text(g,text, 12, y, 2);
 }
 inline void row(lgfx::LGFXBase &g, const Palette::Colors &c, int y, const char *name, uint16_t key,
                 const char *value, uint16_t ink) {
   label(g, c, y, name, key);
   g.setTextDatum(top_right);
   g.setTextColor(ink, c.background);
-  g.drawString(value, g.width() - 4, y, 2);
+  UiDraw::text(g,value, g.width() - 4, y, 2);
   g.setTextDatum(top_center);
 }
 // A right-aligned value whose digits after `settled` still cycle, drawn in
@@ -187,7 +188,7 @@ inline void decodingValue(lgfx::LGFXBase &g, const Palette::Colors &c, int y, co
   if (all) {
     g.setTextDatum(top_right);
     g.setTextColor(ink, c.background);
-    g.drawString(value, g.width() - 4, y, 2);
+    UiDraw::text(g,value, g.width() - 4, y, 2);
     g.setTextDatum(top_center);
     return;
   }
@@ -199,7 +200,7 @@ inline void decodingValue(lgfx::LGFXBase &g, const Palette::Colors &c, int y, co
     const bool fixed = !digit || settled[i];
     one[0] = fixed ? value[i] : char('0' + scramble(step, i) % 10);
     g.setTextColor(fixed ? ink : c.muted, c.background);
-    g.drawString(one, x, y, 2);
+    UiDraw::text(g,one, x, y, 2);
     one[0] = value[i];
     x += g.textWidth(one, &fonts::Font2);
   }
@@ -209,7 +210,7 @@ inline void centered(lgfx::LGFXBase &g, const Palette::Colors &c, int y, const c
                      int font = 2) {
   g.setTextDatum(top_center);
   g.setTextColor(ink, c.background);
-  g.drawString(text, g.width() / 2, y, font);
+  UiDraw::text(g,text, g.width() / 2, y, font);
 }
 // The hairline under the clock: faint end to end, cyan up to now, with an
 // orange cap at the estimated finish.
@@ -356,7 +357,7 @@ inline void draw(lgfx::LGFXBase &g, const AnalysisMode::Session &session, uint64
       g.fillRect(0, CLOCK_Y, g.width(), 48, c.background);
     clock(text, sizeof(text), seconds);
     g.setTextColor(timerColor, c.background);
-    g.drawString(text, g.width() / 2, CLOCK_Y, 6);
+    UiDraw::text(g,text, g.width() / 2, CLOCK_Y, 6);
     if (cache) {
       cache->seconds = seconds;
       cache->timerColor = timerColor;

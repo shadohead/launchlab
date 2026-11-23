@@ -40,10 +40,13 @@ static constexpr MenuRow MENU_ROWS_0209[]={HISTORY_ROW,NEW_SESSION_ROW,TOURNAMEN
 // Bluetooth (0.20.9, experimental) keeps a value and an editor (the protocol's
 // id 14, HIL) but has no row here: it has its own Menu page, which asks before
 // turning it on. Min RPM (0.21.0, value 15) is the slowest launch recorded
-// (min_rpm.h), listed after RPM method. ROWS is the list's length;
+// (min_rpm.h), listed after RPM method. Language (value 16) is the
+// screen's language (ui_text.h), first on the unit's page. ROWS is the list's length;
 // SETTING_COUNT stands for Back.
-enum class Setting:uint8_t {Sleep,Rpm,Brightness,Flip,Sensor,Theme,BestEffect,Celebrate,Sound,Mount,ShakeWake,WipeAll,About,BatteryIcon,Bluetooth,MinRpm};
-static constexpr unsigned SETTING_COUNT=16,ROWS=15;
+enum class Setting:uint8_t {Sleep,Rpm,Brightness,Flip,Sensor,Theme,BestEffect,Celebrate,Sound,Mount,ShakeWake,WipeAll,About,BatteryIcon,Bluetooth,MinRpm,Language};
+static constexpr unsigned SETTING_COUNT=17,ROWS=16;
+// The languages Language cycles through (UiText::Lang).
+static constexpr unsigned LANGUAGES=3;
 static constexpr bool BATTERY_ICON_DEFAULT=true;
 // The pages with the corner battery: the Menu, History and Battles lists,
 // Settings, its editors and About. Not Main (owner, 2026-11-05), the history graphs, the
@@ -58,14 +61,15 @@ constexpr bool editable(unsigned setting) {
   return setting<SETTING_COUNT && setting!=unsigned(Setting::WipeAll) && setting!=unsigned(Setting::About);
 }
 // The Settings list in pages: general and measuring, appearance (five rows
-// each), then the unit's own page of six: Mounting, Flip display, Battery
-// icon, Wipe all, About and Back (SETTING_COUNT, after the last). Through
+// each), then the unit's own page of seven: Language, Mounting, Flip
+// display, Battery icon, Wipe all, About and Back (SETTING_COUNT, after the
+// last). Through
 // 0.20.11 Brightness was on the first page and Flip display on the second;
 // Min RPM (0.21.0) took Brightness's place beside RPM method.
 static constexpr unsigned PAGE_ROWS=5,LAST_PAGE=2*PAGE_ROWS;
 static constexpr Setting ORDER[ROWS]={Setting::Sleep,Setting::ShakeWake,Setting::Rpm,Setting::MinRpm,Setting::Sensor,
   Setting::Brightness,Setting::Theme,Setting::BestEffect,Setting::Celebrate,Setting::Sound,
-  Setting::Mount,Setting::Flip,Setting::BatteryIcon,Setting::WipeAll,Setting::About};
+  Setting::Language,Setting::Mount,Setting::Flip,Setting::BatteryIcon,Setting::WipeAll,Setting::About};
 // A row's place in ORDER (Back, SETTING_COUNT, is last), and the row after it.
 constexpr unsigned position(unsigned setting) {
   for(unsigned i=0;i<ROWS;++i)if(unsigned(ORDER[i])==setting)return i;
@@ -176,6 +180,7 @@ struct State {
             break;
           case Setting::BestEffect:draft=uint8_t(EffectSet::next(Appearance::Effect(draft),offeredEffects));break;
           case Setting::Celebrate:draft=(draft+1)%3;break;
+          case Setting::Language:draft=uint8_t((draft+1)%LANGUAGES);break;
           case Setting::Sound:draft=(draft+1)%3;break;
           case Setting::WipeAll:case Setting::About:return Effect::None;
         }return Effect::Preview;
@@ -251,10 +256,12 @@ struct Gesture {
 // state's row is found by what it was (MENU_ROWS_0209). The Battles pages
 // wake on their menu row. Settings rows are found by their value, so the
 // 0.21.0 page order needs nothing else; older firmware rejects 0x4e64.
+// Language (16) moves Back to 17 under 0x4e65; a 0x4e64 (WAKE20) state's
+// Back is 16.
 static constexpr uint32_t LEGACY_WAKE_MAGIC=0x4e560000,WAKE7_MAGIC=0x4e570000,
   WAKE8_MAGIC=0x4e580000,WAKE9_MAGIC=0x4e590000,WAKE10_MAGIC=0x4e5a0000,WAKE11_MAGIC=0x4e5b0000,
   WAKE12_MAGIC=0x4e5c0000,WAKE13_MAGIC=0x4e5d0000,WAKE14_MAGIC=0x4e5e0000,WAKE15_MAGIC=0x4e5f0000,WAKE18_MAGIC=0x4e620000,
-  WAKE19_MAGIC=0x4e630000,WAKE_MAGIC=0x4e640000;
+  WAKE19_MAGIC=0x4e630000,WAKE20_MAGIC=0x4e640000,WAKE_MAGIC=0x4e650000;
 inline uint32_t encodeWake(State state,uint8_t tournamentView) {
   if(state.page==Page::Analysis)state.page=Page::Main;
   if(state.page==Page::Edit || state.page==Page::Wipe)state.page=Page::Settings;
@@ -271,7 +278,7 @@ inline bool decodeWake(uint32_t value,State &out,uint8_t &tournamentView) {
   // builds' (WAKE19) with nine rows, and this one with ten. The last two
   // also have a fifth setting bit.
   const uint32_t magic16=value&0xffff0000;
-  const bool current=magic16==WAKE_MAGIC,minRpmRows=magic16==WAKE19_MAGIC,
+  const bool battles=magic16==WAKE20_MAGIC,current=magic16==WAKE_MAGIC || battles,minRpmRows=magic16==WAKE19_MAGIC,
     nineRows=minRpmRows || (value&0xffff8000)==WAKE18_MAGIC,fiveSettingBits=current || minRpmRows;
   state.menu=((value>>4)&7)|(current || nineRows?((value>>14)&1)<<3:0);
   // Each layout's Back row is the one after its last setting.
@@ -280,7 +287,7 @@ inline bool decodeWake(uint32_t value,State &out,uint8_t &tournamentView) {
   if(wideMagic==WAKE_MAGIC || wideMagic==WAKE19_MAGIC || wideMagic==WAKE18_MAGIC || wideMagic==WAKE15_MAGIC || wideMagic==WAKE14_MAGIC || wideMagic==WAKE13_MAGIC || wideMagic==WAKE12_MAGIC || wideMagic==WAKE11_MAGIC || wideMagic==WAKE10_MAGIC || wideMagic==WAKE9_MAGIC || wideMagic==WAKE8_MAGIC) {
     setting=((value>>9)&15)|(fiveSettingBits?((value>>15)&1)<<4:0);tournamentView=(value>>13)&1;
     back=wideMagic==WAKE8_MAGIC?8:wideMagic==WAKE9_MAGIC?9:wideMagic==WAKE10_MAGIC?10:wideMagic==WAKE11_MAGIC?11:
-      fiveSettingBits?SETTING_COUNT:wideMagic==WAKE18_MAGIC?15:wideMagic==WAKE15_MAGIC?14:12;  // 12: Back in 0.20.2-0.20.7 (WAKE12-WAKE14)
+      battles || minRpmRows?16:fiveSettingBits?SETTING_COUNT:wideMagic==WAKE18_MAGIC?15:wideMagic==WAKE15_MAGIC?14:12;  // 12: Back in 0.20.2-0.20.7 (WAKE12-WAKE14)
   }
   else {
     const auto magic=value&0xffffe000;

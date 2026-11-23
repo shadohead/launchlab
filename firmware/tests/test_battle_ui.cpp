@@ -11,12 +11,25 @@
 #include <string>
 #include <vector>
 static constexpr int top_center=0,top_left=1,top_right=2;
+#include "ui_text.h"
 namespace fonts {static int Font6=6,Font4=4,Font2=2;}
 namespace lgfx {
 struct LGFXBase {
   struct Text {int left,right,top,bottom;std::string value;};
   std::vector<Text> texts;unsigned footers=0;int datum=top_center;
-  bool drew(const char *text)const{for(const auto &t:texts)if(t.value==text)return true;return false;}
+  // The checks name the English texts. In another language a table text
+  // is looked for as the screen draws it (its letters as Font 1 or 2 draws
+  // them); a formatted English line cannot be, and counts as drawn.
+  bool drew(const char *text)const{
+    const char *local=::UiText::local(text);
+    if(::UiText::current()!=::UiText::Lang::English && !local)return true;
+    for(const auto &t:texts) {
+      if(!local){if(t.value==text)return true;continue;}
+      char shown[64];
+      for(int font:{1,2})if(t.value==::UiText::glyphs(local,font,shown,sizeof(shown)))return true;
+    }
+    return false;
+  }
   int width()const{return 135;}
   void setTextDatum(int d){datum=d;}void setTextColor(uint16_t,uint16_t){}
   void fillScreen(uint16_t){}
@@ -69,7 +82,7 @@ static Book extreme(const char *name,uint8_t to=MATCH_SHORT,uint32_t id=0xd5d2ff
   Book book;assert(book.decode(image.data(),image.size()));return book;
 }
 
-int main() {
+static unsigned suite() {
   const Palette::Colors c=Themes::builtIn(Themes::FALLBACK);
   ControlsUI::colors=c;
   unsigned renders=0;
@@ -142,5 +155,18 @@ int main() {
   }
   // The totals line holds whatever the totals are.
   {const Book full=extreme("Kai");lgfx::LGFXBase g;BattleUI::battles(g,full,0,true,true,MATCH_SHORT);assert(g.drew("W 9999 L 9999 9999 pts"));++renders;}
+  return renders;
+}
+int main() {
+  const unsigned renders=suite();
   std::cout<<"PASS: "<<renders<<" battle cards and Battles pages stay on screen with no two lines sharing pixels, at the record's limits and with the widest names\n";
+  // Each other language (ui_text_de.h, ui_text_it.h): the same cards, every text in its place.
+  for(UiText::Lang language:{UiText::Lang::German,UiText::Lang::Italian}) {
+  UiText::current()=language;UiDraw::fallbacks=0;
+  const unsigned german=suite();
+  if(UiDraw::fallbacks)std::fprintf(stderr,"German: %u text(s) did not fit, last font %d, %d > %d px\n",UiDraw::fallbacks,UiDraw::lastOverflow.font,UiDraw::lastOverflow.width,UiDraw::lastOverflow.room);
+  assert(UiDraw::fallbacks==0);
+  std::cout<<"PASS: "<<german<<" "<<UiText::name(language)<<" battle cards and pages fit\n";
+  }
+  UiText::current()=UiText::Lang::English;
 }

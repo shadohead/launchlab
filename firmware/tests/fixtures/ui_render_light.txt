@@ -21,7 +21,7 @@ custom-menu-wear-check 571073300aa32529
 custom-history-menu 83441f71328e6248
 custom-settings fc252e2df5006f33
 custom-settings-appearance 25936dafcb6ed839
-custom-settings-more 2d66bcd746fadbab
+custom-settings-more d603d1602c83a901
 custom-about 7f08c5b542a32ffa
 custom-menu-bluetooth 6884f34a90dcb6e0
 custom-bluetooth 60e3902b6941c95a
@@ -84,7 +84,7 @@ custom-flip-menu-wear-check 571073300aa32529
 custom-flip-history-menu 83441f71328e6248
 custom-flip-settings fc252e2df5006f33
 custom-flip-settings-appearance 25936dafcb6ed839
-custom-flip-settings-more 7ad3f7179ed906ab
+custom-flip-settings-more 0a299b5602388c01
 custom-flip-about 7f08c5b542a32ffa
 custom-flip-menu-bluetooth 6884f34a90dcb6e0
 custom-flip-bluetooth 60e3902b6941c95a

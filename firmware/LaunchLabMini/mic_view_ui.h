@@ -1,4 +1,5 @@
 #pragma once
+#include "ui_draw.h"
 #include <cstdio>
 #include "controls_ui.h"
 #include "mic_trace.h"
@@ -35,13 +36,13 @@ inline void axes(lgfx::LGFXBase &g,const Palette::Colors &c,int left,int right,i
   for(unsigned i=1;i<=3;++i) {
     const float rpm=top*float(i)/3;const int ly=y(rpm);
     for(int dx=left;dx<=right;dx+=4)g.drawFastHLine(dx,ly,2,c.faint);
-    MotionUI::thousands(text,sizeof(text),rpm);g.drawString(text,left-3,ly-3,1);
+    MotionUI::thousands(text,sizeof(text),rpm);UiDraw::text(g,text,left-3,ly-3,1);
   }
   g.drawFastHLine(left,bottom,width+1,c.muted);
-  g.drawString("0",left-3,bottom-3,1);
-  g.setTextDatum(top_left);g.drawString("0s",left,bottom+4,1);
-  snprintf(text,sizeof(text),"%.0fs",span/2);g.setTextDatum(top_center);g.drawString(text,left+width/2,bottom+4,1);
-  snprintf(text,sizeof(text),"%.0fs",span);g.setTextDatum(top_right);g.drawString(text,right,bottom+4,1);
+  UiDraw::text(g,"0",left-3,bottom-3,1);
+  g.setTextDatum(top_left);UiDraw::text(g,"0s",left,bottom+4,1);
+  snprintf(text,sizeof(text),"%.0fs",span/2);g.setTextDatum(top_center);UiDraw::text(g,text,left+width/2,bottom+4,1);
+  snprintf(text,sizeof(text),"%.0fs",span);g.setTextDatum(top_right);UiDraw::text(g,text,right,bottom+4,1);
 }
 inline void plot(lgfx::LGFXBase &g,const MicTrace::Trace &t,const Palette::Colors &c,
                  int LEFT=26,int RIGHT=130,int TOP=72,int BOTTOM=172,float elapsedSeconds=-1,bool showRejected=false) {

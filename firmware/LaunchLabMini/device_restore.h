@@ -8,6 +8,7 @@
 #include "history_log.h"
 #include "milestone_store.h"
 #include "min_rpm_setting.h"
+#include "language_setting.h"
 #include "motion_store.h"
 #include "mount_orientation_setting.h"
 #include "practice_store.h"
@@ -77,6 +78,7 @@ inline DeviceBackup::UserSettings heldSettings(Preferences &prefs) {
   Brightness::load(prefs,s.brightness);RpmEstimatorSetting::load(prefs,s.rpmMethod);SensorProfileSetting::load(prefs,s.sensorProfile);
   DisplayFlipSetting::load(prefs,s.flipped);MountOrientationSetting::load(prefs,s.mount);
   ShakeWakeSetting::load(prefs,s.shakeWake);BatteryIconSetting::load(prefs,s.batteryIcon);MinRpmSetting::load(prefs,s.minRpmSteps);
+  LanguageSetting::load(prefs,s.language);
   return s;
 }
 // Every setting, or (given what NVS holds) only those that differ.
@@ -89,7 +91,8 @@ inline bool saveSettings(Preferences &prefs,const DeviceBackup::UserSettings &s,
     (!differs(&U::sensorProfile) || SensorProfileSetting::save(prefs,s.sensorProfile)) &&
     (!differs(&U::flipped) || DisplayFlipSetting::save(prefs,s.flipped)) && (!differs(&U::mount) || MountOrientationSetting::save(prefs,s.mount)) &&
     (!differs(&U::shakeWake) || ShakeWakeSetting::save(prefs,s.shakeWake)) && (!differs(&U::batteryIcon) || BatteryIconSetting::save(prefs,s.batteryIcon)) &&
-    (!differs(&U::minRpmSteps) || MinRpmSetting::save(prefs,s.minRpmSteps));
+    (!differs(&U::minRpmSteps) || MinRpmSetting::save(prefs,s.minRpmSteps)) &&
+    (!differs(&U::language) || LanguageSetting::save(prefs,s.language));
 }
 // History to NVS, then to the log naming the generation NVS now holds: saved
 // once either copy the boot pick takes holds it.

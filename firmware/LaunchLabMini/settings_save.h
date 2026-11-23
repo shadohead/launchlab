@@ -13,14 +13,14 @@ public:
   // 32 bits since Min RPM (0.21.0) needed a seventeenth.
   enum Item:uint32_t {Sleep=1,Rpm=2,Brightness=4,Flip=8,Sensor=16,Appearance=32,Mount=64,Pin=128,ExtPower=256,Milestones=512,ShakeWake=1024,BatteryIcon=2048,
     Bluetooth=4096,Bonds=8192,Name=16384,PassConfirmed=32768,MinRpm=65536,
-    AnalysisResult=131072,Battles=262144};
+    AnalysisResult=131072,Battles=262144,Language=524288};
   // Bit for a Controls::Setting row: Sleep, Rpm, Brightness, Flip, Sensor,
   // Theme, BestEffect, Celebrate, Sound, Mount, ShakeWake, then BatteryIcon,
-  // Bluetooth and MinRpm after Wipe all and About, which save nothing. The
+  // Bluetooth, MinRpm and Language after Wipe all and About, which save nothing. The
   // three appearance rows share a record; Celebrate is saved with the
   // milestone table.
   static uint32_t item(unsigned row) {
-    static constexpr uint32_t items[]={Sleep,Rpm,Brightness,Flip,Sensor,Appearance,Appearance,Milestones,Appearance,Mount,ShakeWake,0,0,BatteryIcon,Bluetooth,MinRpm};
+    static constexpr uint32_t items[]={Sleep,Rpm,Brightness,Flip,Sensor,Appearance,Appearance,Milestones,Appearance,Mount,ShakeWake,0,0,BatteryIcon,Bluetooth,MinRpm,Language};
     return row<sizeof(items)/sizeof(items[0])?items[row]:0;
   }
   // The owner rechecks everything itself. This only skips a request it would

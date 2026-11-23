@@ -129,8 +129,10 @@ class SettingsWalk(unittest.TestCase):
         # The Menu's rows, top to bottom, are the device's (Controls::MenuRow and ControlsUI::MENU).
         rows = names(r'enum MenuRow:uint8_t \{(.*?)\};')
         self.assertEqual(rows, [r.upper().replace('STRING WEAR CHECK', 'WEAR').replace('MIC RPM', 'MIC').replace('DEVICE', 'BATTERY').replace(' ', '_') + '_ROW' for r in scenarios.MENU_ROWS])
-        labels = re.search(r'MENU\[\]=\{(.*?)\};', (FIRMWARE / 'LaunchLabMini/controls_ui.h').read_text()).group(1)
-        self.assertEqual([l.strip().strip('"') for l in labels.split(',')], scenarios.MENU_ROWS)
+        # ControlsUI::MENU names UiText keys; their English text (ui_text.h) is what HIL sees.
+        keys = re.search(r'MENU\[\]=\{(.*?)\};', (FIRMWARE / 'LaunchLabMini/controls_ui.h').read_text(), re.S).group(1)
+        english = dict(re.findall(r'X\((\w+),"([^"]*)"\)', (FIRMWARE / 'LaunchLabMini/ui_text.h').read_text()))
+        self.assertEqual([english[k.strip().replace('Text::', '')] for k in keys.split(',')], scenarios.MENU_ROWS)
         for constant, page in (('ABOUT_PAGE', 'About'), ('SETTINGS_PAGE', 'Settings'), ('EDIT_PAGE', 'Edit'), ('BATTERY_PAGE', 'Battery'), ('MENU_PAGE', 'Menu')):
             self.assertEqual(getattr(scenarios, constant), str(PAGES.index(page)), constant)
 

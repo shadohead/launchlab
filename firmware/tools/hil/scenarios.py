@@ -3522,7 +3522,7 @@ ABOUT_PAGE, SETTINGS_PAGE, ABOUT_ROW = '12', '5', '12'  # Controls::Page::About,
 # The Settings rows top to bottom (Controls::ORDER, then Back as SETTING_COUNT):
 # Min RPM (15, 0.21.0) after RPM method; Brightness opens the appearance page;
 # Mounting, Flip display, Battery icon, Wipe all and About on the last.
-SETTINGS_ORDER = ['0', '10', '1', '15', '4', '2', '5', '6', '7', '8', '9', '3', '13', '11', '12', '16']
+SETTINGS_ORDER = ['0', '10', '1', '15', '4', '2', '5', '6', '7', '8', '16', '9', '3', '13', '11', '12', '17']
 
 
 def settings_walk(rig, target):

@@ -64,7 +64,7 @@ static const Appearance::Effect *milestonePicks(){static Appearance::Effect p[Mi
 static void milestoneReply(){}
 static void themeReply(){}
 // Labels are the renderer's business (test_controls_ui); here only their framing.
-namespace ControlsUI {inline void value(char *out,unsigned length,unsigned,unsigned v){std::snprintf(out,length,"choice %u",v);}}
+namespace ControlsUI {inline void protocolValue(char *out,unsigned length,unsigned,unsigned v){std::snprintf(out,length,"choice %u",v);}}
 '''
 
 TESTS = r'''
@@ -78,7 +78,7 @@ static std::vector<unsigned> bestOptions(Effect current,size_t capacity=512) {
   const size_t n=options(unsigned(Controls::Setting::BestEffect),out,capacity);alarm(0);
   assert(n<=capacity);std::vector<unsigned> values;
   for(size_t at=0;at<n;at+=2+out[at+1]) {
-    char label[24];ControlsUI::value(label,sizeof(label),unsigned(Controls::Setting::BestEffect),out[at]);
+    char label[24];ControlsUI::protocolValue(label,sizeof(label),unsigned(Controls::Setting::BestEffect),out[at]);
     assert(at+2+out[at+1]<=n && out[at+1]==std::strlen(label) && !std::memcmp(out+at+2,label,out[at+1]));
     values.push_back(out[at]);
   }
