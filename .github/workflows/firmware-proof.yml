@@ -3,7 +3,7 @@
 # written by `python3 scripts/firmware_proof.py host`, for its exact head tree.
 # The checker comes from the base branch, so a pull request cannot change how
 # it is judged. It runs again when the description is edited; the host suite
-# itself runs in "Verify firmware and publish updater redirect", and that run
+# itself runs in the "LaunchLab firmware gate" job, and that run
 # is the one that counts. A HIL section is the contributor's report: shown,
 # never checked against a device here.
 name: Firmware test proof
