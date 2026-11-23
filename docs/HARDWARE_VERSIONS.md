@@ -1,7 +1,7 @@
 # Hardware and sensor versions
 
 LaunchLab uses an intact M5StickS3 K150, one analog sensor and printed attachments.
-This page describes the bundled public snapshots. For newer Top Mount v19 and Sidecar v7 packages, use the [website downloads](https://launchlab.beywatch.gg/downloads) and matching build guide.
+This page describes the bundled public snapshots. For Top Mount v26 and the existing Sidecar v15, use the [website downloads](https://launchlab.beywatch.gg/downloads) and matching build guide.
 The bundled shared sensor revisions are QRE1113 v102 and TCRT5000 v102.
 The bundled mount families are Top Mount v2 and Sidecar v2.
 Sensor, mount-family and firmware versions are independent.
@@ -20,6 +20,13 @@ Firmware <!-- current-release:start version -->0.20.10<!-- current-release:end -
 See [attribution](../THIRD_PARTY_NOTICES.md).
 Choose **Settings → Mounting → Top or Sidecar** to match the physical layout; display flip is a separate setting.
 Saved CAD, STL readback and print-project audits passed; physical fit, retention, fatigue, optical alignment and absolute RPM calibration remain unverified for these current combinations.
+
+## One-dot QRE update
+
+- **Top Mount v26:** standalone four-piece QRE1113 kit. [STL/STEP package](../site/public/hardware/downloads/top-mount-v26.zip) · [P1S PLA](../site/public/hardware/downloads/top-mount-v26-pla.3mf) · [P1S PETG](../site/public/hardware/downloads/top-mount-v26-petg.3mf)
+- **One-dot base-only upgrade:** compatible with Top Mount v25 and Sidecar v15 with QRE1113. Keep the other printed parts; no Sidecar adapter, shell, sensor cover, or TCRT5000 part is included. [STL package](../site/public/hardware/downloads/one-dot-qre-base.zip) · [P1S PLA](../site/public/hardware/downloads/one-dot-qre-base-pla.3mf) · [P1S PETG](../site/public/hardware/downloads/one-dot-qre-base-petg.3mf)
+
+Keep the printed base and its two captive clamps separate in the slicer. Matching release notes, attribution, and internal checksums are in each ZIP. [Download SHA-256 checksums](../site/public/hardware/downloads/ONE-DOT-SHA256SUMS.txt). No Sidecar v16 complete package is part of this update.
 
 ## Current downloads
 

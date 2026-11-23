@@ -24,7 +24,7 @@ The [LaunchLab USB updater](https://launchlab.beywatch.gg/update) is the maintai
 
 ## Files and limits
 
-This repository bundles **v102 sensor attachments and Top Mount/Sidecar v2 mounts**. The [website downloads](https://launchlab.beywatch.gg/downloads) include newer Top Mount v19 and Sidecar v7 packages. Follow each package’s matching guide and fasteners. [Bundled hardware versions and checksums](docs/HARDWARE_VERSIONS.md).
+This repository bundles **v102 sensor attachments and Top Mount/Sidecar v2 mounts**. The [website downloads](https://launchlab.beywatch.gg/downloads) include Top Mount v26 and Sidecar v15. This mirror also includes the standalone Top Mount v26 and its QRE one-dot base-only upgrade. Follow each package’s matching guide and fasteners. [Bundled hardware versions and checksums](docs/HARDWARE_VERSIONS.md).
 
 RPM is measured at the **launcher shaft**, not the Beyblade in the stadium. Tilt replay does not measure distance or compass heading. CAD and slicing checks do not establish physical fit, retention, fatigue or absolute calibration; test-fit your actual launcher and prints.
 
